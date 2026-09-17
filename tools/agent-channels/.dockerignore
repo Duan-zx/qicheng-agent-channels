@@ -1,0 +1,8 @@
+.local
+dist
+tests
+windows
+docs
+__pycache__
+**/__pycache__
+.git

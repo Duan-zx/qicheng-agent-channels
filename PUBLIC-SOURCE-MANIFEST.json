@@ -1,0 +1,335 @@
+{
+  "schemaVersion": 1,
+  "policy": "Explicit public source allowlist preserving tools/windows-channels relative structure; no private Git identity.",
+  "excluded": [
+    "Install-GuestPayloadOffline.ps1",
+    "Install-GuestPayload.ps1",
+    ".local",
+    "dist",
+    "PM memory",
+    "tokens",
+    "VM disks",
+    "ISO files",
+    "private Git metadata"
+  ],
+  "files": [
+    {
+      "path": "LICENSE",
+      "kind": "repository-license",
+      "bytes": 11558,
+      "sha256": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6"
+    },
+    {
+      "path": "tools/windows-channels/ARCHITECTURE.md",
+      "kind": "source",
+      "bytes": 3250,
+      "sha256": "c18cc8f0c7f2af592ae64838c02b68f55e514eba7f7f07969971d1179d670627"
+    },
+    {
+      "path": "tools/windows-channels/LICENSE",
+      "kind": "source",
+      "bytes": 11558,
+      "sha256": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6"
+    },
+    {
+      "path": "tools/windows-channels/README.md",
+      "kind": "source",
+      "bytes": 12477,
+      "sha256": "b4182ce3d74e7a58f00a347594a150616ed416c71378b0c76781c782870f9ed7"
+    },
+    {
+      "path": "tools/windows-channels/Test-Host.ps1",
+      "kind": "source",
+      "bytes": 5089,
+      "sha256": "97f4aa7d8cd7eccb1f4d1781567eeac4ccd20f9d019b377ed503522fd29ecafc"
+    },
+    {
+      "path": "tools/windows-channels/Prepare-Channels.ps1",
+      "kind": "source",
+      "bytes": 5986,
+      "sha256": "aa7b82e3c73f2b5a343460f815b204348319a5d66d73322904be350f6ef96fae"
+    },
+    {
+      "path": "tools/windows-channels/New-ChannelVMs.ps1",
+      "kind": "source",
+      "bytes": 10819,
+      "sha256": "0da03063a85bf5310194ac404d9e12eb03aa4cbcf3098278cd1d1a8244dcf7cd"
+    },
+    {
+      "path": "tools/windows-channels/Register-HostService.ps1",
+      "kind": "source",
+      "bytes": 2686,
+      "sha256": "1fcaa747c84c8ce6779d7801c933bb0bea727b54e8788d8b9603eee1206d329a"
+    },
+    {
+      "path": "tools/windows-channels/Build-GuestPayload.ps1",
+      "kind": "source",
+      "bytes": 12363,
+      "sha256": "b5758bb5ee15b192cf8da2ba01cec230f324175e0d8acc5f63d239a976d204a0"
+    },
+    {
+      "path": "tools/windows-channels/Install-GuestPayloadDirect.ps1",
+      "kind": "source",
+      "bytes": 13033,
+      "sha256": "58c6a23ea1c059c5695894151aac83ec0150bd7843373df3934faacf4429a0e2"
+    },
+    {
+      "path": "tools/windows-channels/host/__init__.py",
+      "kind": "source",
+      "bytes": 69,
+      "sha256": "c2652387810ece8c5a6014aae86da2a680499cd033a2e26bbc45fcca969ae7f9"
+    },
+    {
+      "path": "tools/windows-channels/host/client.py",
+      "kind": "source",
+      "bytes": 7126,
+      "sha256": "e532fede31b28ca25ff245412a50e3c56d56b3054050939095d1e022b7288003"
+    },
+    {
+      "path": "tools/windows-channels/host/mcp.py",
+      "kind": "source",
+      "bytes": 5117,
+      "sha256": "8f39cf8b7da78556b54c9b1cbe64b12d20e3b307b7886668ebc7fc9f1814095c"
+    },
+    {
+      "path": "tools/windows-channels/host/README.md",
+      "kind": "source",
+      "bytes": 1981,
+      "sha256": "01e46c65e0cd8a423e3973a163faf3fee78c7b9d24a6d17120707cc3e3d44ccd"
+    },
+    {
+      "path": "tools/windows-channels/guest/__init__.py",
+      "kind": "source",
+      "bytes": 56,
+      "sha256": "8638238a0e72ed5eb8a753068667c9f872aa060d44956678b63563f6518bb275"
+    },
+    {
+      "path": "tools/windows-channels/guest/agent.py",
+      "kind": "source",
+      "bytes": 3333,
+      "sha256": "a8cc6b2ad3e626c6373f45b582243f17a51d3532401ce9f0dcf736bb37e1facd"
+    },
+    {
+      "path": "tools/windows-channels/guest/protocol.py",
+      "kind": "source",
+      "bytes": 12333,
+      "sha256": "d33c13ab2a816f2893c28397961752a35606f42cdc061542af2ab5c02e21811b"
+    },
+    {
+      "path": "tools/windows-channels/guest/windows.py",
+      "kind": "source",
+      "bytes": 14472,
+      "sha256": "c844ab5a1d556934753a87d253ce1247dbd811d4f8c0c5f1fef9b6d46482ac4c"
+    },
+    {
+      "path": "tools/windows-channels/guest/README.md",
+      "kind": "source",
+      "bytes": 4581,
+      "sha256": "4abcdbcc84c3c305370b1449e6e0897f2fe5338b80e63531ab5c684de3ac63a0"
+    },
+    {
+      "path": "tools/windows-channels/viewer/Viewer.cs",
+      "kind": "source",
+      "bytes": 64726,
+      "sha256": "b315bedc9c33a3d70c94f91a7a767fb9c7ba6ed759700f6c93454343580eae2b"
+    },
+    {
+      "path": "tools/windows-channels/viewer/Build.ps1",
+      "kind": "source",
+      "bytes": 806,
+      "sha256": "67a1207c46822c1769d7f8535c5305b9b85befce0b9c08e5bb45c3c6bae10c1a"
+    },
+    {
+      "path": "tools/windows-channels/viewer/app.manifest",
+      "kind": "source",
+      "bytes": 933,
+      "sha256": "acc5d81071dd0580f0c23a46a77ad0cfdd7a169a47fe40b0e605a454f1f3180e"
+    },
+    {
+      "path": "tools/windows-channels/viewer/README.md",
+      "kind": "source",
+      "bytes": 3906,
+      "sha256": "9b11e6bf30a78eb628ed5a8f9d4e96d4b52daf4c2c9bbf396bcf6deb976fd3af"
+    },
+    {
+      "path": "tools/windows-channels/tests/test_contract.py",
+      "kind": "source",
+      "bytes": 6978,
+      "sha256": "b50e6437fa5cfb3a2c5a6238a5c3ec9cf863d1ba5eff46d6db3fbb423bbad27c"
+    },
+    {
+      "path": "tools/windows-channels/tests/test_guest_agent.py",
+      "kind": "source",
+      "bytes": 3324,
+      "sha256": "ef3972fad010aaca9ade06c2a38cc8cdee1691475721c80401121081554c9807"
+    },
+    {
+      "path": "tools/windows-channels/tests/test_guest_protocol.py",
+      "kind": "source",
+      "bytes": 7381,
+      "sha256": "9682158cdb17cb959b9aa535e5d3c8239418e6488a6ed858dd04978ed5223814"
+    },
+    {
+      "path": "tools/windows-channels/tests/test_guest_windows.py",
+      "kind": "source",
+      "bytes": 3605,
+      "sha256": "8f35191fb8cda9329352ed7e05ea9a43987ed257a70e4afbb6f9afecef045b5f"
+    },
+    {
+      "path": "tools/windows-channels/tests/test_host.py",
+      "kind": "source",
+      "bytes": 4570,
+      "sha256": "23a76ac120c740c7a64bd59b8365d1b31b2d6417cfd6b335c190c475efab9d57"
+    },
+    {
+      "path": "tools/windows-channels/tests/test_host_mcp.py",
+      "kind": "source",
+      "bytes": 2663,
+      "sha256": "c847193f5b41757aba5507286134b1e5f7e29f7b45eb79ab27670fcff229a445"
+    },
+    {
+      "path": "tools/windows-channels/tests/Test-PlanSafety.ps1",
+      "kind": "source",
+      "bytes": 11111,
+      "sha256": "1b660fc2d60e2a6a106a58614c29533514d4230f1908029647893d70de08f946"
+    },
+    {
+      "path": "tools/windows-channels/tests/Test-ProvisionSafety.ps1",
+      "kind": "source",
+      "bytes": 7871,
+      "sha256": "b4bbe5235c459a8fe7d5ed5ed5021b52aa8061559bcf0e55f98168e76e87ca28"
+    },
+    {
+      "path": "tools/windows-channels/tests/PayloadSafety.Tests.ps1",
+      "kind": "source",
+      "bytes": 9836,
+      "sha256": "7e8cfdb7c5f0a9c4f9f3cec5b65c7c3c335f5fa91050714af61baa9dd5137c00"
+    },
+    {
+      "path": "tools/windows-channels/tests/InstallGuestPayloadDirect.Tests.ps1",
+      "kind": "source",
+      "bytes": 5590,
+      "sha256": "1c1cf436e04ffb283b63155d193c83070ebb070a9cfb3241830ec53f034c8051"
+    },
+    {
+      "path": "tools/windows-channels/tests/HostServiceSafety.Tests.ps1",
+      "kind": "source",
+      "bytes": 6973,
+      "sha256": "5fe9cb3060e844cf5bdfa5ef03f1f09cf4579cac67696535ef6c3431674278b7"
+    },
+    {
+      "path": "tools/windows-channels/product/README.md",
+      "kind": "source",
+      "bytes": 1425,
+      "sha256": "2ad42492062220b2b9b0338d9fbc132d0b6043250c253412e3beb29ca1f45b82"
+    },
+    {
+      "path": "tools/windows-channels/product/QUICKSTART.zh-CN.md",
+      "kind": "source",
+      "bytes": 9133,
+      "sha256": "26371590e561aa4656ae00e179cbfcfb26b782fe1420bc544cdf5059b478544a"
+    },
+    {
+      "path": "tools/windows-channels/product/Build-Package.ps1",
+      "kind": "source",
+      "bytes": 14409,
+      "sha256": "f8f173d3538e4a69f4bad451b26d529a0c4e689a796c18a00113e6a3c0ebcb2f"
+    },
+    {
+      "path": "tools/windows-channels/product/Export-PublicSource.ps1",
+      "kind": "source",
+      "bytes": 4420,
+      "sha256": "bd9a3de19825651000a2d92a227909b5d5c11f4cedea611c6c252375ee79e6f8"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Product.Common.ps1",
+      "kind": "source",
+      "bytes": 10684,
+      "sha256": "0d0f2691677ed9f43c7859e454310a963485e8711e8f5530dbd3567d869524b4"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Install-WindowsChannels.ps1",
+      "kind": "source",
+      "bytes": 13683,
+      "sha256": "70450f42691dd1557a51868b24dad6831166d0475f6a2b958521edcd2cf35133"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Start-WindowsChannels.ps1",
+      "kind": "source",
+      "bytes": 2251,
+      "sha256": "191198a67b2466e323f11790e578b9d7122c7162c228c644adc8493d19a54ad5"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Setup-WindowsChannels.ps1",
+      "kind": "source",
+      "bytes": 21668,
+      "sha256": "17b8fb65049926d61d21b6cfc635a1958b8db8942e18a383692123a018516d66"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Diagnose-WindowsChannels.ps1",
+      "kind": "source",
+      "bytes": 3245,
+      "sha256": "6e37170d6c4823ecc4b4c432681a757756c4f1ab97a803ae842432a96dc62b6c"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Get-AISetup.ps1",
+      "kind": "source",
+      "bytes": 1623,
+      "sha256": "d5db7e764eb93e38a1efaa9b25c939ff2446c98bfdb48bb52e562407c3570bcd"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Invoke-WindowsChannelsMcp.ps1",
+      "kind": "source",
+      "bytes": 1363,
+      "sha256": "e9936472f310bdab1ce11bed03cc3e8a69bd82bd7464d724a1c86ad08a2e1114"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Add-CodexMcp.ps1",
+      "kind": "source",
+      "bytes": 4408,
+      "sha256": "a16eae36dff3a3b8c927b70e27b042d5db18a378d54dbccb9f9ed8bb9aa35aa7"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Import-WindowsChannelsConfig.ps1",
+      "kind": "source",
+      "bytes": 1495,
+      "sha256": "29852c883d93553e84d7a272071c811e6a51b612ffae33d117dabff8f2e3b1c9"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Uninstall-WindowsChannels.ps1",
+      "kind": "source",
+      "bytes": 3231,
+      "sha256": "23470793ac17e58408cf940b83ab4f61c35416cb405158a21775b983b830f8ce"
+    },
+    {
+      "path": "tools/windows-channels/product/runtime/Install-Qicheng-Windows-Channels.cmd",
+      "kind": "source",
+      "bytes": 411,
+      "sha256": "a0296752bfe299a2412d4d27a4f80e748c03e721b706d5f06928ee9daa1dc394"
+    },
+    {
+      "path": "tools/windows-channels/product/tests/Test-ProductPackage.ps1",
+      "kind": "source",
+      "bytes": 36851,
+      "sha256": "8fc69c8df2dbaacbf86182c946de00fe1a9f678c18419d3d09e9cb06be2d7a9f"
+    },
+    {
+      "path": "tools/windows-channels/theme/ai-space.png",
+      "kind": "source",
+      "bytes": 1804353,
+      "sha256": "1cf933351f3a7e401e30e954582ee0d94d75cdb7c71b52d7e68a9920b027149c"
+    },
+    {
+      "path": "tools/windows-channels/theme/Set-WorkspaceTheme.ps1",
+      "kind": "source",
+      "bytes": 2316,
+      "sha256": "455fb37eea7cbd940b47f05d9842d7ef88d126fb9769053e691dd2dae8a836d4"
+    },
+    {
+      "path": "tools/windows-channels/theme/README.md",
+      "kind": "source",
+      "bytes": 1052,
+      "sha256": "92b41badac313c595cd9949df30981201a78bbce937fd7863dac454b50abbea8"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+name: qicheng-agent-channels
+x-channel: &channel
+  build: .
+  image: qicheng-agent-channels:0.1-local
+  restart: "no"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  shm_size: 256m
+  mem_limit: 1536m
+  cpus: 1.5
+  pids_limit: 512
+  tmpfs:
+    - /tmp:rw,size=128m,mode=1777
+  secrets: [channel_token]
+services:
+  channel1:
+    <<: *channel
+    environment: {CHANNEL_ID: "1"}
+    volumes:
+      - channel1-home:/home/channel
+    ports: ["127.0.0.1:18761:8080"]
+  channel2:
+    <<: *channel
+    environment: {CHANNEL_ID: "2"}
+    volumes:
+      - channel2-home:/home/channel
+    profiles: [second]
+    ports: ["127.0.0.1:18762:8080"]
+secrets:
+  channel_token:
+    file: .local/channel.token
+volumes:
+  channel1-home:
+    name: qicheng-lite-home-1
+  channel2-home:
+    name: qicheng-lite-home-2

@@ -1,0 +1,12 @@
+# Replace BOTH paths on the receiving machine; this file is not auto-installed.
+[mcp_servers.qicheng_channel_1]
+command = "<ABSOLUTE_PYTHON_EXECUTABLE>"
+args = ["<ABSOLUTE_CHECKOUT>/tools/agent-channels/bridge.py", "--channel", "1"]
+startup_timeout_sec = 15
+tool_timeout_sec = 20
+
+[mcp_servers.qicheng_channel_2]
+command = "<ABSOLUTE_PYTHON_EXECUTABLE>"
+args = ["<ABSOLUTE_CHECKOUT>/tools/agent-channels/bridge.py", "--channel", "2"]
+startup_timeout_sec = 15
+tool_timeout_sec = 20

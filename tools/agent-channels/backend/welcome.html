@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>启程 · AI 工作空间</title>
+<style>
+*{box-sizing:border-box}:root{color-scheme:dark;font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif}
+body{margin:0;min-height:100vh;overflow:hidden;color:#f6f8ff;background:#080b16 url("theme/ai-space.png") center/cover no-repeat}
+body:before{content:"";position:fixed;inset:0;background:linear-gradient(90deg,rgba(6,9,20,.93) 0%,rgba(7,11,24,.78) 44%,rgba(8,10,20,.25) 100%)}
+main{position:relative;z-index:1;min-height:100vh;display:flex;flex-direction:column;justify-content:center;width:min(840px,62vw);padding:58px 0 58px 7vw}
+.channel{display:inline-flex;align-items:center;gap:10px;width:max-content;padding:8px 13px;border:1px solid rgba(158,183,255,.3);border-radius:999px;background:rgba(14,21,43,.62);color:#b9c9f4;font-size:13px;letter-spacing:.08em;backdrop-filter:blur(10px)}
+.channel:before{content:"";width:8px;height:8px;border-radius:50%;background:#7ae0c4;box-shadow:0 0 18px #7ae0c4}
+h1{margin:27px 0 14px;font-size:clamp(40px,4.2vw,62px);line-height:1.1;letter-spacing:-.04em;font-weight:650;white-space:nowrap}h1 span{display:block;color:#aebee9;font-weight:430}
+.lead{max-width:600px;margin:0;color:#aab4ce;font-size:18px;line-height:1.85}
+.launch{display:flex;width:min(640px,100%);margin-top:42px;padding:8px;border:1px solid rgba(167,185,235,.25);border-radius:18px;background:rgba(11,17,35,.72);box-shadow:0 24px 80px rgba(0,0,0,.28);backdrop-filter:blur(16px)}
+.launch:focus-within{border-color:rgba(132,166,255,.72);box-shadow:0 0 0 3px rgba(92,130,232,.13),0 24px 80px rgba(0,0,0,.28)}
+input{width:100%;min-width:0;padding:13px 16px;border:0;outline:0;background:transparent;color:#f7f9ff;font:inherit;font-size:15px}input::placeholder{color:#78839e}
+button{min-width:88px;border:0;border-radius:12px;background:linear-gradient(135deg,#e7ecff,#aebff3);color:#16203e;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.notes{display:flex;gap:24px;margin-top:20px;color:#7f8aa5;font-size:12px}
+footer{position:fixed;z-index:1;left:7vw;right:7vw;bottom:34px;display:flex;justify-content:space-between;color:#69758f;font-size:12px;letter-spacing:.08em}
+@media(max-width:900px){main{width:100%;padding:48px 7vw}h1{white-space:normal}.notes{flex-direction:column;gap:6px}footer span:last-child{display:none}}
+</style>
+<body>
+<main>
+  <div class="channel"><span id="workspace">AI 频道 1</span> · Linux 轻量空间</div>
+  <h1>欢迎回来。<span>从这里开始今天的工作。</span></h1>
+  <p class="lead">这是独立保存浏览器资料与下载内容的 AI 工作空间。你可以正常使用地址栏、标签页，也可以随时接管或交还给 AI。</p>
+  <form class="launch" id="launch"><input id="address" aria-label="打开网站" placeholder="输入网址，例如 example.com" autocomplete="off"><button aria-label="打开">打开</button></form>
+  <div class="notes"><span>浏览器资料自动保留</span><span>顶部地址栏可直接新建标签页</span><span>接管状态以查看器显示为准</span></div>
+</main>
+<footer><span>QICHENG · AI WORKSPACE</span><span>ALT + 1 返回本机</span></footer>
+<script>
+const number=location.hash==="#2"?"2":"1";document.getElementById("workspace").textContent="AI 频道 "+number;
+document.getElementById("launch").onsubmit=function(event){event.preventDefault();const field=document.getElementById("address"),value=field.value.trim();if(!value)return;try{const url=new URL(/^[a-z][a-z0-9+.-]*:/i.test(value)?value:"https://"+value);if(url.protocol==="https:"||url.protocol==="http:")location.assign(url.href);else throw new Error()}catch(_){field.value="";field.placeholder="请输入有效的 http 或 https 网址";field.focus()}};
+</script>
+</body>
+</html>

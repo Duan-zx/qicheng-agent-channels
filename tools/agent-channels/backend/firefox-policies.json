@@ -1,0 +1,19 @@
+{
+  "policies": {
+    "DontCheckDefaultBrowser": true,
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": "",
+    "UserMessaging": {
+      "ExtensionRecommendations": false,
+      "FeatureRecommendations": false,
+      "UrlbarInterventions": false,
+      "SkipOnboarding": true
+    },
+    "Preferences": {
+      "browser.translations.automaticallyPopup": {
+        "Value": false,
+        "Status": "locked"
+      }
+    }
+  }
+}
