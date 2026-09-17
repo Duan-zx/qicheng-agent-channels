@@ -1,0 +1,2 @@
+# Preserve exact exported bytes for source manifest SHA-256 verification.
+* -text
