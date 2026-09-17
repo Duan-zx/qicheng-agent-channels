@@ -1,0 +1,13 @@
+.local/
+dist/
+__pycache__/
+*.pyc
+.env
+.env.*
+*.iso
+*.vhd
+*.vhdx
+*.avhdx
+*.pfx
+*.pem
+*.key
