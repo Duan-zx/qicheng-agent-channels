@@ -99,14 +99,27 @@ try{
     Assert-True (Test-Path -LiteralPath (Join-Path $legacyStartup 'unrelated.lnk')) 'unrelated shortcut changed'
     Assert-True (Test-Path -LiteralPath (Join-Path $data 'compatibility-backup\启程 Windows 频道.lnk')) 'legacy backup missing'
     $shell=New-Object -ComObject WScript.Shell
+    function Read-Link([string]$Path){
+        Assert-True (Test-Path -LiteralPath $Path -PathType Leaf) "shortcut is missing: $Path"
+        $temporaryPath=Join-Path $testRoot ('.qicheng-shortcut-read-'+[guid]::NewGuid().ToString('N')+'.lnk')
+        $link=$null
+        try{
+            Copy-Item -LiteralPath $Path -Destination $temporaryPath
+            $link=$shell.CreateShortcut($temporaryPath)
+            [pscustomobject]@{Arguments=[string]$link.Arguments;TargetPath=[string]$link.TargetPath;WorkingDirectory=[string]$link.WorkingDirectory}
+        }finally{
+            if($null -ne $link -and [Runtime.InteropServices.Marshal]::IsComObject($link)){[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($link)}
+            if(Test-Path -LiteralPath $temporaryPath){Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue}
+        }
+    }
     foreach($linkPath in @((Join-Path $startup '启程轻量工作台.lnk'),(Join-Path $desktop '启程轻量工作台.lnk'),(Join-Path $startMenu '启程轻量工作台.lnk'))){
-        $link=$shell.CreateShortcut($linkPath)
+        $link=Read-Link $linkPath
         Assert-True ($link.Arguments -match '-WindowStyle Hidden' -and $link.Arguments -match '-Background') "background shortcut contract failed: $linkPath"
     }
-    $manage=$shell.CreateShortcut((Join-Path $startMenu '管理启程轻量工作台.lnk'))
+    $manage=Read-Link (Join-Path $startMenu '管理启程轻量工作台.lnk')
     Assert-True ($manage.Arguments -match '-WindowStyle Hidden' -and $manage.Arguments -notmatch '-Background') 'management shortcut contract failed'
     foreach($channel in 1,2){
-        $exportLink=$shell.CreateShortcut((Join-Path $startMenu "取回频道$(@{1='一';2='二'}[$channel])下载文件.lnk"))
+        $exportLink=Read-Link (Join-Path $startMenu "取回频道$(@{1='一';2='二'}[$channel])下载文件.lnk")
         Assert-True ($exportLink.Arguments -match '-WindowStyle Hidden' -and $exportLink.Arguments -match "-Channel $channel" -and $exportLink.Arguments -match '-Open') "download export shortcut failed: $channel"
     }
     Assert-True (-not @(Get-ChildItem -LiteralPath $startMenu,$desktop,$startup -Filter '.qicheng-shortcut-*.lnk' -File -ErrorAction SilentlyContinue).Count) 'ASCII temporary shortcut was not cleaned up'

@@ -107,10 +107,23 @@ try {
     Assert-True ((Get-Content -LiteralPath (Join-Path $dataRoot 'tokens\channel-1.token') -Raw).Trim() -eq ('a' * 64)) 'Imported token value was not preserved.'
     Assert-True ($applyJson -notmatch ('a' * 64) -and $applyJson -notmatch ('b' * 64)) 'Installer output exposed a token value.'
     $shell = New-Object -ComObject WScript.Shell
-    $desktopArguments = $shell.CreateShortcut((Join-Path $desktop '启程 Windows 频道.lnk')).Arguments
-    $startupArguments = $shell.CreateShortcut((Join-Path $startup '启程 Windows 频道.lnk')).Arguments
-    $managementArguments = $shell.CreateShortcut((Join-Path $startMenu '管理 Windows 频道.lnk')).Arguments
-    $setupArguments = $shell.CreateShortcut((Join-Path $startMenu '设置 Windows 频道.lnk')).Arguments
+    function Read-Link([string]$Path) {
+        Assert-True (Test-Path -LiteralPath $Path -PathType Leaf) "Shortcut is missing: $Path"
+        $temporaryPath = Join-Path $temporaryRoot ('.qicheng-shortcut-read-' + [guid]::NewGuid().ToString('N') + '.lnk')
+        $link = $null
+        try {
+            Copy-Item -LiteralPath $Path -Destination $temporaryPath
+            $link = $shell.CreateShortcut($temporaryPath)
+            [pscustomobject]@{ Arguments=[string]$link.Arguments; TargetPath=[string]$link.TargetPath; WorkingDirectory=[string]$link.WorkingDirectory }
+        } finally {
+            if ($null -ne $link -and [Runtime.InteropServices.Marshal]::IsComObject($link)) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) }
+            if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    $desktopArguments = (Read-Link (Join-Path $desktop '启程 Windows 频道.lnk')).Arguments
+    $startupArguments = (Read-Link (Join-Path $startup '启程 Windows 频道.lnk')).Arguments
+    $managementArguments = (Read-Link (Join-Path $startMenu '管理 Windows 频道.lnk')).Arguments
+    $setupArguments = (Read-Link (Join-Path $startMenu '设置 Windows 频道.lnk')).Arguments
     Assert-True ($desktopArguments -notmatch '(?i)(^|\s)-Show(\s|$)' -and $desktopArguments -match '(?i)-WindowStyle\s+Hidden') 'Default double-click shortcut is visible or can flash a PowerShell window.'
     Assert-True ($startupArguments -notmatch '(?i)(^|\s)-Show(\s|$)' -and $startupArguments -match '(?i)-WindowStyle\s+Hidden') 'Background Startup shortcut is visible or can flash a PowerShell window.'
     Assert-True ($managementArguments -match '(?i)(^|\s)-Show(\s|$)' -and $managementArguments -match '(?i)-WindowStyle\s+Hidden') 'Explicit management shortcut does not show Viewer cleanly without a PowerShell window.'

@@ -221,8 +221,8 @@
     },
     {
       "path": "tools/agent-channels/product/tests/Test-ProductPackage.ps1",
-      "bytes": 20899,
-      "sha256": "67bc66a246ef66e6b11bc1b8e47a2163280dcbcd556169d5d8ef570c44b666c3"
+      "bytes": 21739,
+      "sha256": "86e0e5e3df46474388a2cf4df40e95535d518989b2ad8d78b428fdce2b0c364c"
     }
   ]
 }
