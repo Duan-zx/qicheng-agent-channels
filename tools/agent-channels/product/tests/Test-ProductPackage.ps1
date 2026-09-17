@@ -109,6 +109,7 @@ try{
         $exportLink=$shell.CreateShortcut((Join-Path $startMenu "取回频道$(@{1='一';2='二'}[$channel])下载文件.lnk"))
         Assert-True ($exportLink.Arguments -match '-WindowStyle Hidden' -and $exportLink.Arguments -match "-Channel $channel" -and $exportLink.Arguments -match '-Open') "download export shortcut failed: $channel"
     }
+    Assert-True (-not @(Get-ChildItem -LiteralPath $startMenu,$desktop,$startup -Filter '.qicheng-shortcut-*.lnk' -File -ErrorAction SilentlyContinue).Count) 'ASCII temporary shortcut was not cleaned up'
 
     $upgradeCommon=$common.Clone();$upgradeCommon.Remove('ImportTokenPath');$upgradeCommon.Remove('DataRoot')
     $upgrade=(& $installer @upgradeCommon -Apply|Out-String|ConvertFrom-Json)

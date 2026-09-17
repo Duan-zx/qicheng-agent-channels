@@ -250,8 +250,8 @@
     {
       "path": "tools/windows-channels/product/runtime/Install-WindowsChannels.ps1",
       "kind": "source",
-      "bytes": 13683,
-      "sha256": "70450f42691dd1557a51868b24dad6831166d0475f6a2b958521edcd2cf35133"
+      "bytes": 14688,
+      "sha256": "533ca5652fc694dcddf962698a02860db6117f758b30aa0ddd9c6c3e4ca1b4fc"
     },
     {
       "path": "tools/windows-channels/product/runtime/Start-WindowsChannels.ps1",
@@ -310,8 +310,8 @@
     {
       "path": "tools/windows-channels/product/tests/Test-ProductPackage.ps1",
       "kind": "source",
-      "bytes": 36851,
-      "sha256": "8fc69c8df2dbaacbf86182c946de00fe1a9f678c18419d3d09e9cb06be2d7a9f"
+      "bytes": 37056,
+      "sha256": "da55b547cf1de42f7b85aa1f7c1348c7464a655ec9b224f7bb5bd3ac74848ed7"
     },
     {
       "path": "tools/windows-channels/theme/ai-space.png",

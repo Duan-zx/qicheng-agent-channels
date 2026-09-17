@@ -97,6 +97,7 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $startMenu '导入已有频道配置.lnk') -PathType Leaf) 'Config-import shortcut is missing.'
     Assert-True (Test-Path -LiteralPath (Join-Path $startMenu '设置 Windows 频道.lnk') -PathType Leaf) 'First-run setup shortcut is missing.'
     Assert-True (Test-Path -LiteralPath (Join-Path $startMenu '管理 Windows 频道.lnk') -PathType Leaf) 'Explicit visible-management shortcut is missing.'
+    Assert-True (-not @(Get-ChildItem -LiteralPath $startMenu,$desktop,$startup -Filter '.qicheng-shortcut-*.lnk' -File -ErrorAction SilentlyContinue).Count) 'ASCII temporary shortcut was not cleaned up.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Install-Qicheng-Windows-Channels.cmd') -PathType Leaf) 'Double-click installer entry is missing.'
     Assert-True ((Get-Content -LiteralPath (Join-Path $installRoot 'Install-Qicheng-Windows-Channels.cmd') -Raw) -match '(?i)-LaunchAfterInstall') 'Double-click installer does not launch first-run setup or the configured viewer.'
     Assert-True (Test-Path -LiteralPath $dataRoot -PathType Container) 'Separated user-data directory is missing.'

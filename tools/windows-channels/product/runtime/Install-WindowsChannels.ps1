@@ -145,7 +145,27 @@ try {
     New-Item -ItemType Directory -Path $desktopRoot -Force | Out-Null
     New-Item -ItemType Directory -Path $startupRoot -Force | Out-Null
     $shell = New-Object -ComObject WScript.Shell
-    function New-Link([string]$Path,[string]$Target,[string]$Arguments,[string]$WorkingDirectory) { $link=$shell.CreateShortcut($Path); $link.TargetPath=$Target; $link.Arguments=$Arguments; $link.WorkingDirectory=$WorkingDirectory; $link.Save() }
+    function New-Link([string]$Path,[string]$Target,[string]$Arguments,[string]$WorkingDirectory) {
+        $temporaryPath = Join-Path (Split-Path -Parent $Path) ('.qicheng-shortcut-' + [guid]::NewGuid().ToString('N') + '.lnk')
+        $link = $null
+        try {
+            # WScript.Shell can ANSI-mangle a non-ASCII link filename on an English locale.
+            # Save under an ASCII basename, release the COM object, then let .NET move it.
+            $link = $shell.CreateShortcut($temporaryPath)
+            $link.TargetPath = $Target
+            $link.Arguments = $Arguments
+            $link.WorkingDirectory = $WorkingDirectory
+            $link.Save()
+        } finally {
+            if ($null -ne $link -and [Runtime.InteropServices.Marshal]::IsComObject($link)) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) }
+        }
+        try {
+            if (-not (Test-Path -LiteralPath $temporaryPath -PathType Leaf)) { throw '快捷方式临时文件创建失败。' }
+            Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
+        } finally {
+            if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
+        }
+    }
     $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
     New-Link (Join-Path $startMenuRoot '启程 Windows 频道.lnk') $powershell ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + (Join-Path $installRoot 'Start-WindowsChannels.ps1') + '"') $installRoot
     New-Link $desktopLink $powershell ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + (Join-Path $installRoot 'Start-WindowsChannels.ps1') + '"') $installRoot
