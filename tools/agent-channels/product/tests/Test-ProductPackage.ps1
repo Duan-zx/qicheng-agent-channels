@@ -10,10 +10,6 @@ $serverProcess=$null
 function Assert-True([bool]$Condition,[string]$Message){if(-not $Condition){throw "ASSERT: $Message"}}
 function Read-Json([string]$Path){Get-Content -LiteralPath $Path -Raw -Encoding UTF8|ConvertFrom-Json -ErrorAction Stop}
 function Quote-Ps([string]$Value){"'"+$Value.Replace("'","''")+"'"}
-function Get-FreePort {
-    $listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0)
-    $listener.Start();try{([Net.IPEndPoint]$listener.LocalEndpoint).Port}finally{$listener.Stop()}
-}
 function Get-TestOwnedProcesses([string]$Root){
     $prefix=[IO.Path]::GetFullPath($Root).TrimEnd('\')+'\'
     try{
@@ -64,6 +60,16 @@ try{
     Assert-True ($embeddedSourceManifest.PSObject.Properties.Name -notcontains 'repositoryCommit') 'source manifest leaked Git revision'
 
     $sourcePaths=@((Import-PowerShellDataFile -LiteralPath (Join-Path $productRoot 'Source-Allowlist.psd1')).Files)
+    $startSource=Get-Content -LiteralPath (Join-Path $build.windows.directory 'source\product\runtime\Start-Qicheng-Lite.ps1') -Raw
+    $diagnoseSource=Get-Content -LiteralPath (Join-Path $build.windows.directory 'source\product\runtime\Diagnose-Qicheng-Lite.ps1') -Raw
+    $startParam=[regex]::Match($startSource,'(?s)\bparam\(.*?\)').Value
+    $diagnoseParam=[regex]::Match($diagnoseSource,'(?s)\bparam\(.*?\)').Value
+    $startHeader=$startSource.Substring(0,$startSource.IndexOf('$ErrorActionPreference'))
+    $diagnoseHeader=$diagnoseSource.Substring(0,$diagnoseSource.IndexOf('$ErrorActionPreference'))
+    Assert-True ($startParam -and $diagnoseParam -and $startHeader -match 'Port1' -and $startHeader -match 'Port2' -and $diagnoseHeader -match 'Port1' -and $diagnoseHeader -match 'Port2' -and $startSource -match 'Port1 -ne 18761' -and $startSource -match '18761' -and $startSource -match '18762') '固定端口兼容契约缺失'
+    $portError=''
+    try{& (Join-Path $build.windows.directory 'Start-Qicheng-Lite.ps1') -InstallRoot 'C:\invalid-qicheng-lite' -Port1 19001 -Port2 18762 -ErrorAction Stop|Out-Null}catch{$portError=$_.Exception.Message}
+    Assert-True ($portError -match '18761/18762') 'non-contract Lite port was not rejected clearly'
     Assert-True (-not(@($sourcePaths|Where-Object{$_ -match 'PILOT|Start-Pilot|test_pilot|channel_cli'}).Count)) 'private pilot files entered source allowlist'
     $moduleReadme=Get-Content -LiteralPath (Join-Path $moduleRoot 'README.md') -Raw
     Assert-True ($moduleReadme -notmatch 'DELL|NODE01|START-HERE|HANDOFF|jjx|hongyan') 'module README retains private-machine or pilot references'
@@ -86,6 +92,9 @@ try{
     $tokenPath=Join-Path $testRoot 'import.token';$token=-join ('ab'*32)
     [IO.File]::WriteAllText($tokenPath,$token,[Text.UTF8Encoding]::new($false))
     $installer=Join-Path $build.windows.directory 'Install-Qicheng-Lite.ps1'
+    $installerSource=Get-Content -LiteralPath $installer -Raw
+    Assert-True ($installerSource -match '\$legacyRemoved' -and $installerSource -match 'legacyBackup.*legacyLink') 'installer rollback does not restore removed legacy startup shortcut'
+    Assert-True ($installerSource -match '\$shortcutSnapshot' -and $installerSource -match 'shortcutSnapshotRoot' -and $installerSource -match '\$managedShortcutPaths' -and $installerSource -match 'shortcut.Exists') 'installer rollback does not restore managed shortcuts'
     $common=@{PackageRoot=$build.windows.directory;InstallRoot=$install;DataRoot=$data;StartMenuRoot=$startMenu;DesktopRoot=$desktop;StartupRoot=$startup;LegacyStartupRoot=$legacyStartup;ImportTokenPath=$tokenPath;DisableLegacyWindowsChannelsStartup=$true;Confirm=$false}
     $plan=(& $installer @common|Out-String|ConvertFrom-Json)
     Assert-True ($plan.status -eq 'not-installed' -and -not $plan.hostChangesMade) 'installer plan mutated host state'
@@ -137,12 +146,12 @@ try{
     $fakeDocker=Join-Path $testRoot 'fake-docker.cmd'
     $dockerLog=Join-Path $testRoot 'docker.log';$env:QICHENG_LITE_FAKE_DOCKER_LOG=$dockerLog
     "@echo off`r`n>>`"%QICHENG_LITE_FAKE_DOCKER_LOG%`" echo %*`r`nexit /b 0`r`n"|Set-Content -LiteralPath $fakeDocker -Encoding ASCII
-    $port1=Get-FreePort;do{$port2=Get-FreePort}while($port2 -eq $port1)
+    $port1=18761;$port2=18762
     $cmdInstall=Join-Path $testRoot 'cmd-installed';$cmdData=Join-Path $testRoot 'cmd-data';$cmdRunner=Join-Path $testRoot 'run-installer.cmd'
     @"
 @echo off
 set QICHENG_LITE_NO_PAUSE=1
-call "$($build.windows.directory)\Install-Qicheng-Lite.cmd" -InstallRoot "$cmdInstall" -DataRoot "$cmdData" -StartMenuRoot "$($testRoot)\cmd-menu" -DesktopRoot "$($testRoot)\cmd-desktop" -StartupRoot "$($testRoot)\cmd-startup" -LegacyStartupRoot "$($testRoot)\cmd-legacy" -ImportTokenPath "$tokenPath" -DockerPath "$fakeDocker" -HealthAttempts 1 -Port1 $port1 -Port2 $port2
+call "$($build.windows.directory)\Install-Qicheng-Lite.cmd" -InstallRoot "$cmdInstall" -DataRoot "$cmdData" -StartMenuRoot "$($testRoot)\cmd-menu" -DesktopRoot "$($testRoot)\cmd-desktop" -StartupRoot "$($testRoot)\cmd-startup" -LegacyStartupRoot "$($testRoot)\cmd-legacy" -ImportTokenPath "$tokenPath" -DockerPath "$fakeDocker" -HealthAttempts 1
 exit /b %ERRORLEVEL%
 "@|Set-Content -LiteralPath $cmdRunner -Encoding ASCII
     $cmdOutput=(& cmd.exe /d /c $cmdRunner 2>&1|Out-String);$cmdExit=$LASTEXITCODE
@@ -177,7 +186,7 @@ while True: time.sleep(1)
     $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     & $compiler /nologo /target:winexe /optimize+ "/out:$install\dist\AgentChannels.exe" $fakeViewerSource
     Assert-True ($LASTEXITCODE -eq 0) 'fake viewer compilation failed'
-    $started=(& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -Background -BuildBackend -DockerPath $fakeDocker -HealthAttempts 3 -Port1 $port1 -Port2 $port2|Out-String|ConvertFrom-Json)
+    $started=(& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -Background -BuildBackend -DockerPath $fakeDocker -HealthAttempts 3|Out-String|ConvertFrom-Json)
     Assert-True ($started.status -eq 'started' -and $started.viewerMode -eq 'background') 'isolated start failed'
     foreach($n in 1..20){if(-not @(Get-TestOwnedProcesses -Root $testRoot).Count){break};Start-Sleep -Milliseconds 50}
     Assert-True (@(Get-TestOwnedProcesses -Root $testRoot).Count -eq 0) 'fake viewer did not exit after isolated start'
@@ -188,10 +197,12 @@ while True: time.sleep(1)
     Assert-True ($dockerCalls -notmatch '(^|\s)down(\s|$)|(^|\s)-v(\s|$)') 'start attempted destructive Docker action'
 
     Remove-Item -LiteralPath $dockerLog -Force
-    $diagnosisText=(& (Join-Path $install 'Diagnose-Qicheng-Lite.ps1') -InstallRoot $install -DockerPath $fakeDocker -Port1 $port1 -Port2 $port2 -StartupRoot $startup -LegacyStartupRoot $legacyStartup|Out-String)
+    $diagnosisText=(& (Join-Path $install 'Diagnose-Qicheng-Lite.ps1') -InstallRoot $install -DockerPath $fakeDocker -StartupRoot $startup -LegacyStartupRoot $legacyStartup|Out-String)
     Assert-True ($diagnosisText -notmatch [regex]::Escape($token)) 'diagnosis exposed token'
     $diagnosis=$diagnosisText|ConvertFrom-Json
     Assert-True (-not $diagnosis.mutationsMade -and -not $diagnosis.tokenDisplayed) 'diagnosis mutation contract failed'
+    $ps5Diagnosis=(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $install 'Diagnose-Qicheng-Lite.ps1') -DockerPath $fakeDocker -StartupRoot $startup -LegacyStartupRoot $legacyStartup|Out-String|ConvertFrom-Json)
+    Assert-True ([IO.Path]::GetFullPath([string]$ps5Diagnosis.installRoot) -eq [IO.Path]::GetFullPath($install) -and $ps5Diagnosis.mutationsMade -eq $false) 'Windows PowerShell 5.1 diagnosis did not derive its script root'
     $diagnoseCalls=Get-Content -LiteralPath $dockerLog -Raw
     Assert-True ($diagnoseCalls -match 'compose .* ps' -and $diagnoseCalls -notmatch '(^|\s)up(\s|$)|(^|\s)down(\s|$)|(^|\s)-v(\s|$)') 'diagnosis used mutating Docker command'
 

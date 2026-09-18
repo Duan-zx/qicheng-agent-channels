@@ -1,6 +1,6 @@
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
 param(
-    [string]$PackageRoot=$PSScriptRoot,
+    [string]$PackageRoot,
     [string]$InstallRoot,
     [string]$DataRoot,
     [string]$ImportTokenPath,
@@ -12,8 +12,8 @@ param(
     [switch]$LaunchAfterInstall,
     [string]$DockerPath='docker',
     [ValidateRange(1,45)][int]$HealthAttempts=45,
-    [ValidateRange(1024,65535)][int]$Port1=18761,
-    [ValidateRange(1024,65535)][int]$Port2=18762,
+    [int]$Port1=18761,
+    [int]$Port2=18762,
     [switch]$NonInteractive,
     [switch]$Apply
 )
@@ -21,7 +21,9 @@ param(
 $ErrorActionPreference='Stop'
 if($NonInteractive){$ConfirmPreference='None'}
 . (Join-Path $PSScriptRoot 'Product.Common.ps1')
+if($Port1 -ne 18761 -or $Port2 -ne 18762){throw '端口契约固定为 18761/18762；请移除自定义端口参数。'}
 if([string]::IsNullOrWhiteSpace($InstallRoot)){$InstallRoot=Get-QichengLiteInstallRoot}
+if([string]::IsNullOrWhiteSpace($PackageRoot)){$PackageRoot=$PSScriptRoot}
 $packageRoot=Resolve-QichengLitePath -Path $PackageRoot -Label 'PackageRoot'
 $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
 $existingRecord=Read-QichengLiteInstallRecord -InstallRoot $installRoot
@@ -84,6 +86,9 @@ New-Item -ItemType Directory -Path $parent -Force|Out-Null
 $stage=Join-Path $parent ('.QichengLite.stage.'+[guid]::NewGuid().ToString('N'))
 $backup=$null
 $activated=$false
+$legacyRemoved=$false
+$shortcutSnapshotRoot=Join-Path $parent ('.QichengLite.shortcuts.'+[guid]::NewGuid().ToString('N'))
+$shortcutSnapshot=New-Object 'System.Collections.Generic.List[object]'
 try{
     New-Item -ItemType Directory -Path $stage|Out-Null
     foreach($entry in $manifest.files){
@@ -111,6 +116,23 @@ try{
     Set-QichengLitePrivateAcl -Path (Join-Path $installRoot '.local')
     Set-QichengLitePrivateAcl -Path (Join-Path $installRoot '.local\channel.token') -File
     New-Item -ItemType Directory -Path $startMenuRoot,$desktopRoot,$startupRoot -Force|Out-Null
+    New-Item -ItemType Directory -Path $shortcutSnapshotRoot -Force|Out-Null
+    $managedShortcutPaths=@(
+        (Join-Path $startMenuRoot '启程轻量工作台.lnk'),
+        (Join-Path $desktopRoot '启程轻量工作台.lnk'),
+        (Join-Path $startupRoot '启程轻量工作台.lnk'),
+        (Join-Path $startMenuRoot '管理启程轻量工作台.lnk'),
+        (Join-Path $startMenuRoot '诊断启程轻量工作台.lnk'),
+        (Join-Path $startMenuRoot '取回频道一下载文件.lnk'),
+        (Join-Path $startMenuRoot '取回频道二下载文件.lnk'),
+        (Join-Path $startMenuRoot '恢复旧 Windows 频道自启动.lnk')
+    )
+    foreach($shortcutPath in $managedShortcutPaths){
+        $shortcutBackup=Join-Path $shortcutSnapshotRoot ([guid]::NewGuid().ToString('N')+'.lnk')
+        $shortcutExists=Test-Path -LiteralPath $shortcutPath -PathType Leaf
+        if($shortcutExists){Copy-Item -LiteralPath $shortcutPath -Destination $shortcutBackup}
+        [void]$shortcutSnapshot.Add([pscustomobject]@{Path=$shortcutPath;Backup=$shortcutBackup;Exists=$shortcutExists})
+    }
     $shell=New-Object -ComObject WScript.Shell
     function New-Link([string]$Path,[string]$Target,[string]$Arguments){
         $temporaryPath=Join-Path (Split-Path -Parent $Path) ('.qicheng-shortcut-'+[guid]::NewGuid().ToString('N')+'.lnk')
@@ -149,18 +171,28 @@ try{
         New-Item -ItemType Directory -Path (Split-Path -Parent $legacyBackup) -Force|Out-Null
         if(-not(Test-Path -LiteralPath $legacyBackup -PathType Leaf)){Copy-Item -LiteralPath $legacyLink -Destination $legacyBackup}
         Remove-Item -LiteralPath $legacyLink -Force
+        $legacyRemoved=$true
         $legacyDisabled=$true
     }
     if($backup){Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue}
+    if(Test-Path -LiteralPath $shortcutSnapshotRoot){Remove-Item -LiteralPath $shortcutSnapshotRoot -Recurse -Force -ErrorAction SilentlyContinue}
 }catch{
     if($activated -and (Test-Path -LiteralPath $installRoot)){Remove-Item -LiteralPath $installRoot -Recurse -Force}
     if($backup -and (Test-Path -LiteralPath $backup)){Move-Item -LiteralPath $backup -Destination $installRoot}
+    if($legacyRemoved -and -not(Test-Path -LiteralPath $legacyLink) -and (Test-Path -LiteralPath $legacyBackup -PathType Leaf)){Copy-Item -LiteralPath $legacyBackup -Destination $legacyLink -Force -ErrorAction SilentlyContinue}
+    foreach($shortcut in $shortcutSnapshot){
+        if($shortcut.Exists){
+            if(Test-Path -LiteralPath $shortcut.Path){Remove-Item -LiteralPath $shortcut.Path -Force -ErrorAction SilentlyContinue}
+            if(Test-Path -LiteralPath $shortcut.Backup -PathType Leaf){Move-Item -LiteralPath $shortcut.Backup -Destination $shortcut.Path -Force -ErrorAction SilentlyContinue}
+        }elseif(Test-Path -LiteralPath $shortcut.Path){Remove-Item -LiteralPath $shortcut.Path -Force -ErrorAction SilentlyContinue}
+    }
     if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force}
+    if(Test-Path -LiteralPath $shortcutSnapshotRoot){Remove-Item -LiteralPath $shortcutSnapshotRoot -Recurse -Force -ErrorAction SilentlyContinue}
     throw
 }
 
 $startStatus=$null
 if($LaunchAfterInstall){
-    try{$startStatus=(& (Join-Path $installRoot 'Start-Qicheng-Lite.ps1') -Background -BuildBackend -DockerPath $DockerPath -HealthAttempts $HealthAttempts -Port1 $Port1 -Port2 $Port2|Out-String|ConvertFrom-Json).status}catch{$startStatus='start-failed';$startError=$_.Exception.Message}
+    try{$startStatus=(& (Join-Path $installRoot 'Start-Qicheng-Lite.ps1') -Background -BuildBackend -DockerPath $DockerPath -HealthAttempts $HealthAttempts|Out-String|ConvertFrom-Json).status}catch{$startStatus='start-failed';$startError=$_.Exception.Message}
 }
 [ordered]@{schemaVersion=1;status=if($startStatus -eq 'start-failed'){'installed-start-failed'}else{'installed'};version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;tokenImported=[bool]$ImportTokenPath;tokenDisplayed=$false;composeProject='qicheng-agent-channels';ports=@(18761,18762);viewerMode='background';legacyStartupDisabled=$legacyDisabled;legacyBackup=if($legacyDisabled){$legacyBackup}else{$null};startStatus=$startStatus;startError=if($startStatus -eq 'start-failed'){$startError}else{$null};volumesRemoved=$false;hostChangesMade=$true}|ConvertTo-Json -Depth 5

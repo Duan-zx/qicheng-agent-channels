@@ -19,14 +19,14 @@ services:
     environment: {CHANNEL_ID: "1"}
     volumes:
       - channel1-home:/home/channel
-    ports: ["127.0.0.1:18761:8080"]
+    ports: ["127.0.0.1:18761:8080"] # fixed Lite host-port contract
   channel2:
     <<: *channel
     environment: {CHANNEL_ID: "2"}
     volumes:
       - channel2-home:/home/channel
     profiles: [second]
-    ports: ["127.0.0.1:18762:8080"]
+    ports: ["127.0.0.1:18762:8080"] # fixed Lite host-port contract
 secrets:
   channel_token:
     file: .local/channel.token

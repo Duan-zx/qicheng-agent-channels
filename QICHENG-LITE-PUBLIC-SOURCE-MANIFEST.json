@@ -41,8 +41,8 @@
     },
     {
       "path": "tools/agent-channels/compose.yaml",
-      "bytes": 822,
-      "sha256": "876cd53fc62ddb945fd4bb72a38b8417b2756a39d5f6ae11e62b7376d2ad1ad1"
+      "bytes": 886,
+      "sha256": "6efc9768fc18cca2dab95ac9f947a342f570d765da6189aae27073a2abe06269"
     },
     {
       "path": "tools/agent-channels/bridge.py",
@@ -91,8 +91,8 @@
     },
     {
       "path": "tools/agent-channels/backend/welcome.html",
-      "bytes": 3855,
-      "sha256": "46b48ef922138c727d0ee95983dbc68f65627e340a5f501a4e29d79d92332406"
+      "bytes": 3943,
+      "sha256": "35278a2cadae85562c5fe2cb225a2dfa073a1c131049b2f0f15577eee062a6cc"
     },
     {
       "path": "tools/agent-channels/backend/theme/ai-space.png",
@@ -176,28 +176,28 @@
     },
     {
       "path": "tools/agent-channels/product/runtime/Install-Qicheng-Lite.ps1",
-      "bytes": 13269,
-      "sha256": "9e559d7f6291e27c50796d232f917a0b628909c4a1e2b4a072b492667e4fb5ee"
+      "bytes": 15739,
+      "sha256": "d6139a3e018197a548b24d4c3270f372fc5ad4a1d51e2111da76cb8c0ea83cee"
     },
     {
       "path": "tools/agent-channels/product/runtime/Start-Qicheng-Lite.ps1",
-      "bytes": 2865,
-      "sha256": "1d3b242fba61d74ebb401f5a4871baf3fc3e3d3e1c80f55812368f60da9dc467"
+      "bytes": 3019,
+      "sha256": "b175ecfc7f700ab495bf8b4334662bdf47d65cb185ab2117c73a64c011d8e2a2"
     },
     {
       "path": "tools/agent-channels/product/runtime/Diagnose-Qicheng-Lite.ps1",
-      "bytes": 4004,
-      "sha256": "b82ed9b647e4fece85a8da2f2f84648a4ccdb416265f16654bea7acc776736dc"
+      "bytes": 4158,
+      "sha256": "f09be97b6a0f5d1ab132834b2f373b8109f0d313715351bf64a2a1443a0a4a2d"
     },
     {
       "path": "tools/agent-channels/product/runtime/Export-Downloads.ps1",
-      "bytes": 3247,
-      "sha256": "7997db679d3dd9342e87045b00ccd4400c9b11370a05ccefead8c110a84e0578"
+      "bytes": 3308,
+      "sha256": "aa786dd4de65358b86b8996eee975b5303afb39454dcd6486a6f60920ecc3c6d"
     },
     {
       "path": "tools/agent-channels/product/runtime/Restore-LegacyWindowsChannelsStartup.ps1",
-      "bytes": 1761,
-      "sha256": "8832af712613e6e6357bc9d8ea9ff5b1cddac5e7a9ce664a172ee19a48d94073"
+      "bytes": 1822,
+      "sha256": "eb71f7895ad72910da2cecb97d95b9a46c70f12a69b27b02fc53f00a0ca08b47"
     },
     {
       "path": "tools/agent-channels/product/runtime/Install-Qicheng-Lite.cmd",
@@ -221,8 +221,8 @@
     },
     {
       "path": "tools/agent-channels/product/tests/Test-ProductPackage.ps1",
-      "bytes": 21739,
-      "sha256": "86e0e5e3df46474388a2cf4df40e95535d518989b2ad8d78b428fdce2b0c364c"
+      "bytes": 23652,
+      "sha256": "eb08448b6fb6c85e22dfc8777c46ef1b8fdae8767866aa98b964e5176db6c9d7"
     }
   ]
 }

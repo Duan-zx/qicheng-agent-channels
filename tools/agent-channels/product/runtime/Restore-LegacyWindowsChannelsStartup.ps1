@@ -1,7 +1,8 @@
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
-param([string]$InstallRoot=$PSScriptRoot,[string]$LegacyStartupRoot,[switch]$Apply)
+param([string]$InstallRoot,[string]$LegacyStartupRoot,[switch]$Apply)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Product.Common.ps1')
+if([string]::IsNullOrWhiteSpace($InstallRoot)){$InstallRoot=$PSScriptRoot}
 $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
 $record=Read-QichengLiteInstallRecord -InstallRoot $installRoot
 if(-not $record){throw '启程轻量版安装记录缺失。'}

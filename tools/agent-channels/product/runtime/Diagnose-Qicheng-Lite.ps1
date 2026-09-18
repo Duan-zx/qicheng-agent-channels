@@ -1,7 +1,9 @@
 [CmdletBinding()]
-param([string]$InstallRoot=$PSScriptRoot,[string]$DockerPath='docker',[ValidateRange(1024,65535)][int]$Port1=18761,[ValidateRange(1024,65535)][int]$Port2=18762,[string]$StartupRoot,[string]$LegacyStartupRoot)
+param([string]$InstallRoot,[string]$DockerPath='docker',[string]$StartupRoot,[string]$LegacyStartupRoot,[int]$Port1=18761,[int]$Port2=18762)
 $ErrorActionPreference='Continue'
 . (Join-Path $PSScriptRoot 'Product.Common.ps1')
+if($Port1 -ne 18761 -or $Port2 -ne 18762){throw '端口契约固定为 18761/18762；请移除自定义端口参数。'}
+if([string]::IsNullOrWhiteSpace($InstallRoot)){$InstallRoot=$PSScriptRoot}
 $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
 $checks=New-Object 'System.Collections.Generic.List[object]'
 function Add-Check([string]$Name,[bool]$Passed,[string]$Detail){$checks.Add([pscustomobject][ordered]@{name=$Name;passed=$Passed;detail=$Detail})}
@@ -26,7 +28,9 @@ if($dockerAvailable){
     try{$composeOutput=(& $DockerPath compose --project-name qicheng-agent-channels --project-directory $installRoot -f (Join-Path $installRoot 'compose.yaml') --profile second ps --format json 2>&1|Out-String);$composeOk=($LASTEXITCODE -eq 0)}catch{$composeOk=$false;$composeOutput=$_.Exception.Message}
     Add-Check 'compose-project' $composeOk $(if($composeOk){'qicheng-agent-channels 可读取'}else{'无法读取项目状态'})
 }
-foreach($port in @($Port1,$Port2)){
+$port1=18761
+$port2=18762
+foreach($port in @($port1,$port2)){
     $ready=$false
     if($tokenValid){
         try{
@@ -43,4 +47,4 @@ $legacy=Join-Path (Resolve-QichengLitePath -Path $LegacyStartupRoot -Label 'Lega
 Add-Check 'lite-autostart' (Test-Path -LiteralPath $startup -PathType Leaf) $startup
 Add-Check 'legacy-alt-conflict' (-not(Test-Path -LiteralPath $legacy -PathType Leaf)) $(if(Test-Path -LiteralPath $legacy -PathType Leaf){'旧 Windows 频道仍会登录启动，可能争用 Alt 快捷键'}else{'未发现旧启动项'})
 $failed=@($checks.ToArray()|Where-Object{-not $_.passed}).Count
-[ordered]@{schemaVersion=1;status=if($failed){'attention-required'}else{'healthy'};installRoot=$installRoot;composeProject='qicheng-agent-channels';ports=@($Port1,$Port2);checks=$checks.ToArray();failedChecks=$failed;mutationsMade=$false;tokenDisplayed=$false}|ConvertTo-Json -Depth 6
+[ordered]@{schemaVersion=1;status=if($failed){'attention-required'}else{'healthy'};installRoot=$installRoot;composeProject='qicheng-agent-channels';ports=@($port1,$port2);checks=$checks.ToArray();failedChecks=$failed;mutationsMade=$false;tokenDisplayed=$false}|ConvertTo-Json -Depth 6

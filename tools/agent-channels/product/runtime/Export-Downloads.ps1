@@ -1,13 +1,14 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][ValidateSet(1,2)][int]$Channel,
-    [string]$InstallRoot=$PSScriptRoot,
+    [string]$InstallRoot,
     [string]$DataRoot,
     [string]$DockerPath='docker',
     [switch]$Open
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Product.Common.ps1')
+if([string]::IsNullOrWhiteSpace($InstallRoot)){$InstallRoot=$PSScriptRoot}
 $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
 $record=Read-QichengLiteInstallRecord -InstallRoot $installRoot
 if(-not $record){throw '启程轻量版安装记录缺失。'}
