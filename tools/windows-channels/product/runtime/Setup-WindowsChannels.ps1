@@ -24,6 +24,21 @@ $setupStatePath = Join-Path $dataRoot 'setup-status.json'
 if ([string]::IsNullOrWhiteSpace($NewChannelVMsPath)) { $NewChannelVMsPath = Join-Path $installRoot 'source\New-ChannelVMs.ps1' }
 $newChannelVMsPath = Resolve-QichengLocalPath -Path $NewChannelVMsPath -Label 'NewChannelVMsPath'
 
+function Get-WorkspaceLimit {
+    $liteInstalled = -not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA) -and
+        (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Programs\QichengLite\.qicheng-lite-install.json') -PathType Leaf)
+    [pscustomobject][ordered]@{
+        liteCoexistenceDetected = [bool]$liteInstalled
+        maxWorkspaceCount = if ($liteInstalled) { 6 } else { 8 }
+        explanation = if ($liteInstalled) { '已检测到启程 Lite，占用 Alt+1/2/3；Windows 频道只能使用 Alt+4..9，最多创建 6 个工作区。' } else { '未检测到启程 Lite，可创建 1..8 个 Windows 工作区。' }
+    }
+}
+
+function Assert-WorkspaceCountAllowed {
+    $limit = Get-WorkspaceLimit
+    if ($Count -gt $limit.maxWorkspaceCount) { throw "工作区数量 $Count 超过当前上限 $($limit.maxWorkspaceCount)。$($limit.explanation)" }
+}
+
 function Get-WorkspaceSnapshot {
     $configuredProjects = @()
     $configValid = $false
@@ -94,6 +109,7 @@ function Invoke-NewWorkspaceProvisioning {
         return [ordered]@{ schemaVersion=1; status='configured-reused'; message='已存在可用频道配置，将直接复用，不会重建 VM。'; configPath=$configPath; projects=$snapshot.configuredProjects; vmCreationRequested=$false; hostChangesMade=$false }
     }
     if ($snapshot.configExists -and -not $snapshot.configValid) { throw "现有频道配置无效：$($snapshot.configError) 请先使用导入已有频道配置修复；不会重建 VM。" }
+    Assert-WorkspaceCountAllowed
     foreach ($required in @(@{Value=$IsoPath;Name='ISO'},@{Value=$VMRootPath;Name='VM 目标目录'},@{Value=$SwitchName;Name='Hyper-V 虚拟交换机'})) {
         if ([string]::IsNullOrWhiteSpace([string]$required.Value)) { throw "请选择$($required.Name)。" }
     }
@@ -150,6 +166,7 @@ function Test-IsAdministrator {
 }
 
 function Request-ElevatedWorkspaceCreation {
+    Assert-WorkspaceCountAllowed
     foreach ($required in @(@{Value=$IsoPath;Name='ISO'},@{Value=$VMRootPath;Name='VM 目标目录'},@{Value=$SwitchName;Name='Hyper-V 虚拟交换机'})) {
         if ([string]::IsNullOrWhiteSpace([string]$required.Value)) { throw "请选择$($required.Name)。" }
     }
@@ -170,6 +187,7 @@ function Show-SetupWizard {
     Add-Type -AssemblyName System.Drawing
     [System.Windows.Forms.Application]::EnableVisualStyles()
     $snapshot = Get-WorkspaceSnapshot
+    $limit = Get-WorkspaceLimit
     if ($snapshot.configExists -and $snapshot.configValid) {
         [void][System.Windows.Forms.MessageBox]::Show("已配置 $($snapshot.configuredProjects.Count) 个频道，将直接复用并打开工作台，不会重建 VM。",'启程 Windows 频道','OK','Information')
         $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
@@ -197,8 +215,8 @@ function Show-SetupWizard {
     $importBrowse = New-Object Windows.Forms.Button; $importBrowse.Text='浏览…'; $importBrowse.SetBounds(570,148,80,30); $form.Controls.Add($importBrowse)
     $createRadio = New-Object Windows.Forms.RadioButton
     $createRadio.Text = '创建新的 Hyper-V 工作区'; $createRadio.Checked = -not $importRadio.Checked; $createRadio.SetBounds(30,196,420,28); $form.Controls.Add($createRadio)
-    $countLabel = New-Object Windows.Forms.Label; $countLabel.Text='工作区数量（1–8）'; $countLabel.SetBounds(52,234,150,24); $form.Controls.Add($countLabel)
-    $countBox = New-Object Windows.Forms.NumericUpDown; $countBox.Minimum=1; $countBox.Maximum=8; $countBox.Value=2; $countBox.SetBounds(210,230,70,28); $form.Controls.Add($countBox)
+    $countLabel = New-Object Windows.Forms.Label; $countLabel.Text="工作区数量（1–$($limit.maxWorkspaceCount)）"; $countLabel.SetBounds(52,234,150,24); $form.Controls.Add($countLabel)
+    $countBox = New-Object Windows.Forms.NumericUpDown; $countBox.Minimum=1; $countBox.Maximum=$limit.maxWorkspaceCount; $countBox.Value=2; $countBox.SetBounds(210,230,70,28); $form.Controls.Add($countBox)
     $estimateLabel = New-Object Windows.Forms.Label; $estimateLabel.SetBounds(300,230,350,48); $form.Controls.Add($estimateLabel)
     $isoLabel = New-Object Windows.Forms.Label; $isoLabel.Text='Windows ISO'; $isoLabel.SetBounds(52,290,120,24); $form.Controls.Add($isoLabel)
     $isoBox = New-Object Windows.Forms.TextBox; $isoBox.SetBounds(170,286,392,28); $form.Controls.Add($isoBox)
@@ -211,8 +229,8 @@ function Show-SetupWizard {
     if (Get-Command Get-VMSwitch -ErrorAction SilentlyContinue) { try { @(Get-VMSwitch -ErrorAction Stop | Sort-Object Name) | ForEach-Object { [void]$switchBox.Items.Add([string]$_.Name) } } catch {} }
     if ($switchBox.Items.Count -gt 0) { $switchBox.SelectedIndex=0 }
     $pending = New-Object Windows.Forms.Label
-    $pending.Text = '创建只会生成关闭状态的 VM。随后仍须逐台安装 Windows、登录、安装来宾代理并导入配置，完成前不会显示为可用频道。'
-    $pending.ForeColor = [Drawing.Color]::FromArgb(145,75,0); $pending.SetBounds(52,410,590,54); $form.Controls.Add($pending)
+    $pending.Text = "$($limit.explanation) 创建只会生成关闭状态的 VM；随后仍须逐台安装 Windows、登录、安装来宾代理并导入配置，完成前不会显示为可用频道。"
+    $pending.ForeColor = [Drawing.Color]::FromArgb(145,75,0); $pending.SetBounds(52,406,590,76); $form.Controls.Add($pending)
     $continue = New-Object Windows.Forms.Button; $continue.Text='继续'; $continue.SetBounds(470,490,86,34); $form.Controls.Add($continue)
     $cancel = New-Object Windows.Forms.Button; $cancel.Text='稍后设置'; $cancel.SetBounds(565,490,86,34); $form.Controls.Add($cancel)
     $form.CancelButton=$cancel
@@ -258,7 +276,8 @@ function Show-SetupWizard {
 $snapshot = Get-WorkspaceSnapshot
 if ($Action -eq 'Inspect') {
     $inspectStatus = if ($snapshot.configExists -and $snapshot.configValid) { 'configured-reused' } elseif ($snapshot.configExists) { 'invalid-configuration' } else { 'setup-required' }
-    Write-SetupResult ([ordered]@{ schemaVersion=1; status=$inspectStatus; snapshot=$snapshot; resourceOptions=@(1..8 | ForEach-Object { Get-ResourceEstimate -WorkspaceCount $_ }); vmCreationRequested=$false; hostChangesMade=$false })
+    $limit = Get-WorkspaceLimit
+    Write-SetupResult ([ordered]@{ schemaVersion=1; status=$inspectStatus; snapshot=$snapshot; workspaceLimit=$limit; resourceOptions=@(1..$limit.maxWorkspaceCount | ForEach-Object { Get-ResourceEstimate -WorkspaceCount $_ }); vmCreationRequested=$false; hostChangesMade=$false })
     return
 }
 if ($Action -eq 'Import') { Write-SetupResult (Import-ExistingConfiguration -Path $ImportConfigPath); return }

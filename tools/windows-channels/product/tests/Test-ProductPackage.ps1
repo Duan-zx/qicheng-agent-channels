@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 $productRoot = Split-Path -Parent $PSScriptRoot
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('qicheng-product-test-' + [guid]::NewGuid().ToString('N'))
 $packageRoot = Join-Path $temporaryRoot 'package'
+$previousLocalAppData = $env:LOCALAPPDATA
 function Assert-True([bool]$Condition,[string]$Message) { if (-not $Condition) { throw $Message } }
 function Protect-ImportToken([string]$Path) {
     $acl = Get-Acl -LiteralPath $Path
@@ -19,6 +20,8 @@ function Protect-ImportToken([string]$Path) {
 }
 try {
     New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
+    $env:LOCALAPPDATA = Join-Path $temporaryRoot 'isolated-localappdata'
+    New-Item -ItemType Directory -Path $env:LOCALAPPDATA | Out-Null
     $buildJson = & (Join-Path $productRoot 'Build-Package.ps1') -OutputDirectory $packageRoot -Version '0.1.0-test' | Out-String
     $build = $buildJson | ConvertFrom-Json
     Assert-True ($build.status -eq 'built') 'Build did not report success.'
@@ -213,7 +216,7 @@ try {
     Assert-True ($setupArguments -match '(?i)-WindowStyle\s+Hidden') 'Setup shortcut can flash a PowerShell window behind WinForms.'
     $setupInspectJson = & (Join-Path $installRoot 'Setup-WindowsChannels.ps1') -Action Inspect -DataRoot $dataRoot | Out-String
     $setupInspect = $setupInspectJson | ConvertFrom-Json
-    Assert-True ($setupInspect.status -eq 'configured-reused' -and $setupInspect.resourceOptions.Count -eq 8) 'Setup inspection did not reuse existing configuration or expose 1..8 resource options.'
+    Assert-True ($setupInspect.status -eq 'configured-reused' -and $setupInspect.resourceOptions.Count -eq 8 -and $setupInspect.workspaceLimit.maxWorkspaceCount -eq 8 -and -not $setupInspect.workspaceLimit.liteCoexistenceDetected) 'Setup inspection did not reuse existing configuration or expose 1..8 resource options without Lite.'
     $setupWinOut = Join-Path $temporaryRoot 'setup-winps.json'
     $setupWinErr = Join-Path $temporaryRoot 'setup-winps.err'
     $setupWinArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Action Inspect -DataRoot "{1}"' -f (Join-Path $installRoot 'Setup-WindowsChannels.ps1'),$dataRoot
@@ -239,11 +242,37 @@ try {
 [CmdletBinding(SupportsShouldProcess = $true)]
 param([string]$IsoPath,[string]$ExpectedSha256,[string]$RootPath,[string]$SwitchName,[ValidateRange(1,8)][int]$Count=2,[switch]$Compact,[switch]$Apply)
 $items = @(1..$Count | ForEach-Object { [ordered]@{ vmName=('qicheng-win-' + $_); state='Off' } })
+if ($env:QICHENG_TEST_PROVISIONER_MARKER) { Set-Content -LiteralPath $env:QICHENG_TEST_PROVISIONER_MARKER -Value $Count -Encoding ASCII }
 [ordered]@{ schemaVersion=1; status=if($Apply){'created-off'}else{'not-deployed'}; applyRequested=[bool]$Apply; hostChangesMade=[bool]$Apply; provisioned=$items } | ConvertTo-Json -Depth 6 -Compress
 '@ | Set-Content -LiteralPath $fakeProvisioner -Encoding UTF8
     $fakeIso = Join-Path $temporaryRoot 'windows-fixture.iso'
     Set-Content -LiteralPath $fakeIso -Value 'synthetic ISO fixture; not installation media' -Encoding ASCII
     $fakeIsoHash = (Get-FileHash -LiteralPath $fakeIso -Algorithm SHA256).Hash
+    $liteInstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\QichengLite'
+    New-Item -ItemType Directory -Path $liteInstallRoot -Force | Out-Null
+    $liteRecord = Join-Path $liteInstallRoot '.qicheng-lite-install.json'
+    Set-Content -LiteralPath $liteRecord -Value '{}' -Encoding ASCII
+    $liteSetupData = Join-Path $temporaryRoot 'setup-lite-data'
+    $liteInspect = (& (Join-Path $installRoot 'Setup-WindowsChannels.ps1') -Action Inspect -DataRoot $liteSetupData | Out-String) | ConvertFrom-Json
+    Assert-True ($liteInspect.workspaceLimit.liteCoexistenceDetected -and $liteInspect.workspaceLimit.maxWorkspaceCount -eq 6 -and @($liteInspect.resourceOptions).Count -eq 6 -and $liteInspect.workspaceLimit.explanation -match 'Alt\+4\.\.9') 'Lite coexistence inspection did not expose the six-workspace hotkey limit.'
+    $provisionerMarker = Join-Path $temporaryRoot 'provisioner-invoked.txt'
+    $env:QICHENG_TEST_PROVISIONER_MARKER = $provisionerMarker
+    try {
+        foreach ($rejectedCount in @(7,8)) {
+            $limitRejected = $false
+            try { & (Join-Path $installRoot 'Setup-WindowsChannels.ps1') -Action Create -DataRoot $liteSetupData -Count $rejectedCount -IsoPath $fakeIso -ExpectedSha256 $fakeIsoHash -VMRootPath $temporaryRoot -SwitchName 'fixture-switch' -NewChannelVMsPath $fakeProvisioner -Apply -Confirm:$false | Out-Null } catch { $limitRejected = ($_.Exception.Message -match '上限 6' -and $_.Exception.Message -match 'Alt\+4\.\.9') }
+            Assert-True $limitRejected "Lite coexistence accepted $rejectedCount workspaces or omitted the hotkey explanation."
+            Assert-True (-not (Test-Path -LiteralPath $provisionerMarker) -and -not (Test-Path -LiteralPath $liteSetupData)) "Rejected $rejectedCount-workspace request caused a creation side effect."
+        }
+        $liteSix = (& (Join-Path $installRoot 'Setup-WindowsChannels.ps1') -Action Create -DataRoot $liteSetupData -Count 6 -IsoPath $fakeIso -ExpectedSha256 $fakeIsoHash -VMRootPath $temporaryRoot -SwitchName 'fixture-switch' -NewChannelVMsPath $fakeProvisioner | Out-String) | ConvertFrom-Json
+        Assert-True ($liteSix.status -eq 'vm-plan-ready' -and $liteSix.workspaceCount -eq 6 -and (Get-Content -LiteralPath $provisionerMarker -Raw).Trim() -eq '6') 'Lite coexistence rejected the allowed six-workspace plan.'
+        Remove-Item -LiteralPath $provisionerMarker -Force
+        Remove-Item -LiteralPath $liteRecord -Force
+        $plainInspect = (& (Join-Path $installRoot 'Setup-WindowsChannels.ps1') -Action Inspect -DataRoot $liteSetupData | Out-String) | ConvertFrom-Json
+        Assert-True (-not $plainInspect.workspaceLimit.liteCoexistenceDetected -and $plainInspect.workspaceLimit.maxWorkspaceCount -eq 8 -and @($plainInspect.resourceOptions).Count -eq 8) 'Setup did not restore the 1..8 options without Lite.'
+        $plainEight = (& (Join-Path $installRoot 'Setup-WindowsChannels.ps1') -Action Create -DataRoot $liteSetupData -Count 8 -IsoPath $fakeIso -ExpectedSha256 $fakeIsoHash -VMRootPath $temporaryRoot -SwitchName 'fixture-switch' -NewChannelVMsPath $fakeProvisioner | Out-String) | ConvertFrom-Json
+        Assert-True ($plainEight.status -eq 'vm-plan-ready' -and $plainEight.workspaceCount -eq 8 -and (Get-Content -LiteralPath $provisionerMarker -Raw).Trim() -eq '8') 'Setup rejected eight workspaces without Lite.'
+    } finally { Remove-Item Env:QICHENG_TEST_PROVISIONER_MARKER -ErrorAction SilentlyContinue }
     $newSetupData = Join-Path $temporaryRoot 'setup-new-data'
     $setupPlanJson = & (Join-Path $installRoot 'Setup-WindowsChannels.ps1') -Action Create -DataRoot $newSetupData -Count 3 -IsoPath $fakeIso -ExpectedSha256 $fakeIsoHash -VMRootPath $temporaryRoot -SwitchName 'fixture-switch' -NewChannelVMsPath $fakeProvisioner | Out-String
     $setupPlan = $setupPlanJson | ConvertFrom-Json
@@ -500,7 +529,11 @@ class FakeHotkeyViewer {
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $startup '启程 Windows 频道.lnk'))) 'Applied uninstall left the product startup shortcut.'
     Assert-True (Test-Path -LiteralPath $unrelatedStartupLink -PathType Leaf) 'Applied uninstall removed an unrelated startup shortcut.'
     Assert-True (Test-Path -LiteralPath $dataRoot -PathType Container) 'Applied uninstall removed user data without RemoveUserData.'
-    [ordered]@{ status='passed'; packageFiles=$manifest.files.Count; publicSourceRoundTripValidated=(-not $SkipPublicExportRoundTrip); archive=$build.archive; planValidated=$true; windowsPowerShellInstallerPreflight=$true; windowsPowerShell51ImportValidated=$true; windowsPowerShell51SetupValidated=$true; powerShell7ImportValidated=$true; firstRunSetupValidated=$true; invalidConfigurationRepairValidated=$true; existingConfigurationReuseValidated=$true; workspaceCountOptionsValidated='1..8'; workspaceResourceEstimateValidated=$true; vmCreatedStateRemainsPendingValidated=$true; failedUpgradeRestoreValidated=$true; upgradeProcessBlockValidated=$true; temporaryInstallValidated=$true; configImportValidated=$true; viewerDerivedRoot=$derivedRoot; viewerSelfTestValidated=$true; powerShell7DiagnosisValidated=$true; shortcutsValidated=$true; defaultLaunchHiddenAndManagementShowValidated=$true; autoStartEnabledValidated=$true; autoStartDisabledValidated=$true; uninstallExactStartupLinkValidated=$true; aiConnectorsValidated=2; stableMcpLauncherValidated=$true; codexCliIsolatedFakeValidated=$true; codexEmptyListAddRecorded=$true; codexSameConfigNoOpValidated=$true; codexNameConflictRejected=$true; nativeMcpDiscovered=$false; uninstallPreservesUserData=$true; relativePathRejected=$true; realUserInstallPerformed=$false } | ConvertTo-Json -Depth 4
+    [ordered]@{ status='passed'; packageFiles=$manifest.files.Count; publicSourceRoundTripValidated=(-not $SkipPublicExportRoundTrip); archive=$build.archive; planValidated=$true; windowsPowerShellInstallerPreflight=$true; windowsPowerShell51ImportValidated=$true; windowsPowerShell51SetupValidated=$true; powerShell7ImportValidated=$true; firstRunSetupValidated=$true; invalidConfigurationRepairValidated=$true; existingConfigurationReuseValidated=$true; workspaceCountOptionsValidated='1..8 without Lite; 1..6 with Lite'; liteCoexistenceLimitValidated=$true; workspaceResourceEstimateValidated=$true; vmCreatedStateRemainsPendingValidated=$true; failedUpgradeRestoreValidated=$true; upgradeProcessBlockValidated=$true; temporaryInstallValidated=$true; configImportValidated=$true; viewerDerivedRoot=$derivedRoot; viewerSelfTestValidated=$true; powerShell7DiagnosisValidated=$true; shortcutsValidated=$true; defaultLaunchHiddenAndManagementShowValidated=$true; autoStartEnabledValidated=$true; autoStartDisabledValidated=$true; uninstallExactStartupLinkValidated=$true; aiConnectorsValidated=2; stableMcpLauncherValidated=$true; codexCliIsolatedFakeValidated=$true; codexEmptyListAddRecorded=$true; codexSameConfigNoOpValidated=$true; codexNameConflictRejected=$true; nativeMcpDiscovered=$false; uninstallPreservesUserData=$true; relativePathRejected=$true; realUserInstallPerformed=$false } | ConvertTo-Json -Depth 4
 } finally {
-    if (Test-Path -LiteralPath $temporaryRoot) { Remove-Item -LiteralPath $temporaryRoot -Recurse -Force }
+    if ($null -eq $previousLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $previousLocalAppData }
+    $resolvedTemporaryRoot = [IO.Path]::GetFullPath($temporaryRoot).TrimEnd([char[]]@('\','/'))
+    $resolvedTempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]@('\','/'))
+    Assert-True ([string]::Equals([IO.Path]::GetDirectoryName($resolvedTemporaryRoot),$resolvedTempParent,[StringComparison]::OrdinalIgnoreCase) -and [IO.Path]::GetFileName($resolvedTemporaryRoot) -match '^qicheng-product-test-[0-9a-f]{32}$') 'Refusing to remove a test directory outside the expected temporary location.'
+    if (Test-Path -LiteralPath $resolvedTemporaryRoot) { Remove-Item -LiteralPath $resolvedTemporaryRoot -Recurse -Force }
 }
