@@ -128,8 +128,8 @@
                   {
                       "path":  "tools/task-lease/product/runtime/Diagnose-TaskLease.ps1",
                       "kind":  "source",
-                      "bytes":  1864,
-                      "sha256":  "6a1823b8d4e73a600dde0514985c584881e782789778c2dab7db577c580c49de"
+                      "bytes":  3039,
+                      "sha256":  "f7e68b177a15e27e353a4f11de8268174d998d1c424535e8741f91d3d84ac5e6"
                   },
                   {
                       "path":  "tools/task-lease/product/runtime/Uninstall-TaskLease.ps1",
@@ -170,8 +170,8 @@
                   {
                       "path":  "tools/task-lease/product/tests/Test-ProductPackage.ps1",
                       "kind":  "source",
-                      "bytes":  9446,
-                      "sha256":  "c82a141ca130854f9ef00073b2274d1126e9a8a71d87076a52d73f66c436ca5f"
+                      "bytes":  9483,
+                      "sha256":  "c8c55c8c4ff66ec1c043a5bcb3680729c3b5f5a0fbe59da9a734f4ecff86b864"
                   },
                   {
                       "path":  "tools/task-lease/product/tests/Test-PublicSourceExport.ps1",

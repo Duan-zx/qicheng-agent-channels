@@ -45,7 +45,7 @@ try {
         (Get-Content -LiteralPath $autostartLog -Raw) -notmatch 'at least one channel is required') { throw ('Autostart wrapper did not record the startup failure privately: ' + (Get-Content -LiteralPath $autostartLog -Raw)) }
     Remove-Item -LiteralPath (Join-Path $data 'config.json')
     $diagnosis=(& (Join-Path $install 'product\runtime\Diagnose-TaskLease.ps1') -InstallRoot $install | ConvertFrom-Json)
-    if (-not $diagnosis.installed -or -not $diagnosis.packageOk -or -not $diagnosis.pythonOk -or $diagnosis.ready) { throw "Diagnosis mismatch: $($diagnosis | ConvertTo-Json -Compress)" }
+    if (-not $diagnosis.installed -or -not $diagnosis.packageOk -or -not $diagnosis.pythonOk -or $diagnosis.ready -or $diagnosis.serviceMatchesInstall) { throw "Diagnosis mismatch: $($diagnosis | ConvertTo-Json -Compress)" }
     $pythonTest=@'
 import json
 import sys
