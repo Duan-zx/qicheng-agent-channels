@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 import io
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from host.client import GuestClient, MAX_RESPONSE, read_config
+from host.client import GuestClient, MAX_RESPONSE, normalize_key, read_config
 from host.client import main
 
 VM = 'ca6d2942-6d2c-4050-9ba5-b9bca1754b28'
@@ -66,6 +66,13 @@ class HostTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             client.operation('input', actor='agent', action='key', key='Return')
         self.assertEqual(len(self.stream.sent), 1)
+    def test_familiar_enter_key_spelling_is_canonicalized_before_guest(self):
+        self.assertEqual(normalize_key('ENTER'), 'Return')
+        self.assertEqual(normalize_key('Enter'), 'Return')
+        self.assertEqual(normalize_key('CTRL+L'), 'ctrl+l')
+        client = self.client([dict(id='1', ok=True, result=state()), dict(id='2', ok=True, result=dict(actions=1))])
+        client.operation('input', actor='agent', action='key', key='ENTER')
+        self.assertEqual(self.stream.sent[-1]['key'], 'Return')
     def test_duplicate_guest_bindings_rejected(self):
         path = self.root / 'config.json'
         item = dict(vm_id=VM, bios_uuid=BIOS, token_file='token')

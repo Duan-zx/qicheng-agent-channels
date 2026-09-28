@@ -7,7 +7,7 @@ from .client import GuestClient, read_config
 TOOLS = [
     dict(name='windows_channel_state', description='Read this configured Windows guest identity and input mode.', inputSchema=dict(type='object', properties={}, additionalProperties=False)),
     dict(name='windows_channel_screenshot', description='Capture this private Windows guest. Never the host desktop.', inputSchema=dict(type='object', properties={}, additionalProperties=False)),
-    dict(name='windows_channel_input', description='Input into this guest only when a human has enabled agent mode. Stop on takeover or pause.', inputSchema=dict(type='object', properties=dict(action=dict(enum=['click', 'move', 'type', 'key']), x=dict(type='integer'), y=dict(type='integer'), button=dict(type='integer', enum=[1, 2, 3]), text=dict(type='string', maxLength=2000), key=dict(type='string')), required=['action'], additionalProperties=False)),
+    dict(name='windows_channel_input', description='Input into this guest only when a human has enabled agent mode. Stop on takeover or pause. For the Enter key use Return, Enter, or ENTER; key actions accept only the documented fixed keys, not arbitrary shortcuts.', inputSchema=dict(type='object', properties=dict(action=dict(enum=['click', 'move', 'type', 'key']), x=dict(type='integer'), y=dict(type='integer'), button=dict(type='integer', enum=[1, 2, 3]), text=dict(type='string', maxLength=2000), key=dict(type='string', description='Return/Enter, BackSpace, Tab, Escape, Delete, arrows, Home, End, Page_Up, Page_Down, space, or ctrl+a/c/v/x/z/f/l')), required=['action'], additionalProperties=False)),
 ]
 
 MAX_REQUEST_BYTES = 65536

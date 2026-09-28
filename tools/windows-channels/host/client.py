@@ -13,6 +13,18 @@ from pathlib import Path
 SERVICE_ID = '6f3bbd64-8b13-4f20-a1c6-93f77f6ab20e'
 MAX_REQUEST = 65536
 MAX_RESPONSE = 12 * 1024 * 1024
+KEY_NAMES = (
+    'Return', 'BackSpace', 'Tab', 'Escape', 'Delete', 'Left', 'Right',
+    'Up', 'Down', 'Home', 'End', 'Page_Up', 'Page_Down', 'space',
+    'ctrl+a', 'ctrl+c', 'ctrl+v', 'ctrl+x', 'ctrl+z', 'ctrl+f', 'ctrl+l',
+)
+KEY_ALIASES = {name.casefold(): name for name in KEY_NAMES}
+KEY_ALIASES.update({'enter': 'Return', 'esc': 'Escape', 'spacebar': 'space'})
+
+
+def normalize_key(value):
+    """Accept familiar key spellings while keeping the guest's fixed allowlist."""
+    return KEY_ALIASES.get(value.casefold(), value) if isinstance(value, str) else value
 
 
 def canonical_id(value):
@@ -106,6 +118,8 @@ class GuestClient:
             raise RuntimeError('Human takeover retained; enable locally after handoff')
         if op == 'input' and state.get('mode') != fields.get('actor'):
             raise RuntimeError('Input is paused or controlled by another actor')
+        if op == 'input' and fields.get('action') == 'key' and 'key' in fields:
+            fields['key'] = normalize_key(fields['key'])
         return self.exchange(op, **fields)
 
 

@@ -24,10 +24,13 @@ From the `windows-channels` directory:
 ```powershell
 python -m host.client --config .local/channels.json --project project-a state
 python -m host.client --config .local/channels.json --project project-a screenshot --out .local/project-a.png
+python -m host.client --config .local/channels.json --project project-a input --action key --key Enter
 ```
+
+The guest protocol calls the Enter key `Return`. The host client also accepts `Enter` and `ENTER` and normalizes them to `Return`; key names and `ctrl+a/c/v/x/z/f/l` are case-insensitive. Only the guest's fixed key allowlist is forwarded. Arbitrary shortcuts and shell commands are not supported.
 
 The operator can explicitly `allow`, `takeover`, or `pause`. `allow` refuses to replace human control. After a human handoff, pause first, then deliberately enable a new agent task. A locked or unavailable guest refuses input. Agents must never automatically retry `allow` after takeover or failure.
 
 For MCP, run `python -m host.mcp --config <absolute-local-config> --project project-a` with this directory as the process working directory. Each MCP process binds one project. The three exposed tools read state, screenshot, and send agent input; there is no control override tool. Client configuration is not proof of native tool loading or acceptance.
 
-Current status: host framing and routing have mock tests. End-to-end Hyper-V guest connection, desktop input, and concurrent native-tool behavior require live acceptance before a release.
+Current status: one Windows host has passed live Hyper-V guest identity, screenshot, and separate Codex tasks entering distinct synthetic text into two guests. Real project workflows, concurrent keystroke timing, a second host install, and recovery after takeover still need acceptance before a general release.

@@ -88,20 +88,20 @@
     {
       "path": "tools/windows-channels/host/client.py",
       "kind": "source",
-      "bytes": 7126,
-      "sha256": "e532fede31b28ca25ff245412a50e3c56d56b3054050939095d1e022b7288003"
+      "bytes": 7828,
+      "sha256": "84ac334d369a1d72b12393d31182e22c32735d446b2c5ec28463513b122630e3"
     },
     {
       "path": "tools/windows-channels/host/mcp.py",
       "kind": "source",
-      "bytes": 5117,
-      "sha256": "8f39cf8b7da78556b54c9b1cbe64b12d20e3b307b7886668ebc7fc9f1814095c"
+      "bytes": 5369,
+      "sha256": "a5018ec2e8e3ce5a3d33fdf342b762766fe033e7699c98ce54189c4618793059"
     },
     {
       "path": "tools/windows-channels/host/README.md",
       "kind": "source",
-      "bytes": 1981,
-      "sha256": "01e46c65e0cd8a423e3973a163faf3fee78c7b9d24a6d17120707cc3e3d44ccd"
+      "bytes": 2506,
+      "sha256": "3ac23594f452442257194c92b6af38c63badd2de87c49cbbdf2b0ec84be98c8b"
     },
     {
       "path": "tools/windows-channels/guest/__init__.py",
@@ -184,8 +184,8 @@
     {
       "path": "tools/windows-channels/tests/test_host.py",
       "kind": "source",
-      "bytes": 4570,
-      "sha256": "23a76ac120c740c7a64bd59b8365d1b31b2d6417cfd6b335c190c475efab9d57"
+      "bytes": 5098,
+      "sha256": "094aefa915ff4a8cd6f38dbc7e4ff96c4601cc88e28f561febfd5de0a307f73b"
     },
     {
       "path": "tools/windows-channels/tests/test_host_mcp.py",
@@ -238,8 +238,8 @@
     {
       "path": "tools/windows-channels/product/QUICKSTART.zh-CN.md",
       "kind": "source",
-      "bytes": 9630,
-      "sha256": "b8f4fbfa26f4d271a51df0f94cd50814e7322e0a671f2b68bff87b85efaecbbb"
+      "bytes": 10031,
+      "sha256": "460dad0ea7d4416625a3a0c3842f8d6ac63d7a00e24987fc667f1fda7f5cfdfd"
     },
     {
       "path": "tools/windows-channels/product/Build-Package.ps1",
