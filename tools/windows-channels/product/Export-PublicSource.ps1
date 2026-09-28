@@ -21,6 +21,7 @@ $allowlist = @(
     'Register-HostService.ps1',
     'Build-GuestPayload.ps1',
     'Install-GuestPayloadDirect.ps1',
+    'Enable-GuestAutologonDirect.ps1',
     'host/__init__.py',
     'host/client.py',
     'host/mcp.py',
@@ -44,6 +45,7 @@ $allowlist = @(
     'tests/Test-ProvisionSafety.ps1',
     'tests/PayloadSafety.Tests.ps1',
     'tests/InstallGuestPayloadDirect.Tests.ps1',
+    'tests/AutologonDirect.Tests.ps1',
     'tests/HostServiceSafety.Tests.ps1',
     'product/README.md',
     'product/QUICKSTART.zh-CN.md',
@@ -62,7 +64,7 @@ $allowlist = @(
     'product/runtime/Install-Qicheng-Windows-Channels.cmd',
     'product/tests/Test-ProductPackage.ps1'
 )
-$themeAllowlist = @('theme/ai-space.png','theme/Set-WorkspaceTheme.ps1','theme/README.md')
+$themeAllowlist = @('theme/ai-space.png','theme/ai-space-v2.png','theme/Set-WorkspaceTheme.ps1','theme/README.md')
 foreach ($relative in $themeAllowlist) {
     if (Test-Path -LiteralPath (Join-Path (Join-Path $repoRoot $module) $relative) -PathType Leaf) { $allowlist += $relative }
 }

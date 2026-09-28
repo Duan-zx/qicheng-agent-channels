@@ -55,6 +55,7 @@ $allowlist = @(
     @{ source=(Join-Path $windowsRoot 'Register-HostService.ps1'); destination='source\Register-HostService.ps1'; kind='deployment-script' },
     @{ source=(Join-Path $windowsRoot 'Build-GuestPayload.ps1'); destination='source\Build-GuestPayload.ps1'; kind='deployment-script' },
     @{ source=(Join-Path $windowsRoot 'Install-GuestPayloadDirect.ps1'); destination='source\Install-GuestPayloadDirect.ps1'; kind='deployment-script' },
+    @{ source=(Join-Path $windowsRoot 'Enable-GuestAutologonDirect.ps1'); destination='source\Enable-GuestAutologonDirect.ps1'; kind='deployment-script' },
     @{ source=(Join-Path $windowsRoot 'tests\test_contract.py'); destination='source\tests\test_contract.py'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\test_guest_agent.py'); destination='source\tests\test_guest_agent.py'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\test_guest_protocol.py'); destination='source\tests\test_guest_protocol.py'; kind='test-source' },
@@ -65,6 +66,7 @@ $allowlist = @(
     @{ source=(Join-Path $windowsRoot 'tests\Test-ProvisionSafety.ps1'); destination='source\tests\Test-ProvisionSafety.ps1'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\PayloadSafety.Tests.ps1'); destination='source\tests\PayloadSafety.Tests.ps1'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\InstallGuestPayloadDirect.Tests.ps1'); destination='source\tests\InstallGuestPayloadDirect.Tests.ps1'; kind='test-source' },
+    @{ source=(Join-Path $windowsRoot 'tests\AutologonDirect.Tests.ps1'); destination='source\tests\AutologonDirect.Tests.ps1'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\HostServiceSafety.Tests.ps1'); destination='source\tests\HostServiceSafety.Tests.ps1'; kind='test-source' },
     @{ source=(Join-Path $productRoot 'README.md'); destination='source\product\README.md'; kind='documentation' },
     @{ source=(Join-Path $productRoot 'QUICKSTART.zh-CN.md'); destination='source\product\QUICKSTART.zh-CN.md'; kind='documentation' },
@@ -95,7 +97,7 @@ $allowlist = @(
     @{ source=(Join-Path $productRoot 'runtime\Install-Qicheng-Windows-Channels.cmd'); destination='Install-Qicheng-Windows-Channels.cmd'; kind='installer-entry' },
     @{ source=(Join-Path $productRoot 'QUICKSTART.zh-CN.md'); destination='QUICKSTART.zh-CN.md'; kind='documentation' }
 )
-$themeAllowlist = @('ai-space.png','Set-WorkspaceTheme.ps1','README.md')
+$themeAllowlist = @('ai-space.png','ai-space-v2.png','Set-WorkspaceTheme.ps1','README.md')
 foreach ($themeName in $themeAllowlist) {
     $themeSource = Join-Path (Join-Path $windowsRoot 'theme') $themeName
     if (Test-Path -LiteralPath $themeSource -PathType Leaf) {

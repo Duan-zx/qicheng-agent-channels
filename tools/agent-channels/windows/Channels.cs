@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -16,15 +16,18 @@ sealed class Channels : Form {
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr h, int id);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string value);
     const uint NoRepeatAlt = 0x4001;
+    const int EmSetCueBanner = 0x1501;
     readonly HttpClient http = new HttpClient(new HttpClientHandler { UseProxy = false });
     readonly JavaScriptSerializer json = new JavaScriptSerializer();
     readonly SemaphoreSlim inputGate = new SemaphoreSlim(1, 1);
     readonly DesktopPicture screen = new DesktopPicture();
-    readonly SoftPanel bar = new SoftPanel(), miniBar = new SoftPanel();
+    readonly SoftPanel bar = new SoftPanel(), miniBar = new SoftPanel(), statusShell = new SoftPanel(), addressShell = new SoftPanel();
     readonly Label identity = new Label(), status = new Label();
     readonly TextBox address = new TextBox();
     readonly SignalButton[] channelButtons = new SignalButton[3];
+    SignalButton humanButton, agentButton, pauseButton, navigateButton, collapseButton, miniHumanButton, miniAgentButton, miniPauseButton;
     readonly bool[] pngFallback = new bool[3];
     readonly System.Windows.Forms.Timer pollTimer = new System.Windows.Forms.Timer(), textTimer = new System.Windows.Forms.Timer();
     readonly NotifyIcon tray = new NotifyIcon();
@@ -32,9 +35,10 @@ sealed class Channels : Form {
     readonly StringBuilder pendingText = new StringBuilder();
     ApplicationContext context;
     EventWaitHandle showSignal;
-    bool polling, exiting, connected, stateKnown;
+    bool polling, exiting, connected, stateKnown, collapsed;
     int channel = 1, generation, textGeneration, guestWidth = 1600, guestHeight = 900;
-    string mode = "paused";
+    string mode = "paused", statusError = "";
+    DateTime statusErrorUntil = DateTime.MinValue;
     IntPtr previous;
 
     [STAThread] static void Main(string[] args) {
@@ -48,7 +52,9 @@ sealed class Channels : Form {
                 && PollInterval("human") == 250 && PollInterval("agent") == 700
                 && ShouldFallback(HttpStatusCode.NotFound) && ShouldFallback(HttpStatusCode.MethodNotAllowed)
                 && !ShouldFallback(HttpStatusCode.ServiceUnavailable) && !ShouldFallback(HttpStatusCode.Unauthorized)
-                && KeyName(Keys.L, true, false) == "ctrl+l" && KeyName(Keys.Tab, false, false) == "Tab";
+                && KeyName(Keys.L, true, false) == "ctrl+l" && KeyName(Keys.Tab, false, false) == "Tab"
+                && InputAllowed("human", true, true) && !InputAllowed("human", false, true) && !InputAllowed("agent", true, true)
+                && MatchesInputRoute(1, 4, 1, 4) && !MatchesInputRoute(1, 4, 2, 4) && !MatchesInputRoute(1, 4, 1, 5);
             File.WriteAllText(args[1], JsonResult(mapping, contract));
             Environment.Exit(mapping && contract ? 0 : 1); return;
         }
@@ -99,33 +105,41 @@ sealed class Channels : Form {
     }
 
     void BuildBar() {
-        bar.Size = new Size(1160, 48); Controls.Add(bar); bar.BringToFront();
-        string[] labels = { "本机", "频道一", "频道二" };
+        bar.Size = new Size(1184, 58); bar.Fill = Theme.Panel; bar.Edge = Theme.Edge; bar.Radius = 22; Controls.Add(bar); bar.BringToFront();
+        string[] labels = { "本机", "频道 1", "频道 2" };
         for (int i = 0; i < 3; i++) {
             int id = i;
-            channelButtons[i] = new SignalButton { Text = labels[i], Shortcut = "Alt+" + (i + 1), Bounds = new Rectangle(10 + i * 106, 5, 101, 38), Font = Font, AccessibleName = labels[i] };
-            channelButtons[i].Click += delegate { if (id == 0) ReturnToHost(); else OpenChannel(id); }; bar.Controls.Add(channelButtons[i]);
+            channelButtons[i] = new SignalButton { Text = labels[i], Shortcut = "Alt+" + (i + 1), Font = Font, AccessibleName = labels[i] };
+            channelButtons[i].Click += delegate { if (id == 0) ReturnToHost(); else OpenChannel(id); }; tips.SetToolTip(channelButtons[i], labels[i] + " · Alt+" + (i + 1)); bar.Controls.Add(channelButtons[i]);
         }
-        identity.Bounds = new Rectangle(334, 5, 120, 38); identity.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold);
-        identity.ForeColor = Theme.Text; identity.BackColor = Theme.Panel; identity.TextAlign = ContentAlignment.MiddleLeft; bar.Controls.Add(identity);
-        status.Bounds = new Rectangle(454, 5, 112, 38); status.ForeColor = Theme.Muted; status.BackColor = Theme.Panel; status.TextAlign = ContentAlignment.MiddleLeft; bar.Controls.Add(status);
-        AddButton(bar, "我来接管", 570, 88, async delegate { await SetMode("human"); });
-        AddButton(bar, "交给 AI", 661, 82, async delegate { await SetMode("agent"); });
-        AddButton(bar, "暂停", 746, 67, async delegate { await SetMode("paused"); });
-        address.Bounds = new Rectangle(819, 12, 230, 25); address.BorderStyle = BorderStyle.FixedSingle; address.Font = new Font("Segoe UI", 9F); address.AccessibleName = "浏览器地址";
-        address.KeyDown += async delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await NavigateAddress(); } }; bar.Controls.Add(address);
-        AddButton(bar, "转到", 1052, 51, async delegate { await NavigateAddress(); }); AddButton(bar, "︿", 1106, 42, delegate { SetCollapsed(true); });
+        identity.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); identity.ForeColor = Theme.Text; identity.BackColor = Theme.Panel; identity.TextAlign = ContentAlignment.MiddleLeft; identity.AutoEllipsis = true; bar.Controls.Add(identity);
+        statusShell.Fill = Theme.Raised; statusShell.Edge = Theme.Edge; statusShell.Radius = 16;
+        status.ForeColor = Theme.Muted; status.BackColor = Theme.Raised; status.TextAlign = ContentAlignment.MiddleCenter; status.AutoEllipsis = true; status.Font = new Font("Microsoft YaHei UI", 9F); statusShell.Controls.Add(status); bar.Controls.Add(statusShell);
+        humanButton = AddButton(bar, "我来接管", 92, ButtonTone.Human, async delegate { await SetMode("human"); });
+        agentButton = AddButton(bar, "交给 AI", 88, ButtonTone.Agent, async delegate { await SetMode("agent"); });
+        pauseButton = AddButton(bar, "暂停", 68, ButtonTone.Pause, async delegate { await SetMode("paused"); });
+        addressShell.Fill = Theme.Input; addressShell.Edge = Theme.Edge; addressShell.Radius = 16;
+        address.BorderStyle = BorderStyle.None; address.Font = new Font("Segoe UI", 9.5F); address.BackColor = Theme.Input; address.ForeColor = Theme.Text; address.AccessibleName = "浏览器地址"; address.AccessibleDescription = "接管频道后输入网址并按 Enter";
+        address.HandleCreated += delegate { SetAddressCue("接管后可输入网址"); };
+        address.KeyDown += async delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await NavigateAddress(); } }; addressShell.Controls.Add(address); bar.Controls.Add(addressShell);
+        navigateButton = AddButton(bar, "打开", 54, ButtonTone.Quiet, async delegate { await NavigateAddress(); });
+        collapseButton = AddButton(bar, "⌃", 42, ButtonTone.Icon, delegate { SetCollapsed(true); }); collapseButton.AccessibleName = "收起频道控制";
+        LayoutBar();
     }
 
     void BuildMiniBar() {
-        miniBar.Size = new Size(236, 40); Controls.Add(miniBar);
-        SignalButton expand = new SignalButton { Text = "频道一 · 输入暂停    ﹀", Bounds = new Rectangle(5, 4, 226, 32), Font = Font, AccessibleName = "展开频道控制" };
-        expand.Click += delegate { SetCollapsed(false); }; miniBar.Controls.Add(expand); miniBar.Tag = expand; miniBar.Visible = false; miniBar.BringToFront();
+        miniBar.Size = new Size(320, 44); miniBar.Fill = Theme.Panel; miniBar.Edge = Theme.Edge; miniBar.Radius = 20; Controls.Add(miniBar);
+        SignalButton expand = new SignalButton { Text = "频道 1 · 输入已暂停    展开", Bounds = new Rectangle(6, 5, 308, 34), Font = Font, AccessibleName = "展开频道控制" };
+        expand.Click += delegate { SetCollapsed(false); }; miniBar.Controls.Add(expand); miniBar.Tag = expand;
+        miniHumanButton = AddButton(miniBar, "我来接管", 0, ButtonTone.Human, async delegate { await SetMode("human"); });
+        miniAgentButton = AddButton(miniBar, "交给 AI", 0, ButtonTone.Agent, async delegate { await SetMode("agent"); });
+        miniPauseButton = AddButton(miniBar, "暂停", 0, ButtonTone.Pause, async delegate { await SetMode("paused"); });
+        miniHumanButton.Visible = miniAgentButton.Visible = miniPauseButton.Visible = false; miniBar.Visible = false; miniBar.BringToFront();
     }
 
-    void AddButton(Control parent, string title, int x, int width, EventHandler click) {
-        SignalButton button = new SignalButton { Text = title, Signal = Color.Empty, Bounds = new Rectangle(x, 5, width, 38), Font = Font, AccessibleName = title };
-        button.Click += click; parent.Controls.Add(button);
+    SignalButton AddButton(Control parent, string title, int width, ButtonTone tone, EventHandler click) {
+        SignalButton button = new SignalButton { Text = title, Signal = Color.Empty, Font = Font, AccessibleName = title, Tone = tone };
+        button.Click += click; parent.Controls.Add(button); return button;
     }
 
     void WireInput() {
@@ -139,21 +153,21 @@ sealed class Channels : Form {
         };
         screen.KeyPress += delegate(object sender, KeyPressEventArgs e) { if (!char.IsControl(e.KeyChar)) { e.Handled = true; QueueText(e.KeyChar); } };
         screen.KeyDown += async delegate(object sender, KeyEventArgs e) {
-            if (e.Control && e.KeyCode == Keys.V && mode == "human") {
-                e.SuppressKeyPress = true; e.Handled = true;
+            if (e.Control && e.KeyCode == Keys.V) {
+                e.SuppressKeyPress = true; e.Handled = true; if (!CanHumanInput()) return;
                 // Read host text only for an explicit user paste into this channel.
                 try {
                     string pasted = Clipboard.ContainsText() ? Clipboard.GetText() : "";
                     int pasteChannel = channel, pasteGeneration = generation;
                     await FlushText();
                     for (int offset = 0; offset < pasted.Length;) {
-                        if (channel != pasteChannel || generation != pasteGeneration || mode != "human") break;
+                        if (!CanHumanInput(pasteChannel, pasteGeneration)) break;
                         int length = Math.Min(1800, pasted.Length - offset);
                         if (offset + length < pasted.Length && char.IsHighSurrogate(pasted[offset + length - 1])) length--;
-                        await Input(new { actor = "human", action = "type", text = pasted.Substring(offset, length) });
+                        await InputAt(pasteChannel, pasteGeneration, new { actor = "human", action = "type", text = pasted.Substring(offset, length) });
                         offset += length;
                     }
-                } catch (ExternalException) { tips.SetToolTip(status, "剪贴板暂不可用，请重试粘贴。"); }
+                } catch (ExternalException) { SetStatusError("剪贴板暂不可用，请重试粘贴。"); UpdateStatus(); }
                 return;
             }
             string key = KeyName(e.KeyCode, e.Control, e.Shift);
@@ -185,16 +199,48 @@ sealed class Channels : Form {
         base.WndProc(ref m);
     }
 
-    void LayoutSurface() {
-        screen.Bounds = ClientRectangle; bar.Location = new Point(Math.Max(0, (ClientSize.Width - bar.Width) / 2), 8); miniBar.Location = new Point(Math.Max(0, (ClientSize.Width - miniBar.Width) / 2), 8);
+    void LayoutBar() {
+        if (ClientSize.Width <= 0) return;
+        int available = Math.Max(0, ClientSize.Width - 24), minimum = 700;
+        bool forcedMini = available < minimum, useMini = collapsed || forcedMini;
+        bar.Visible = !useMini; miniBar.Visible = useMini;
+        if (useMini) {
+            int miniWidth = Math.Min(420, Math.Max(1, available)), miniHeight = forcedMini ? 88 : 44;
+            miniBar.Size = new Size(miniWidth, miniHeight); SignalButton expand = miniBar.Tag as SignalButton;
+            string compactText = !stateKnown ? (connected ? "正在读取状态" : "频道未连接") : mode == "agent" ? "AI 已接管" : mode == "human" ? "你正在操作" : "输入已暂停";
+            if (expand != null) { expand.Text = "频道 " + channel + " · " + compactText + (forcedMini ? "" : "    展开"); expand.Enabled = !forcedMini; expand.Bounds = new Rectangle(6, 5, Math.Max(1, miniWidth - 12), 34); }
+            if (miniHumanButton != null) {
+                miniHumanButton.Visible = miniAgentButton.Visible = miniPauseButton.Visible = forcedMini;
+                if (forcedMini) { int gap = 4, actionWidth = Math.Max(1, (miniWidth - 12 - gap * 2) / 3), actionY = 48, actionHeight = 34, actionX = 6; miniHumanButton.Bounds = new Rectangle(actionX, actionY, actionWidth, actionHeight); actionX += actionWidth + gap; miniAgentButton.Bounds = new Rectangle(actionX, actionY, actionWidth, actionHeight); actionX += actionWidth + gap; miniPauseButton.Bounds = new Rectangle(actionX, actionY, Math.Max(1, miniWidth - 6 - actionX), actionHeight); }
+            }
+            miniBar.Location = new Point(Math.Max(0, (ClientSize.Width - miniBar.Width) / 2), 10); miniBar.BringToFront(); return;
+        }
+        int width = Math.Min(1184, available), y = 8, height = 42, x = 10, channelWidth = width >= 1120 ? 110 : 72;
+        bar.Width = width;
+        for (int i = 0; i < 3; i++) { channelButtons[i].Shortcut = width >= 1120 ? "Alt+" + (i + 1) : ""; channelButtons[i].Bounds = new Rectangle(x, y, channelWidth, height); x += channelWidth + 2; }
+        x += 6; int identityWidth = width >= 1120 ? 86 : 70; identity.Bounds = new Rectangle(x, y, identityWidth, height); x += identityWidth + 8;
+        int statusWidth = width >= 1120 ? 126 : 92; statusShell.Bounds = new Rectangle(x, y, statusWidth, height); status.Bounds = new Rectangle(8, 2, Math.Max(1, statusWidth - 16), height - 4); x += statusWidth + 8;
+        int humanWidth = width >= 1120 ? 90 : 74, agentWidth = width >= 1120 ? 88 : 72, pauseWidth = width >= 1120 ? 68 : 60;
+        humanButton.Bounds = new Rectangle(x, y, humanWidth, height); x += humanWidth + 4;
+        agentButton.Bounds = new Rectangle(x, y, agentWidth, height); x += agentWidth + 4;
+        pauseButton.Bounds = new Rectangle(x, y, pauseWidth, height); x += pauseWidth + 10;
+        bool showAddress = width >= 1050; addressShell.Visible = showAddress; navigateButton.Visible = showAddress;
+        if (showAddress) {
+            int addressWidth = Math.Min(260, Math.Max(146, width - x - 54 - 4 - 42 - 10)); addressShell.Bounds = new Rectangle(x, y, addressWidth, height);
+            address.Bounds = new Rectangle(11, 11, Math.Max(1, addressWidth - 22), height - 22); x += addressWidth + 4;
+            navigateButton.Bounds = new Rectangle(x, y, 54, height); x += 58;
+        }
+        collapseButton.Bounds = new Rectangle(Math.Min(width - 52, x), y, 42, height);
+        bar.Location = new Point(Math.Max(0, (ClientSize.Width - bar.Width) / 2), 10); bar.BringToFront();
     }
-    void SetCollapsed(bool value) { bar.Visible = !value; miniBar.Visible = value; if (value) miniBar.BringToFront(); else bar.BringToFront(); screen.Focus(); }
+    void LayoutSurface() { screen.Bounds = ClientRectangle; LayoutBar(); }
+    void SetCollapsed(bool value) { collapsed = value; LayoutSurface(); screen.Focus(); }
     void ReturnToHost() { ClearPendingInput(); Hide(); ShowInTaskbar = false; if (previous != IntPtr.Zero) SetForegroundWindow(previous); }
 
     void OpenChannel(int id) {
         if (exiting || id < 1 || id > 2) return;
         IntPtr foreground = GetForegroundWindow(); if (foreground != Handle) previous = foreground;
-        ClearPendingInput(); generation++; channel = id; connected = false; stateKnown = false; mode = "paused"; ReplaceImage(null);
+        ClearPendingInput(); generation++; channel = id; connected = false; stateKnown = false; mode = "paused"; ClearStatusError(); ReplaceImage(null);
         Text = "启程 · 频道" + id; Rectangle bounds = Screen.FromPoint(Cursor.Position).Bounds; Bounds = bounds; WindowState = FormWindowState.Normal;
         ShowInTaskbar = true; Show(); Bounds = bounds; BringToFront(); Activate(); screen.Focus(); UpdateStatus(); BeginPoll();
     }
@@ -203,6 +249,8 @@ sealed class Channels : Form {
     static string FrameRoute(bool fallback) { return fallback ? "/api/screenshot" : "/api/frame.jpg"; }
     static bool ShouldFallback(HttpStatusCode statusCode) { return statusCode == HttpStatusCode.NotFound || statusCode == HttpStatusCode.MethodNotAllowed; }
     static int PollInterval(string currentMode) { return currentMode == "human" ? 250 : 700; }
+    static bool InputAllowed(string currentMode, bool activeConnection, bool knownState) { return currentMode == "human" && activeConnection && knownState; }
+    static bool MatchesInputRoute(int expectedChannel, int expectedGeneration, int currentChannel, int currentGeneration) { return expectedChannel == currentChannel && expectedGeneration == currentGeneration; }
     async void BeginPoll() { await Poll(); }
     async Task<Dictionary<string, object>> ReadState(int id) { return json.Deserialize<Dictionary<string, object>>(await http.GetStringAsync(Url(id, "/api/state"))); }
 
@@ -234,42 +282,49 @@ sealed class Channels : Form {
         ClearPendingInput(); int id = channel, epoch = ++generation; await inputGate.WaitAsync();
         try {
             if (epoch != generation || id != channel || exiting) return;
-            Dictionary<string, object> state = await PostState(id, "/api/control", new { mode = next }); if (epoch == generation && id == channel) ApplyState(state);
-        } catch (Exception ex) { if (epoch == generation && id == channel) { connected = false; stateKnown = false; tips.SetToolTip(status, "控制切换失败：" + ex.Message); UpdateStatus(); } }
+            Dictionary<string, object> state = await PostState(id, "/api/control", new { mode = next }); if (epoch == generation && id == channel) { ClearStatusError(); ApplyState(state); }
+        } catch (Exception ex) { if (epoch == generation && id == channel) { connected = false; stateKnown = false; ClearPendingInput(); SetStatusError("控制切换失败：" + ex.Message); UpdateStatus(); } }
         finally { inputGate.Release(); } screen.Focus();
     }
 
+    bool CanHumanInput() { return InputAllowed(mode, connected, stateKnown) && !exiting; }
+    bool CanHumanInput(int id, int epoch) { return CanHumanInput() && MatchesInputRoute(id, epoch, channel, generation); }
+    void SetStatusError(string value) { statusError = value; statusErrorUntil = DateTime.UtcNow.AddSeconds(10); }
+    void ClearStatusError() { statusError = ""; statusErrorUntil = DateTime.MinValue; }
+
     void QueueText(char value) {
-        if (mode != "human" || exiting) return;
+        if (!CanHumanInput()) return;
         if (pendingText.Length == 0) textGeneration = generation; pendingText.Append(value); textTimer.Stop(); textTimer.Start();
     }
     async Task FlushText() {
         textTimer.Stop(); if (pendingText.Length == 0) return;
-        string value = pendingText.ToString(); int epoch = textGeneration; pendingText.Clear(); if (epoch != generation) return;
-        await Input(new { actor = "human", action = "type", text = value });
+        string value = pendingText.ToString(); int id = channel, epoch = textGeneration; pendingText.Clear(); if (!CanHumanInput(id, epoch)) return;
+        await InputAt(id, epoch, new { actor = "human", action = "type", text = value });
     }
     void ClearPendingInput() { textTimer.Stop(); pendingText.Clear(); textGeneration = ++generation; }
 
-    async Task Input(object payload) {
-        if (mode != "human" || exiting) return;
-        int id = channel, epoch = generation; await inputGate.WaitAsync();
-        Exception inputError = null;
+    async Task Input(object payload) { await InputAt(channel, generation, payload); }
+    async Task InputAt(int id, int epoch, object payload) {
+        if (!CanHumanInput(id, epoch)) return;
+        await inputGate.WaitAsync(); Exception inputError = null;
         try {
-            if (epoch != generation || id != channel || mode != "human" || exiting) return;
-            Dictionary<string, object> state = await PostState(id, "/api/input", payload); if (epoch == generation && id == channel) ApplyState(state);
+            if (!CanHumanInput(id, epoch)) return;
+            Dictionary<string, object> state = await PostState(id, "/api/input", payload); if (CanHumanInput(id, epoch)) { ClearStatusError(); ApplyState(state); }
         } catch (Exception ex) { inputError = ex; }
         finally { inputGate.Release(); }
-        if (inputError != null && epoch == generation && id == channel && !exiting) {
-            tips.SetToolTip(status, "输入失败，正在读取真实状态：" + inputError.Message);
-            try { Dictionary<string, object> state = await ReadState(id); if (epoch == generation && id == channel) ApplyState(state); }
-            catch (Exception stateError) { if (epoch == generation && id == channel) { connected = false; stateKnown = false; tips.SetToolTip(status, "输入失败且状态回读失败：" + stateError.Message); UpdateStatus(); } }
+        if (inputError != null && CanHumanInput(id, epoch)) {
+            SetStatusError("输入失败，正在读取真实状态：" + inputError.Message);
+            try { Dictionary<string, object> state = await ReadState(id); if (CanHumanInput(id, epoch)) ApplyState(state); }
+            catch (Exception stateError) { if (epoch == generation && id == channel && !exiting) { connected = false; stateKnown = false; ClearPendingInput(); SetStatusError("输入失败且状态回读失败：" + stateError.Message); UpdateStatus(); } }
         }
     }
 
     async Task NavigateAddress() {
-        string target = address.Text.Trim(); if (target.Length == 0 || mode != "human") { screen.Focus(); return; }
-        await FlushText(); await Input(new { actor = "human", action = "key", key = "ctrl+l" });
-        await Input(new { actor = "human", action = "type", text = target }); await Input(new { actor = "human", action = "key", key = "Return" }); screen.Focus();
+        string target = address.Text.Trim(); int id = channel, epoch = generation; if (target.Length == 0 || !CanHumanInput(id, epoch)) { screen.Focus(); return; }
+        await FlushText(); if (!CanHumanInput(id, epoch)) { screen.Focus(); return; }
+        await InputAt(id, epoch, new { actor = "human", action = "key", key = "ctrl+l" }); if (!CanHumanInput(id, epoch)) { screen.Focus(); return; }
+        await InputAt(id, epoch, new { actor = "human", action = "type", text = target }); if (!CanHumanInput(id, epoch)) { screen.Focus(); return; }
+        await InputAt(id, epoch, new { actor = "human", action = "key", key = "Return" }); screen.Focus();
     }
 
     async Task Poll() {
@@ -279,18 +334,32 @@ sealed class Channels : Form {
             Task<Dictionary<string, object>> stateTask = ReadState(id); Task<byte[]> frameTask = ReadFrame(id); await Task.WhenAll(stateTask, frameTask);
             if (epoch != generation || id != channel || exiting) return; ApplyState(stateTask.Result);
             using (MemoryStream stream = new MemoryStream(frameTask.Result)) using (Image source = Image.FromStream(stream)) ReplaceImage(new Bitmap(source));
-        } catch (Exception ex) { if (epoch == generation && id == channel && !exiting) { connected = false; stateKnown = false; tips.SetToolTip(status, "频道读取失败：" + ex.Message); ReplaceImage(null); UpdateStatus(); } }
+        } catch (Exception ex) { if (epoch == generation && id == channel && !exiting) { connected = false; stateKnown = false; ClearPendingInput(); SetStatusError("频道读取失败：" + ex.Message); ReplaceImage(null); UpdateStatus(); } }
         finally { polling = false; }
     }
 
     void ReplaceImage(Image next) { Image old = screen.Image; screen.Image = next; if (old != null) old.Dispose(); screen.Invalidate(); }
+    void SetAddressCue(string value) {
+        if (address.IsHandleCreated) SendMessage(address.Handle, EmSetCueBanner, (IntPtr)1, value);
+    }
+
     void UpdateStatus() {
-        Color color = !connected ? Color.FromArgb(216, 113, 113) : mode == "agent" ? Color.FromArgb(126, 219, 177) : mode == "human" ? Color.FromArgb(140, 181, 248) : Color.FromArgb(231, 194, 116);
-        string modeText = !stateKnown ? "状态未知" : mode == "agent" ? "AI 可操作" : mode == "human" ? "你已接管" : "输入暂停";
-        identity.Text = "频道 " + channel; status.Text = "●  " + modeText; status.ForeColor = color;
+        Color color = !connected ? Theme.Offline : mode == "agent" ? Theme.Agent : mode == "human" ? Theme.Human : Theme.Pause;
+        string modeText, detail;
+        if (!stateKnown) { modeText = connected ? "正在读取状态" : "频道未连接"; detail = connected ? "正在读取该频道的真实控制状态。" : "频道暂时无法连接；请检查轻量后端。"; }
+        else if (mode == "agent") { modeText = "AI 已接管"; detail = "AI 可以向这个频道输入；点击“我来接管”可立即切回人工输入。"; }
+        else if (mode == "human") { modeText = "你正在操作"; detail = "人工输入已启用；完成后可将控制交给 AI 或暂停。"; }
+        else { modeText = "输入已暂停"; detail = "人工与 AI 的输入都已暂停，选择一个控制方式后继续。"; }
+        identity.Text = "频道 " + channel; status.Text = "●  " + modeText; status.ForeColor = color; statusShell.Edge = Color.FromArgb(108, color); statusShell.Invalidate(); tips.SetToolTip(status, statusErrorUntil > DateTime.UtcNow ? statusError : detail);
         for (int i = 0; i < 3; i++) { channelButtons[i].Selected = i == channel; channelButtons[i].Signal = i == channel ? color : Color.FromArgb(90, 99, 116); channelButtons[i].Invalidate(); }
-        SignalButton mini = miniBar.Tag as SignalButton; if (mini != null) { mini.Text = "频道 " + channel + " · " + modeText + "    ﹀"; mini.Signal = color; mini.Invalidate(); }
-        address.Enabled = mode == "human" && connected;
+        if (humanButton != null) { humanButton.Tone = mode == "human" && connected ? ButtonTone.HumanActive : ButtonTone.Human; humanButton.Invalidate(); }
+        if (agentButton != null) { agentButton.Tone = mode == "agent" && connected ? ButtonTone.AgentActive : ButtonTone.Agent; agentButton.Invalidate(); }
+        if (pauseButton != null) { pauseButton.Tone = mode == "paused" && connected ? ButtonTone.PauseActive : ButtonTone.Pause; pauseButton.Invalidate(); }
+        if (miniHumanButton != null) { miniHumanButton.Tone = mode == "human" && connected ? ButtonTone.HumanActive : ButtonTone.Human; miniHumanButton.Invalidate(); }
+        if (miniAgentButton != null) { miniAgentButton.Tone = mode == "agent" && connected ? ButtonTone.AgentActive : ButtonTone.Agent; miniAgentButton.Invalidate(); }
+        if (miniPauseButton != null) { miniPauseButton.Tone = mode == "paused" && connected ? ButtonTone.PauseActive : ButtonTone.Pause; miniPauseButton.Invalidate(); }
+        SignalButton mini = miniBar.Tag as SignalButton; if (mini != null) { mini.Text = "频道 " + channel + " · " + modeText + "    展开"; mini.Signal = color; mini.Invalidate(); }
+        bool canNavigate = stateKnown && connected && mode == "human"; address.ReadOnly = !canNavigate; address.TabStop = canNavigate; address.ForeColor = canNavigate ? Theme.Text : Theme.Muted; addressShell.Fill = canNavigate ? Theme.Input : Theme.Panel; addressShell.Edge = canNavigate ? Color.FromArgb(92, Theme.Human) : Theme.Edge; address.BackColor = addressShell.Fill; address.AccessibleDescription = canNavigate ? "输入网址后按 Enter" : "当前不可输入网址。"; navigateButton.Enabled = canNavigate; tips.SetToolTip(navigateButton, canNavigate ? "打开输入的网址" : "接管频道后才能输入网址"); SetAddressCue(canNavigate ? "输入网址并按 Enter" : mode == "agent" ? "AI 正在操作，接管后可输入" : "选择“我来接管”后可输入网址"); addressShell.Invalidate();
     }
 
     async Task ExitViewer() {

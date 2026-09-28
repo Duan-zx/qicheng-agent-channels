@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][ValidateSet(1,2)][int]$Channel,
     [string]$InstallRoot,

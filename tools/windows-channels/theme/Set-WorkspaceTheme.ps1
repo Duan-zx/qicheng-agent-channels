@@ -1,7 +1,7 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [ValidateRange(1,8)][int]$WorkspaceNumber = 1,
-    [string]$WallpaperPath = (Join-Path $PSScriptRoot 'ai-space.png'),
+    [string]$WallpaperPath = (Join-Path $PSScriptRoot 'ai-space-v2.png'),
     [switch]$Apply
 )
 

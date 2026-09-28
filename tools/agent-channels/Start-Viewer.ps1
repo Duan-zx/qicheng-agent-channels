@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([switch]$Show,[switch]$Background)
 $ErrorActionPreference='Stop'
 $exe=Join-Path $PSScriptRoot 'dist\AgentChannels.exe'

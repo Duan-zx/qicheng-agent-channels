@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -17,7 +20,11 @@ sealed class ViewerOptions {
     internal string ConfigPath;
     internal string PythonPath;
     internal string SelfTestPath;
+    internal string HotkeyStatusPath;
     internal bool ShowOnStart;
+    internal bool QuietControlError;
+    internal bool HostHotkeyEnabled = true;
+    internal int[] ChannelHotkeys;
 
     internal static ViewerOptions Parse(string[] args) {
         ViewerOptions result = new ViewerOptions();
@@ -26,6 +33,8 @@ sealed class ViewerOptions {
             string option = args[index];
             if (!seen.Add(option)) throw new ArgumentException("Expected unique options.");
             if (option == "--show") { result.ShowOnStart = true; index++; continue; }
+            if (option == "--quiet-control-error") { result.QuietControlError = true; index++; continue; }
+            if (option == "--no-host-hotkey") { result.HostHotkeyEnabled = false; index++; continue; }
             if (index + 1 >= args.Length) throw new ArgumentException("Expected option/value pairs.");
             string value = args[index + 1];
             if (String.IsNullOrWhiteSpace(value)) throw new ArgumentException("Option values must not be empty.");
@@ -33,6 +42,8 @@ sealed class ViewerOptions {
                 case "--config": result.ConfigPath = RequireLocalPath(value, "config"); break;
                 case "--python": result.PythonPath = RequireExistingFile(value, "python"); break;
                 case "--self-test": result.SelfTestPath = RequireOutputPath(value); break;
+                case "--hotkey-status": result.HotkeyStatusPath = RequireOutputPath(value); break;
+                case "--channel-hotkeys": result.ChannelHotkeys = ParseDigits(value); break;
                 default: throw new ArgumentException("Unknown option.");
             }
             index += 2;
@@ -40,6 +51,32 @@ sealed class ViewerOptions {
         if (result.ConfigPath == null || result.PythonPath == null)
             throw new ArgumentException("--config and --python are required.");
         return result;
+    }
+
+    static int[] ParseDigits(string value) {
+        string[] parts = value.Split(',');
+        int[] digits = new int[parts.Length];
+        HashSet<int> seen = new HashSet<int>();
+        for (int index = 0; index < parts.Length; index++) {
+            if (parts[index].Length != 1 || parts[index][0] < '1' || parts[index][0] > '9')
+                throw new ArgumentException("--channel-hotkeys requires comma-separated digits 1..9.");
+            digits[index] = parts[index][0] - '0';
+            if (!seen.Add(digits[index])) throw new ArgumentException("Channel hotkeys must be unique.");
+        }
+        return digits;
+    }
+
+    internal HotkeyMap HotkeysFor(int channelCount) {
+        if (channelCount < 1 || channelCount > 8) throw new ArgumentException("Expected 1..8 channels.");
+        int[] digits = ChannelHotkeys;
+        if (digits == null) {
+            digits = new int[channelCount];
+            for (int index = 0; index < channelCount; index++) digits[index] = index + 2;
+        }
+        if (digits.Length != channelCount) throw new ArgumentException("--channel-hotkeys must contain one digit per configured channel.");
+        if (HostHotkeyEnabled && Array.IndexOf(digits, 1) >= 0)
+            throw new ArgumentException("Alt+1 is reserved for the host; use --no-host-hotkey or another channel key.");
+        return new HotkeyMap(HostHotkeyEnabled, digits);
     }
 
     static string RequireExistingFile(string value, string label) {
@@ -54,12 +91,105 @@ sealed class ViewerOptions {
     }
 
     static string RequireOutputPath(string value) {
-        if (!LocalAbsolutePath.IsMatch(value)) throw new ArgumentException("self-test path must be a fully qualified local drive path.");
+        if (!LocalAbsolutePath.IsMatch(value)) throw new ArgumentException("output path must be a fully qualified local drive path.");
         string path = Path.GetFullPath(value);
         string parent = Path.GetDirectoryName(path);
         if (String.IsNullOrEmpty(parent) || !Directory.Exists(parent))
-            throw new DirectoryNotFoundException("self-test output directory was not found.");
+            throw new DirectoryNotFoundException("output directory was not found.");
         return path;
+    }
+}
+
+sealed class HotkeyMap {
+    internal readonly bool HostEnabled;
+    internal readonly int[] Channels;
+    internal HotkeyMap(bool hostEnabled, int[] channels) { HostEnabled = hostEnabled; Channels = channels; }
+    internal string HostLabel { get { return HostEnabled ? "Alt+1" : "托盘"; } }
+    internal string ChannelLabel(int index) { return "Alt+" + Channels[index]; }
+    internal string ChannelSummary() {
+        List<string> labels = new List<string>();
+        for (int index = 0; index < Channels.Length; index++) labels.Add(ChannelLabel(index));
+        return String.Join(" / ", labels.ToArray());
+    }
+}
+
+sealed class ViewerRequest {
+    public string ConfigPath;
+    public bool HostEnabled;
+    public int[] Channels;
+    public bool Show;
+    public string StatusPath;
+}
+
+static class ViewerInstance {
+    // An explicit GUID keeps integration tests away from a user's running viewer.
+    internal static string Suffix {
+        get {
+            string value = Environment.GetEnvironmentVariable("QICHENG_WINDOWS_VIEWER_TEST_SCOPE");
+            Guid scope;
+            return Guid.TryParseExact(value, "N", out scope) ? ".test." + scope.ToString("N") : "";
+        }
+    }
+    internal static string MutexName { get { return @"Local\Qicheng.WindowsChannels.Viewer" + Suffix; } }
+    internal static string ActivationName { get { return @"Local\Qicheng.WindowsChannels.Viewer.Activate" + Suffix; } }
+}
+
+static class ViewerControl {
+    internal static string PipeName {
+        get { return "Qicheng.WindowsChannels.Viewer." + Process.GetCurrentProcess().SessionId + ViewerInstance.Suffix; }
+    }
+
+    internal static void Send(ViewerOptions options, HotkeyMap map) {
+        using (NamedPipeClientStream pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut)) {
+            pipe.Connect(3000);
+            using (StreamReader reader = new StreamReader(pipe, Encoding.UTF8))
+            using (StreamWriter writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true }) {
+                writer.WriteLine(new JavaScriptSerializer().Serialize(new ViewerRequest {
+                    ConfigPath = options.ConfigPath, HostEnabled = map.HostEnabled, Channels = map.Channels,
+                    Show = options.ShowOnStart, StatusPath = options.HotkeyStatusPath
+                }));
+                Task<string> responseRead = Task.Factory.StartNew(delegate { return reader.ReadLine(); });
+                if (!responseRead.Wait(15000)) throw new TimeoutException("control-response-timeout");
+                string response = responseRead.Result;
+                if (response != "ok") throw new InvalidOperationException("control-response:" + (response ?? "closed"));
+            }
+        }
+    }
+
+    internal static void Serve(ViewerForm form) {
+        Thread worker = new Thread(delegate() {
+            while (!form.IsDisposed) {
+                try {
+                    PipeSecurity security = new PipeSecurity();
+                    security.AddAccessRule(new PipeAccessRule(WindowsIdentity.GetCurrent().User, PipeAccessRights.ReadWrite, AccessControlType.Allow));
+                    using (NamedPipeServerStream pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1,
+                        PipeTransmissionMode.Byte, PipeOptions.None, 4096, 4096, security)) {
+                        pipe.WaitForConnection();
+                        using (StreamReader reader = new StreamReader(pipe, Encoding.UTF8))
+                        using (StreamWriter writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true }) {
+                            try {
+                                Task<string> requestRead = Task.Factory.StartNew(delegate { return reader.ReadLine(); });
+                                if (!requestRead.Wait(5000)) throw new TimeoutException("control-request-timeout");
+                                ViewerRequest request = new JavaScriptSerializer().Deserialize<ViewerRequest>(requestRead.Result);
+                                TaskCompletionSource<bool> completion = new TaskCompletionSource<bool>();
+                                int requestState = 0;
+                                form.BeginInvoke(new Action(delegate() {
+                                    if (Interlocked.CompareExchange(ref requestState, 1, 0) != 0) return;
+                                    try { completion.SetResult(form.ApplyRequest(request)); }
+                                    catch (Exception) { completion.SetResult(false); }
+                                }));
+                                if (!completion.Task.Wait(8000) && Interlocked.CompareExchange(ref requestState, 2, 0) == 1)
+                                    completion.Task.Wait();
+                                bool accepted = completion.Task.IsCompleted && completion.Task.Result;
+                                writer.WriteLine(accepted ? "ok" : "rejected");
+                            } catch (Exception error) { writer.WriteLine("server-error:" + error.GetType().Name); }
+                        }
+                    }
+                } catch (Exception) { Thread.Sleep(250); /* A malformed or abandoned request cannot close the viewer. */ }
+            }
+        });
+        worker.IsBackground = true;
+        worker.Start();
     }
 }
 
@@ -499,6 +629,8 @@ static class SetupLauncher {
 
 sealed class ViewerForm : Form {
     readonly ConfigurationSnapshot configuration;
+    HotkeyMap hotkeys;
+    readonly string hotkeyStatusPath;
     readonly HostCli cli;
     readonly string workingDirectory;
     readonly Panel navigation = new Panel();
@@ -530,6 +662,12 @@ sealed class ViewerForm : Form {
     readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
     readonly System.Windows.Forms.Timer inputFlushTimer = new System.Windows.Forms.Timer();
     readonly NotifyIcon tray = new NotifyIcon();
+    readonly ToolStripMenuItem hotkeyWarning = new ToolStripMenuItem();
+    readonly List<ToolStripMenuItem> projectTrayItems = new List<ToolStripMenuItem>();
+    ToolStripMenuItem hostTrayItem;
+    Label shortcutSummary;
+    readonly List<int> registeredHotkeys = new List<int>();
+    readonly List<string> failedHotkeys = new List<string>();
     readonly Queue<PendingInput> inputQueue = new Queue<PendingInput>();
     readonly StringBuilder directTextBuffer = new StringBuilder();
     int selectedProject = -1;
@@ -539,7 +677,6 @@ sealed class ViewerForm : Form {
     bool refreshPending;
     bool desktopReady;
     bool exiting;
-    bool hotkeysReady = true;
     bool controlTransition;
     bool immersive;
     bool controlsHidden;
@@ -547,9 +684,11 @@ sealed class ViewerForm : Form {
 
     internal ViewerForm(ViewerOptions options, ConfigurationSnapshot configuration) {
         this.configuration = configuration;
+        hotkeys = options.HotkeysFor(configuration.Bindings.Count);
+        hotkeyStatusPath = options.HotkeyStatusPath;
         workingDirectory = SetupLauncher.InstallRoot();
         cli = new HostCli(options.PythonPath, configuration, workingDirectory);
-        canvas.LoadBackdrop(Path.Combine(workingDirectory, "theme", "ai-space.png"));
+        canvas.LoadBackdrop(Path.Combine(workingDirectory, "theme", "ai-space-v2.png"));
         Text = "启程 · Windows 频道";
         Icon = SystemIcons.Application;
         Font = new Font("Microsoft YaHei UI", 9F);
@@ -581,7 +720,7 @@ sealed class ViewerForm : Form {
         IntPtr ignored = Handle;
         refreshTimer.Start(); ShowLocal(false);
         if (showManagement) ShowManagement(true);
-        if (!hotkeysReady) status.Text = "部分全局快捷键被其他应用占用；请使用托盘菜单切换。";
+        if (failedHotkeys.Count > 0) status.Text = "快捷键 " + String.Join("、", failedHotkeys.ToArray()) + " 被其他应用占用；请使用托盘菜单切换。";
     }
 
     protected override bool ShowWithoutActivation { get { return true; } }
@@ -590,24 +729,23 @@ sealed class ViewerForm : Form {
         header.Dock = DockStyle.Top; header.Height = 76; header.BackColor = ViewerPalette.Ink;
         Label title = new Label { Text = "启程工作台", ForeColor = Color.White, Font = new Font(Font.FontFamily, 18F, FontStyle.Bold), AutoSize = true, Location = new Point(24, 14) };
         Label subtitle = new Label { Text = "本机与私有 Windows 频道，一处切换", ForeColor = Color.FromArgb(180, 192, 215), AutoSize = true, Location = new Point(27, 48) };
-        string channelKeys = configuration.Bindings.Count == 1 ? "Alt+2 Windows" : "Alt+2…Alt+" + (configuration.Bindings.Count + 1) + " Windows";
-        Label shortcuts = new Label { Text = "Alt+1 本机    " + channelKeys, ForeColor = Color.FromArgb(200, 211, 232), AutoSize = true, Anchor = AnchorStyles.Top | AnchorStyles.Right };
-        shortcuts.Location = new Point(760, 29);
-        header.Resize += delegate { shortcuts.Left = Math.Max(400, header.ClientSize.Width - shortcuts.Width - 24); };
-        header.Controls.Add(title); header.Controls.Add(subtitle); header.Controls.Add(shortcuts);
+        shortcutSummary = new Label { Text = hotkeys.HostLabel + " 本机    " + hotkeys.ChannelSummary() + " Windows", ForeColor = Color.FromArgb(200, 211, 232), AutoSize = true, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+        shortcutSummary.Location = new Point(760, 29);
+        header.Resize += delegate { shortcutSummary.Left = Math.Max(400, header.ClientSize.Width - shortcutSummary.Width - 24); };
+        header.Controls.Add(title); header.Controls.Add(subtitle); header.Controls.Add(shortcutSummary);
     }
 
     void BuildNavigation() {
         navigation.Dock = DockStyle.Left; navigation.Width = 220; navigation.BackColor = Color.White; navigation.Padding = new Padding(14, 18, 14, 12);
         Label label = new Label { Text = "工作位置", ForeColor = ViewerPalette.Muted, AutoSize = true, Font = new Font(Font, FontStyle.Bold), Location = new Point(18, 17) };
         navigation.Controls.Add(label);
-        ConfigureNavButton(hostButton, "本机工作台     Alt+1", 48);
+        ConfigureNavButton(hostButton, "本机工作台     " + hotkeys.HostLabel, 48);
         hostButton.Click += delegate { ShowLocal(true); };
         navigation.Controls.Add(hostButton);
         for (int index = 0; index < configuration.Bindings.Count; index++) {
             int captured = index;
             Button button = new Button();
-            string shortcut = "     Alt+" + (index + 2);
+            string shortcut = "     " + hotkeys.ChannelLabel(index);
             ConfigureNavButton(button, "Windows 频道 " + (index + 1) + shortcut, 102 + index * 54);
             button.Click += async delegate { await SelectProjectAsync(captured, true); };
             projectButtons.Add(button); navigation.Controls.Add(button);
@@ -691,12 +829,14 @@ sealed class ViewerForm : Form {
     void BuildTray() {
         ContextMenuStrip menu = new ContextMenuStrip();
         menu.Items.Add("设置与管理", null, delegate { ShowManagement(true); });
-        menu.Items.Add("返回本机  Alt+1", null, delegate { ShowLocal(true); });
+        hostTrayItem = (ToolStripMenuItem)menu.Items.Add("返回本机  " + hotkeys.HostLabel, null, delegate { ShowLocal(true); });
         for (int index = 0; index < configuration.Bindings.Count; index++) {
             int captured = index;
-            string shortcut = "  Alt+" + (index + 2);
-            menu.Items.Add("Windows 频道 " + (index + 1) + shortcut, null, async delegate { await SelectProjectAsync(captured, true); });
+            string shortcut = "  " + hotkeys.ChannelLabel(index);
+            projectTrayItems.Add((ToolStripMenuItem)menu.Items.Add("Windows 频道 " + (index + 1) + shortcut, null, async delegate { await SelectProjectAsync(captured, true); }));
         }
+        hotkeyWarning.Enabled = false; hotkeyWarning.Visible = false;
+        menu.Items.Add(hotkeyWarning);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("运行设置", null, delegate { LaunchSetup(); });
         menu.Items.Add("退出", null, delegate { exiting = true; Close(); });
@@ -706,22 +846,87 @@ sealed class ViewerForm : Form {
 
     protected override void OnHandleCreated(EventArgs e) {
         base.OnHandleCreated(e);
-        for (int number = 1; number <= configuration.Bindings.Count + 1; number++)
-            if (!NativeMethods.RegisterHotKey(Handle, 100 + number, NativeMethods.MOD_ALT, (uint)(Keys.D0 + number))) hotkeysReady = false;
+        RegisterShortcuts();
+    }
+
+    void RegisterShortcuts() {
+        registeredHotkeys.Clear(); failedHotkeys.Clear();
+        if (hotkeys.HostEnabled) RegisterShortcut(101, 1);
+        for (int index = 0; index < hotkeys.Channels.Length; index++) RegisterShortcut(200 + index, hotkeys.Channels[index]);
+        hotkeyWarning.Text = failedHotkeys.Count == 0 ? "" : "快捷键被占用：" + String.Join("、", failedHotkeys.ToArray()) + "（请用菜单切换）";
+        hotkeyWarning.Visible = failedHotkeys.Count > 0;
+        WriteHotkeyStatus(hotkeyStatusPath);
+    }
+
+    void WriteHotkeyStatus(string path) {
+        if (path != null) {
+            try {
+                var report = new {
+                    process_id = Process.GetCurrentProcess().Id,
+                    host_enabled = hotkeys.HostEnabled,
+                    channels = hotkeys.Channels,
+                    registered = registeredHotkeys.Count,
+                    failed = failedHotkeys.ToArray(),
+                    checked_at = DateTime.UtcNow.ToString("o")
+                };
+                File.WriteAllText(path, new JavaScriptSerializer().Serialize(report), new UTF8Encoding(false));
+            } catch (IOException) { /* Diagnostic output must not block switching. */ }
+            catch (UnauthorizedAccessException) { /* Diagnostic output must not block switching. */ }
+        }
+    }
+
+    internal bool ApplyRequest(ViewerRequest request) {
+        if (request == null || !String.Equals(request.ConfigPath, configuration.Path, StringComparison.OrdinalIgnoreCase) ||
+            request.Channels == null || request.Channels.Length != configuration.Bindings.Count) return false;
+        HashSet<int> digits = new HashSet<int>();
+        foreach (int digit in request.Channels) if (digit < 1 || digit > 9 || !digits.Add(digit)) return false;
+        if (request.HostEnabled && digits.Contains(1)) return false;
+        if (request.StatusPath != null && (!Path.IsPathRooted(request.StatusPath) || !Directory.Exists(Path.GetDirectoryName(request.StatusPath)))) return false;
+        try { using (FileStream current = configuration.OpenVerified()) { } }
+        catch (ConfigurationChangedException) { return false; }
+        HotkeyMap previous = hotkeys;
+        foreach (int id in registeredHotkeys) NativeMethods.UnregisterHotKey(Handle, id);
+        hotkeys = new HotkeyMap(request.HostEnabled, request.Channels);
+        RegisterShortcuts();
+        if (failedHotkeys.Count > 0) {
+            foreach (int id in registeredHotkeys) NativeMethods.UnregisterHotKey(Handle, id);
+            hotkeys = previous;
+            RegisterShortcuts();
+            return false;
+        }
+        shortcutSummary.Text = hotkeys.HostLabel + " 本机    " + hotkeys.ChannelSummary() + " Windows";
+        hostButton.Text = "本机工作台     " + hotkeys.HostLabel;
+        hostTrayItem.Text = "返回本机  " + hotkeys.HostLabel;
+        for (int index = 0; index < projectButtons.Count; index++) {
+            projectButtons[index].Text = "Windows 频道 " + (index + 1) + "     " + hotkeys.ChannelLabel(index);
+            projectTrayItems[index].Text = "Windows 频道 " + (index + 1) + "  " + hotkeys.ChannelLabel(index);
+        }
+        if (selectedProject < 0) channelDetail.Text = hotkeys.ChannelSummary() + " 进入独立 Windows 频道";
+        WriteHotkeyStatus(request.StatusPath);
+        if (request.Show) ShowManagement(true);
+        return true;
+    }
+
+    void RegisterShortcut(int id, int digit) {
+        if (NativeMethods.RegisterHotKey(Handle, id, NativeMethods.MOD_ALT, (uint)(Keys.D0 + digit))) registeredHotkeys.Add(id);
+        else failedHotkeys.Add("Alt+" + digit);
     }
 
     protected override void OnHandleDestroyed(EventArgs e) {
-        for (int number = 1; number <= configuration.Bindings.Count + 1; number++) NativeMethods.UnregisterHotKey(Handle, 100 + number);
+        foreach (int id in registeredHotkeys) NativeMethods.UnregisterHotKey(Handle, id);
+        registeredHotkeys.Clear();
         base.OnHandleDestroyed(e);
     }
 
     protected override void WndProc(ref Message message) {
         if (message.Msg == NativeMethods.WM_HOTKEY) {
-            int number = message.WParam.ToInt32() - 100;
-            int project = ViewerLayout.ShortcutProjectIndex(number, configuration.Bindings.Count);
-            if (project == -1) ShowLocal(true);
-            else if (project >= 0) BeginInvoke(new Action(async delegate { await SelectProjectAsync(project, true); }));
-            return;
+            int id = message.WParam.ToInt32();
+            if (hotkeys.HostEnabled && id == 101) { ShowLocal(true); return; }
+            int project = id - 200;
+            if (project >= 0 && project < hotkeys.Channels.Length) {
+                BeginInvoke(new Action(async delegate { await SelectProjectAsync(project, true); }));
+                return;
+            }
         }
         base.WndProc(ref message);
     }
@@ -815,7 +1020,7 @@ sealed class ViewerForm : Form {
         }
         ProjectBinding project = SelectedProject;
         if (project == null) {
-            channelTitle.Text = "本机工作台"; channelDetail.Text = configuration.Bindings.Count == 1 ? "Alt+2 进入 Windows 频道" : "Alt+2…Alt+" + (configuration.Bindings.Count + 1) + " 进入独立 Windows 频道";
+            channelTitle.Text = "本机工作台"; channelDetail.Text = hotkeys.ChannelSummary() + " 进入独立 Windows 频道";
             identityTop.Text = "本机"; identityTop.BackColor = ViewerPalette.Ink;
         } else {
             channelTitle.Text = "Windows 频道 " + (selectedProject + 1);
@@ -1090,8 +1295,9 @@ static class ViewerApp {
 
     [STAThread]
     static void Main(string[] args) {
+        ViewerOptions options = null;
         try {
-            ViewerOptions options = ViewerOptions.Parse(args);
+            options = ViewerOptions.Parse(args);
             if (options.SelfTestPath != null) {
                 ConfigurationSnapshot configuration = ViewerConfiguration.Load(options.ConfigPath);
                 bool quoteOk = HostCli.Quote("C:\\Path With Space\\python.exe") == "\"C:\\Path With Space\\python.exe\"";
@@ -1101,24 +1307,42 @@ static class ViewerApp {
                 bool humanInputRouted = humanArguments.Contains("\"--actor\" \"human\"") && humanArguments.Contains("\"--action\" \"click\"");
                 ViewerOptions shown = ViewerOptions.Parse(new string[] { "--config", options.ConfigPath, "--python", options.PythonPath, "--show" });
                 bool showFlagParsed = shown.ShowOnStart;
+                HotkeyMap activeHotkeys = options.HotkeysFor(configuration.Bindings.Count);
+                bool hotkeyMapValid = activeHotkeys.Channels.Length == configuration.Bindings.Count &&
+                    activeHotkeys.HostEnabled == options.HostHotkeyEnabled;
+                bool duplicateRejected = false, hostConflictRejected = false, countRejected = false;
+                try { ViewerOptions.Parse(new string[] { "--config", options.ConfigPath, "--python", options.PythonPath, "--channel-hotkeys", "4,4" }); }
+                catch (ArgumentException) { duplicateRejected = true; }
+                try { ViewerOptions.Parse(new string[] { "--config", options.ConfigPath, "--python", options.PythonPath, "--channel-hotkeys", "1" }).HotkeysFor(1); }
+                catch (ArgumentException) { hostConflictRejected = true; }
+                try { ViewerOptions.Parse(new string[] { "--config", options.ConfigPath, "--python", options.PythonPath, "--channel-hotkeys", "4" }).HotkeysFor(2); }
+                catch (ArgumentException) { countRejected = true; }
+                hotkeyMapValid = hotkeyMapValid && duplicateRejected && hostConflictRejected && countRejected;
                 string body = "{\"arguments_valid\":true,\"project_count\":" + configuration.Bindings.Count +
                     ",\"quoting_valid\":" + (quoteOk ? "true" : "false") +
                     ",\"changed_config_refused\":" + (changedConfigRefused ? "true" : "false") +
                     ",\"responsive_layout\":" + (responsiveLayout ? "true" : "false") +
                     ",\"human_input_routed\":" + (humanInputRouted ? "true" : "false") +
                     ",\"show_flag_parsed\":" + (showFlagParsed ? "true" : "false") +
+                    ",\"host_hotkey_enabled\":" + (activeHotkeys.HostEnabled ? "true" : "false") +
+                    ",\"channel_hotkeys\":[" + String.Join(",", Array.ConvertAll(activeHotkeys.Channels, x => x.ToString())) + "]" +
+                    ",\"hotkey_map_valid\":" + (hotkeyMapValid ? "true" : "false") +
                     ",\"default_hidden\":" + (!options.ShowOnStart ? "true" : "false") +
                     ",\"dynamic_hotkeys\":true,\"immersive_shell\":true" +
                     ",\"single_instance_designed\":true,\"continuous_refresh_designed\":true" +
                     ",\"cli_invoked\":false,\"gui_tested\":false}";
                 File.WriteAllText(options.SelfTestPath, body, new UTF8Encoding(false));
-                Environment.Exit(quoteOk && changedConfigRefused && responsiveLayout && humanInputRouted && showFlagParsed ? 0 : 1);
+                Environment.Exit(quoteOk && changedConfigRefused && responsiveLayout && humanInputRouted && showFlagParsed && hotkeyMapValid ? 0 : 1);
                 return;
             }
-            using (EventWaitHandle activation = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\Qicheng.WindowsChannels.Viewer.Activate")) {
+            using (EventWaitHandle activation = new EventWaitHandle(false, EventResetMode.AutoReset, ViewerInstance.ActivationName)) {
                 bool created;
-                using (Mutex instance = new Mutex(true, @"Local\Qicheng.WindowsChannels.Viewer", out created)) {
-                    if (!created) { if (options.ShowOnStart) activation.Set(); return; }
+                using (Mutex instance = new Mutex(true, ViewerInstance.MutexName, out created)) {
+                    if (!created) {
+                        ConfigurationSnapshot requestedConfiguration = ViewerConfiguration.Load(options.ConfigPath);
+                        ViewerControl.Send(options, options.HotkeysFor(requestedConfiguration.Bindings.Count));
+                        return;
+                    }
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
                     if (!File.Exists(options.ConfigPath)) { PromptForSetup(); instance.ReleaseMutex(); return; }
@@ -1127,6 +1351,7 @@ static class ViewerApp {
                     ApplicationContext context = new ApplicationContext();
                     form.FormClosed += delegate { context.ExitThread(); };
                     form.InitializeHidden(options.ShowOnStart);
+                    ViewerControl.Serve(form);
                     RegisteredWaitHandle wait = ThreadPool.RegisterWaitForSingleObject(activation, delegate { form.RequestShow(); }, null, Timeout.Infinite, false);
                     try { Application.Run(context); }
                     finally { wait.Unregister(null); form.Dispose(); context.Dispose(); instance.ReleaseMutex(); }
@@ -1134,7 +1359,21 @@ static class ViewerApp {
             }
         } catch (Exception exception) {
             if (Array.IndexOf(args, "--self-test") >= 0) Environment.Exit(2);
-            MessageBox.Show(exception.Message, "Qicheng Windows Channels", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (options != null && options.QuietControlError && options.HotkeyStatusPath != null) {
+                try {
+                    var diagnostic = new {
+                        status = "control-failed", process_id = Process.GetCurrentProcess().Id,
+                        error_type = exception.GetType().Name,
+                        error_message = exception.Message.Length > 300 ? exception.Message.Substring(0, 300) : exception.Message,
+                        checked_at = DateTime.UtcNow.ToString("o")
+                    };
+                    File.WriteAllText(options.HotkeyStatusPath, new JavaScriptSerializer().Serialize(diagnostic), new UTF8Encoding(false));
+                } catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            if (Array.IndexOf(args, "--quiet-control-error") < 0)
+                MessageBox.Show(exception.Message, "Qicheng Windows Channels", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Environment.ExitCode = 1;
         }
     }
 }

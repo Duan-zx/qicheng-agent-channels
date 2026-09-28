@@ -31,8 +31,8 @@
     },
     {
       "path": "tools/agent-channels/Build.ps1",
-      "bytes": 851,
-      "sha256": "de4c48d62349c3ed4ec0f64144ec58a06aa3992f92ac1969a9e567edc6f78dcf"
+      "bytes": 854,
+      "sha256": "234b58667b0e07cc694b08f9b73a92bcf603d62381d49204745daf454c628612"
     },
     {
       "path": "tools/agent-channels/Dockerfile",
@@ -51,18 +51,18 @@
     },
     {
       "path": "tools/agent-channels/Start-Backend.ps1",
-      "bytes": 1091,
-      "sha256": "2d8575865de343359297445785bef1e8b0db813fd7782fce210b4942030a500c"
+      "bytes": 1094,
+      "sha256": "81cbd01e674410ce555ba77b5580439feda29575469f55bb1e3e4e6d115c526a"
     },
     {
       "path": "tools/agent-channels/Start-Viewer.ps1",
-      "bytes": 687,
-      "sha256": "25d2a231df4a85e7880083dc729e1e417550bd855b6cbfeab28f49e8b1fa7e35"
+      "bytes": 690,
+      "sha256": "9b3f03a25a73d490a44be7853a814bac97116d015b9e00d1fcb56145a0ea46ff"
     },
     {
       "path": "tools/agent-channels/Stop-Backend.ps1",
-      "bytes": 255,
-      "sha256": "6b4eda3b817faa029d38bf7aa1c431994599527ef8f40869d15788e18971dcfb"
+      "bytes": 258,
+      "sha256": "2c185cc2b8cff4040eb6ffc6c23b542e2049786c5a610c516b962fae3a9b78fa"
     },
     {
       "path": "tools/agent-channels/backend/forward.py",
@@ -91,8 +91,8 @@
     },
     {
       "path": "tools/agent-channels/backend/welcome.html",
-      "bytes": 3943,
-      "sha256": "35278a2cadae85562c5fe2cb225a2dfa073a1c131049b2f0f15577eee062a6cc"
+      "bytes": 9038,
+      "sha256": "6b49a5f69c71d966a216db3e784890b5f3315cd14ff3eb213bdb276bc0835ea4"
     },
     {
       "path": "tools/agent-channels/backend/theme/ai-space.png",
@@ -111,13 +111,13 @@
     },
     {
       "path": "tools/agent-channels/windows/Channels.cs",
-      "bytes": 23421,
-      "sha256": "4697a4d44ce0c8766e3f12a482a895eff6d3f2352334e78bd39419ccf5122aaa"
+      "bytes": 32537,
+      "sha256": "6294895b665758427f3a3f086df8cddccc3f14cc2b7342fc7db543e9608d7298"
     },
     {
       "path": "tools/agent-channels/windows/Skin.cs",
-      "bytes": 4849,
-      "sha256": "20347c089f22c2a4b183d069954955f30062b7a6ae8adc7221a65551d957b947"
+      "bytes": 7372,
+      "sha256": "b70803c6030eec2abbeeb3319355b5fc5e29d1d2115ff968246476c42ac28bfe"
     },
     {
       "path": "tools/agent-channels/tests/live_smoke.py",
@@ -131,8 +131,8 @@
     },
     {
       "path": "tools/agent-channels/tests/test_backend_container.py",
-      "bytes": 5728,
-      "sha256": "30d4cc52963c99aa8261b86d614107b934161671a49c8c1683d513a99051b096"
+      "bytes": 5922,
+      "sha256": "555f8db0669e02e823dc6d1e571b350466c8dffd346f621ee15b23f2946f0a9f"
     },
     {
       "path": "tools/agent-channels/tests/test_server.py",
@@ -161,43 +161,43 @@
     },
     {
       "path": "tools/agent-channels/product/Build-Package.ps1",
-      "bytes": 5549,
-      "sha256": "81060f2d330ae916fe67b0fd7f55cecddbc3642a1fa414546f4fb6970c363b0e"
+      "bytes": 5552,
+      "sha256": "847faec2b422bcb7d9cddf1dbfd84c7612eed6416bc20ab0fb7c865c5a8bb304"
     },
     {
       "path": "tools/agent-channels/product/Export-PublicSource.ps1",
-      "bytes": 2301,
-      "sha256": "5aa00bebf696716daf5bc2993fca9e85d34f9aef2eaa00b1fd6bc413da7af3bc"
+      "bytes": 2304,
+      "sha256": "3887cf13c23ac7cfd7e237da90d0774aa6d69fe4bec1449518cfa21322567da1"
     },
     {
       "path": "tools/agent-channels/product/runtime/Product.Common.ps1",
-      "bytes": 2864,
-      "sha256": "03e48a2603f660b0f24e8835303f7cd748071fd1a63e1f2e5fd8b866aab029df"
+      "bytes": 2867,
+      "sha256": "756618dd7513dbc745eb074794527cb8f0d67c1bbd65ec3335c95b013cedbf0c"
     },
     {
       "path": "tools/agent-channels/product/runtime/Install-Qicheng-Lite.ps1",
-      "bytes": 15739,
-      "sha256": "d6139a3e018197a548b24d4c3270f372fc5ad4a1d51e2111da76cb8c0ea83cee"
+      "bytes": 15742,
+      "sha256": "ac49685d60ff86c24c6b219772c72533a15738e2380b1586bfa5956341e3bfb4"
     },
     {
       "path": "tools/agent-channels/product/runtime/Start-Qicheng-Lite.ps1",
-      "bytes": 3019,
-      "sha256": "b175ecfc7f700ab495bf8b4334662bdf47d65cb185ab2117c73a64c011d8e2a2"
+      "bytes": 4527,
+      "sha256": "f243181e41345830b46e268363d4232fec91ee1fd353ce804b0350ae42bdca59"
     },
     {
       "path": "tools/agent-channels/product/runtime/Diagnose-Qicheng-Lite.ps1",
-      "bytes": 4158,
-      "sha256": "f09be97b6a0f5d1ab132834b2f373b8109f0d313715351bf64a2a1443a0a4a2d"
+      "bytes": 4161,
+      "sha256": "2da70642ed4b9fed1c138225f6718b76def5452b98bedd37d17f7c3897d1e837"
     },
     {
       "path": "tools/agent-channels/product/runtime/Export-Downloads.ps1",
-      "bytes": 3308,
-      "sha256": "aa786dd4de65358b86b8996eee975b5303afb39454dcd6486a6f60920ecc3c6d"
+      "bytes": 3311,
+      "sha256": "f6f6ded3a73f9d3fbf665117f6de4e7dc96b86153e916131b62f00f1de415cb9"
     },
     {
       "path": "tools/agent-channels/product/runtime/Restore-LegacyWindowsChannelsStartup.ps1",
-      "bytes": 1822,
-      "sha256": "eb71f7895ad72910da2cecb97d95b9a46c70f12a69b27b02fc53f00a0ca08b47"
+      "bytes": 1825,
+      "sha256": "597aabfe381928c718a37abff02db38e632ef20335b8e34afffe4a6d244e2b77"
     },
     {
       "path": "tools/agent-channels/product/runtime/Install-Qicheng-Lite.cmd",
@@ -221,8 +221,8 @@
     },
     {
       "path": "tools/agent-channels/product/tests/Test-ProductPackage.ps1",
-      "bytes": 23652,
-      "sha256": "eb08448b6fb6c85e22dfc8777c46ef1b8fdae8767866aa98b964e5176db6c9d7"
+      "bytes": 24918,
+      "sha256": "7810ce59bb1d150c6a99e7558ac623537ba67c01cc2361152a3a43d87fc4edf2"
     }
   ]
 }

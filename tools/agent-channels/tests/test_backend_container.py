@@ -108,15 +108,19 @@ printf '%s' "$status" > "$QICHENG_STATUS_FILE"
             self.assertIn('firefox-term', content)
             self.assertIn('server-term', content)
 
-    def test_theme_is_local_png_and_welcome_is_chinese(self):
+    def test_welcome_is_localized_without_duplicate_address_bar(self):
         theme = ROOT / 'backend' / 'theme' / 'ai-space.png'
         data = theme.read_bytes()
         self.assertTrue(data.startswith(b'\x89PNG\r\n\x1a\n'))
         self.assertEqual(struct.unpack('>II', data[16:24]), (1672, 941))
         page = (ROOT / 'backend' / 'welcome.html').read_text(encoding='utf-8-sig')
         self.assertIn('lang="zh-CN"', page)
-        self.assertIn('theme/ai-space.png', page)
-        self.assertIn('浏览器资料自动保留', page)
+        self.assertIn('AI 频道 ', page)
+        self.assertIn('location.hash==="#2"', page)
+        self.assertNotIn('<form', page)
+        self.assertNotIn('<input', page)
+        self.assertIn('<kbd>Ctrl</kbd> + <kbd>L</kbd>', page)
+        self.assertIn('<section class="guidance"', page)
 
     def test_image_defaults_match_backend_state(self):
         dockerfile = (ROOT / 'Dockerfile').read_text(encoding='utf-8')

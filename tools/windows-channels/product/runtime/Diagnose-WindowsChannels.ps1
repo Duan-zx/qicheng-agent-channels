@@ -34,6 +34,25 @@ if ($getVm -and $config) {
             $binding = $config.Value.projects.$name
             $match = @($inventory | Where-Object { $_.Id.ToString() -ieq [string]$binding.vm_id })
             Add-Check "vm:$name" ($match.Count -eq 1) $(if ($match.Count -eq 1) { "$($match[0].Name) / $($match[0].State)" } else { 'exact configured VM ID not found' })
+            if ($match.Count -eq 1) {
+                $running = ([string]$match[0].State -eq 'Running')
+                Add-Check "vm-running:$name" $running $(if ($running) { 'Running' } else { "当前为 $($match[0].State)；频道不可连接" })
+                if ($running -and $python) {
+                    $state = $null
+                    try {
+                        Push-Location -LiteralPath $installRoot
+                        try {
+                            $stateText = & $python -m host.client --config $config.Path --project $name state 2>$null | Out-String
+                            if ($LASTEXITCODE -eq 0) { $state = $stateText | ConvertFrom-Json -ErrorAction Stop }
+                        } finally { Pop-Location }
+                    } catch { $state = $null }
+                    $connected = ($null -ne $state -and $state.ok -eq $true -and $state.result.input_target -eq 'private-windows-guest' -and $state.result.host_input_supported -eq $false)
+                    Add-Check "guest-connected:$name" $connected $(if ($connected) { '客体身份和隔离输入目标已验证' } else { '客体代理无响应或身份校验失败' })
+                    if ($connected) {
+                        Add-Check "desktop-ready:$name" ($state.result.desktop_ready -eq $true) $(if ($state.result.desktop_ready -eq $true) { '交互桌面可用' } else { "交互桌面不可用：$($state.result.desktop_status)" })
+                    }
+                }
+            }
         }
     } catch { Add-Check 'vm-inventory' $false $_.Exception.Message }
 }

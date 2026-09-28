@@ -142,6 +142,23 @@ The plan tests cover path and name validation, missing media, collisions, invent
 
 ## Guest setup checks before live deployment
 
+### Optional console autologon for dedicated local guests
+
+`Enable-GuestAutologonDirect.ps1` is an optional setup step for a dedicated Windows guest. It is separate from the channel payload installer. The default invocation is a host-only plan: it validates the exact running VM ID and realized BIOS UUID and does not download a binary, open a guest session, or change autologon. Keep each guest's local account credential in an in-memory `PSCredential` obtained with `Get-Credential`:
+
+```powershell
+$guestCredential = Get-Credential -UserName 'qicheng' -Message 'Local account for this dedicated guest'
+.\Enable-GuestAutologonDirect.ps1 `
+  -VMName 'qicheng-win-1' `
+  -ExpectedVMId '<reviewed-VM-ID>' `
+  -ExpectedBiosUuid '<reviewed-BIOS-UUID>' `
+  -Credential $guestCredential
+```
+
+Review the JSON plan and the [Sysinternals Autologon license](https://learn.microsoft.com/en-us/sysinternals/license-terms), then add `-Apply -AcceptSysinternalsEula` for the intended VM. The EULA switch is required because the script records acceptance in the guest before running the utility. `-Apply -WhatIf` checks the approval path without opening a guest session. Repeat separately for the second guest with its own reviewed IDs and credential. The apply path refuses an already enabled autologon configuration and requires the authenticated PowerShell Direct user to be a local administrator on the expected Microsoft Hyper-V guest. It downloads Microsoft's [Sysinternals Autologon](https://learn.microsoft.com/en-us/sysinternals/downloads/autologon) from the official `AutoLogon.zip` URL, extracts only `Autologon64.exe`, verifies its Microsoft Authenticode signature on both sides of the copy, then runs it inside the guest. The executable and archive are temporary and are not bundled with the public source or package. The script does not reboot the VM.
+
+Autologon's documented command-line interface accepts the password as an argument. During execution, that password can briefly be visible to a guest administrator through process inspection. The script does not print it, write it to a task or repository file, or include it in error JSON. Microsoft also notes that a guest administrator can retrieve the configured LSA secret. Use this option only where that guest administrator boundary is acceptable. A successful result means Winlogon settings were verified; confirm console sign-in and channel startup after a separate controlled reboot.
+
 Use the VMConnect **Basic session** and sign in to the intended guest local user. An Enhanced session can place the user in a remote desktop session while the console is empty; the Direct installer deliberately refuses that mismatch. Keep host drive and clipboard sharing disabled. Closing a viewer must not be treated as proof that the guest desktop stays available; verify it through the channel.
 
 Fresh Windows Enterprise Evaluation installations must be activated normally. An unactivated evaluation can shut itself down every hour, even immediately after installation. Check its activation status and use Microsoft's normal online activation process (`cscript.exe //Nologo C:\Windows\System32\slmgr.vbs /ato` inside the guest) if needed. A successful evaluation is time limited and is not a production license. See [Microsoft Evaluation Center](https://www.microsoft.com/en-us/evalcenter/evaluate-windows-11-enterprise) and [Microsoft activation command documentation](https://learn.microsoft.com/en-us/windows-server/get-started/activation-slmgr-vbs-options). Do not alter the clock, disable the licensing service, or bypass activation.

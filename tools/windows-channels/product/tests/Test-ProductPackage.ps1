@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$SkipPublicExportRoundTrip)
+param([switch]$SkipPublicExportRoundTrip,[switch]$RunHotkeyIntegration)
 
 $ErrorActionPreference = 'Stop'
 $productRoot = Split-Path -Parent $PSScriptRoot
@@ -14,8 +14,8 @@ try {
     Assert-True (Test-Path -LiteralPath $build.archive -PathType Leaf) 'Zip archive is missing.'
     $manifest = Get-Content -LiteralPath (Join-Path $packageRoot 'package-manifest.json') -Raw | ConvertFrom-Json
     $themeSourceRoot = Join-Path (Split-Path -Parent $productRoot) 'theme'
-    $themeSourceCount = @(@('ai-space.png','Set-WorkspaceTheme.ps1','README.md') | Where-Object { Test-Path -LiteralPath (Join-Path $themeSourceRoot $_) -PathType Leaf }).Count
-    $expectedPackageFiles = 67 + (2 * $themeSourceCount)
+    $themeSourceCount = @(@('ai-space.png','ai-space-v2.png','Set-WorkspaceTheme.ps1','README.md') | Where-Object { Test-Path -LiteralPath (Join-Path $themeSourceRoot $_) -PathType Leaf }).Count
+    $expectedPackageFiles = 69 + (2 * $themeSourceCount)
     Assert-True ($manifest.files.Count -eq $expectedPackageFiles) 'Unexpected package allowlist count.'
     $paths = @($manifest.files.path)
     Assert-True ($paths -contains 'LICENSE' -and $paths -contains 'source/LICENSE') 'Apache LICENSE is missing from the install or source package.'
@@ -32,7 +32,7 @@ try {
     Assert-True ($paths -contains 'source/product/Build-Package.ps1') 'Product package builder is not included in source distribution.'
     Assert-True ($paths -contains 'source/product/tests/Test-ProductPackage.ps1') 'Product package tests are not included in source distribution.'
     Assert-True ($paths -contains 'Setup-WindowsChannels.ps1' -and $paths -contains 'source/product/runtime/Setup-WindowsChannels.ps1') 'First-run setup wizard is missing from runtime or source distribution.'
-    foreach ($themeName in @('ai-space.png','Set-WorkspaceTheme.ps1','README.md')) {
+    foreach ($themeName in @('ai-space.png','ai-space-v2.png','Set-WorkspaceTheme.ps1','README.md')) {
         if (Test-Path -LiteralPath (Join-Path $themeSourceRoot $themeName) -PathType Leaf) {
             Assert-True ($paths -contains ('theme/' + $themeName) -and $paths -contains ('source/theme/' + $themeName)) "Allowlisted theme asset was not packaged twice: $themeName"
         }
@@ -222,6 +222,77 @@ $items = @(1..$Count | ForEach-Object { [ordered]@{ vmName=('qicheng-win-' + $_)
     Assert-True ($viewerProcess.ExitCode -eq 0) 'Installed viewer self-test failed.'
     $viewerSelfTest = Get-Content -LiteralPath $selfTestPath -Raw | ConvertFrom-Json
     Assert-True ($viewerSelfTest.arguments_valid -and $viewerSelfTest.project_count -eq 2 -and -not $viewerSelfTest.gui_tested) 'Installed viewer self-test output is invalid.'
+    if ($RunHotkeyIntegration) {
+        $previousScope = [Environment]::GetEnvironmentVariable('QICHENG_WINDOWS_VIEWER_TEST_SCOPE')
+        $env:QICHENG_WINDOWS_VIEWER_TEST_SCOPE = [guid]::NewGuid().ToString('N')
+        $firstStatusPath = Join-Path $temporaryRoot 'hotkey-integration-first.json'
+        $secondStatusPath = Join-Path $temporaryRoot 'hotkey-integration-second.json'
+        $firstArguments = '--config "{0}" --python "{1}" --channel-hotkeys 8,9 --no-host-hotkey --hotkey-status "{2}" --quiet-control-error' -f $installedConfigPath,$pythonPath,$firstStatusPath
+        $secondArguments = '--config "{0}" --python "{1}" --channel-hotkeys 6,7 --no-host-hotkey --hotkey-status "{2}" --quiet-control-error' -f $installedConfigPath,$pythonPath,$secondStatusPath
+        $firstViewer = $null
+        try {
+            $firstViewer = Start-Process -FilePath $installedViewer -ArgumentList $firstArguments -WorkingDirectory $installRoot -WindowStyle Hidden -PassThru
+            foreach ($attempt in 1..60) { if (Test-Path -LiteralPath $firstStatusPath -PathType Leaf) { break }; if ($firstViewer.HasExited) { break }; Start-Sleep -Milliseconds 100 }
+            Assert-True (Test-Path -LiteralPath $firstStatusPath -PathType Leaf) 'Isolated viewer did not register its initial hotkeys.'
+            $firstStatus = Get-Content -LiteralPath $firstStatusPath -Raw | ConvertFrom-Json
+            Assert-True ($firstStatus.registered -eq 2 -and @($firstStatus.failed).Count -eq 0) 'Isolated viewer could not register Alt+8/9.'
+            $secondViewer = Start-Process -FilePath $installedViewer -ArgumentList $secondArguments -WorkingDirectory $installRoot -WindowStyle Hidden -Wait -PassThru
+            $secondStatus = Get-Content -LiteralPath $secondStatusPath -Raw | ConvertFrom-Json
+            Assert-True ($secondViewer.ExitCode -eq 0 -and -not $firstViewer.HasExited -and $secondStatus.process_id -eq $firstViewer.Id -and ($secondStatus.channels -join ',') -eq '6,7' -and $secondStatus.registered -eq 2 -and @($secondStatus.failed).Count -eq 0) 'Running viewer did not reconfigure Alt+8/9 to Alt+6/7 in place.'
+            $otherConfig = Join-Path $temporaryRoot 'other-hotkey-config.json'
+            Copy-Item -LiteralPath $installedConfigPath -Destination $otherConfig
+            $rejectedStatusPath = Join-Path $temporaryRoot 'hotkey-integration-rejected.json'
+            $rejectedArguments = '--config "{0}" --python "{1}" --channel-hotkeys 8,9 --no-host-hotkey --hotkey-status "{2}" --quiet-control-error' -f $otherConfig,$pythonPath,$rejectedStatusPath
+            $rejectedViewer = Start-Process -FilePath $installedViewer -ArgumentList $rejectedArguments -WorkingDirectory $installRoot -WindowStyle Hidden -Wait -PassThru
+            $rejectedStatus = Get-Content -LiteralPath $rejectedStatusPath -Raw | ConvertFrom-Json
+            Assert-True ($rejectedViewer.ExitCode -eq 1 -and $rejectedStatus.status -eq 'control-failed' -and $rejectedStatus.error_type -eq 'InvalidOperationException' -and -not $firstViewer.HasExited) 'Quiet control failure did not leave a readable diagnostic or preserve the first viewer.'
+        } finally {
+            if ($firstViewer -and -not $firstViewer.HasExited) { Stop-Process -Id $firstViewer.Id -Force -ErrorAction SilentlyContinue }
+            [Environment]::SetEnvironmentVariable('QICHENG_WINDOWS_VIEWER_TEST_SCOPE',$previousScope)
+        }
+    }
+    $originalViewer = Join-Path $temporaryRoot 'original-WindowsChannelsViewer.exe'
+    Copy-Item -LiteralPath $installedViewer -Destination $originalViewer
+    $fakeViewerSource = Join-Path $temporaryRoot 'FakeHotkeyViewer.cs'
+    @'
+using System;
+using System.IO;
+using System.Text;
+class FakeHotkeyViewer {
+    static void Main(string[] args) {
+        string path = null, channels = "2,3";
+        bool host = true;
+        for (int i = 0; i < args.Length; i++) {
+            if (args[i] == "--hotkey-status") path = args[++i];
+            else if (args[i] == "--channel-hotkeys") channels = args[++i];
+            else if (args[i] == "--no-host-hotkey") host = false;
+        }
+        if (path == null) return;
+        string[] digits = channels.Split(',');
+        string failed = Environment.GetEnvironmentVariable("QICHENG_FAKE_HOTKEY_FAILURE") == "1" ? "[\"Alt+4\"]" : "[]";
+        string json = "{\"host_enabled\":" + (host ? "true" : "false") + ",\"channels\":[" + channels +
+            "],\"registered\":" + (digits.Length + (host ? 1 : 0)) + ",\"failed\":" + failed + "}";
+        File.WriteAllText(path, json, new UTF8Encoding(false));
+    }
+}
+'@ | Set-Content -LiteralPath $fakeViewerSource -Encoding UTF8
+    $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+    & $compiler /nologo /target:winexe /out:$installedViewer $fakeViewerSource
+    Assert-True ($LASTEXITCODE -eq 0) 'Fake hotkey viewer did not compile.'
+    try {
+        $coordinated = & (Join-Path $installRoot 'Start-WindowsChannels.ps1') -ConfigPath $installedConfigPath -PythonPath $pythonPath -ChannelHotkeys '4,5' -NoHostHotkey -WaitForHotkeys
+        Assert-True ($coordinated.status -eq 'hotkeys-confirmed' -and -not $coordinated.hostHotkeyEnabled) 'Start script did not wait for confirmed remapping.'
+        $ps5Start = Start-Process -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -ConfigPath "{1}" -PythonPath "{2}" -ChannelHotkeys 4,5 -NoHostHotkey -WaitForHotkeys' -f (Join-Path $installRoot 'Start-WindowsChannels.ps1'),$installedConfigPath,$pythonPath) -Wait -PassThru -WindowStyle Hidden
+        Assert-True ($ps5Start.ExitCode -eq 0) 'Windows PowerShell 5.1 could not confirm hotkey remapping.'
+        $env:QICHENG_FAKE_HOTKEY_FAILURE = '1'
+        $registrationFailure = $false
+        try { & (Join-Path $installRoot 'Start-WindowsChannels.ps1') -ConfigPath $installedConfigPath -PythonPath $pythonPath -ChannelHotkeys '4,5' -NoHostHotkey -WaitForHotkeys | Out-Null }
+        catch { $registrationFailure = $true }
+        Assert-True $registrationFailure 'Start script accepted a failed hotkey registration.'
+    } finally {
+        Remove-Item Env:QICHENG_FAKE_HOTKEY_FAILURE -ErrorAction SilentlyContinue
+        Copy-Item -LiteralPath $originalViewer -Destination $installedViewer -Force
+    }
     $diagnoseOut = Join-Path $temporaryRoot 'diagnose.json'
     $diagnoseErr = Join-Path $temporaryRoot 'diagnose.err'
     $diagnoseArgs = '-NoProfile -File "{0}" -InstallRoot "{1}" -ConfigPath "{2}" -PythonPath "{3}"' -f (Join-Path $installRoot 'Diagnose-WindowsChannels.ps1'),$installRoot,$installedConfigPath,$pythonPath
@@ -302,7 +373,7 @@ $items = @(1..$Count | ForEach-Object { [ordered]@{ vmName=('qicheng-win-' + $_)
         New-Item -ItemType Directory -Path $publicRoot | Out-Null
         $exportJson = & (Join-Path $productRoot 'Export-PublicSource.ps1') -OutputDirectory $publicRoot | Out-String
         $export = $exportJson | ConvertFrom-Json
-        $expectedPublicFiles = 50 + $themeSourceCount
+        $expectedPublicFiles = 52 + $themeSourceCount
         Assert-True ($export.status -eq 'exported' -and $export.fileCount -eq $expectedPublicFiles) 'Public source export count or status is incorrect.'
         $publicModule = Join-Path $publicRoot 'tools\windows-channels'
         Assert-True (Test-Path -LiteralPath (Join-Path $publicRoot 'LICENSE') -PathType Leaf) 'Public repository LICENSE is missing.'

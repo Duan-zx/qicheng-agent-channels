@@ -48,8 +48,9 @@ VM 创建成功只表示生成了关闭状态的 Hyper-V VM。Windows 安装、�
 5. 运行 `source\Register-HostService.ps1` 注册固定 Hyper-V service。使用可信的 Python embeddable 目录与每客体独立 token，通过 `source\Build-GuestPayload.ps1` 构建 payload。
 6. 客体登录到目标交互用户后，用 PowerShell `Get-Credential` 获取内存凭据；先运行 `source\Install-GuestPayloadDirect.ps1` 的计划模式，再显式 `-Apply`。它不保存明文密码，也不代替真实 Host↔Guest 验收。
 7. 对两台客体分别核对 VM ID、BIOS UUID、token、交互桌面 agent 和实际通道，再创建或导入 `channels.json`。
+8. 若希望客体重启后无人值守恢复，可对每台专用客体先以 `source\Enable-GuestAutologonDirect.ps1` 查看计划，再用 `-Apply -AcceptSysinternalsEula` 配置可选自动登录。脚本下载并核验微软签名的 Sysinternals Autologon，需提供客体本地管理员的内存凭据；不把工具或密码打入安装包。自动登录会让能接触该虚拟机控制台的人进入该账号，仅用于专用工作区。
 
-详细参数和边界见 `source\README.md`、`source\guest\README.md` 与 `source\ARCHITECTURE.md`。这些步骤仍需要 Windows 安装与登录操作；当前包没有镜像下载器、自动装 Windows、自动登录或账号迁移。
+详细参数和边界见 `source\README.md`、`source\guest\README.md` 与 `source\ARCHITECTURE.md`。这些步骤仍需要 Windows 安装与首次登录操作；当前包没有镜像下载器、自动装 Windows 或账号迁移，自动登录是完成准备后的单独可选操作。
 
 ## 接入已有 Windows 工作区
 

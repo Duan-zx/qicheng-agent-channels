@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([string]$OutputDirectory)
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot

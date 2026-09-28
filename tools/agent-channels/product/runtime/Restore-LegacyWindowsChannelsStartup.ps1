@@ -1,4 +1,4 @@
-[CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+﻿[CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
 param([string]$InstallRoot,[string]$LegacyStartupRoot,[switch]$Apply)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Product.Common.ps1')

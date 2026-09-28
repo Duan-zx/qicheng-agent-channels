@@ -1,5 +1,5 @@
-[CmdletBinding()]
-param([string]$InstallRoot,[switch]$Background,[switch]$BuildBackend,[string]$DockerPath='docker',[ValidateRange(1,45)][int]$HealthAttempts=45,[int]$Port1=18761,[int]$Port2=18762)
+﻿[CmdletBinding()]
+param([string]$InstallRoot,[switch]$Background,[switch]$BuildBackend,[switch]$NoWindowsChannels,[string]$DockerPath='docker',[ValidateRange(1,45)][int]$HealthAttempts=45,[int]$Port1=18761,[int]$Port2=18762)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Product.Common.ps1')
 if($Port1 -ne 18761 -or $Port2 -ne 18762){throw '端口契约固定为 18761/18762；请移除自定义端口参数。'}
@@ -37,6 +37,33 @@ foreach($attempt in 1..$HealthAttempts){
     Start-Sleep -Milliseconds 500
 }
 if(-not($ready[$port1] -and $ready[$port2])){throw "容器已请求启动，但 $port1/$port2 健康检查未全部通过。未删除容器或 volume。"}
+$windowsViewerStartRequested=$false
+$windowsHotkeysConfirmed=$false
+$windowsViewerStatus=if($NoWindowsChannels){'disabled'}else{'not-installed'}
+if(-not $NoWindowsChannels -and -not[string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)){
+    $windowsRoot=Join-Path $env:LOCALAPPDATA 'Programs\QichengWindowsChannels'
+    $windowsStart=Join-Path $windowsRoot 'Start-WindowsChannels.ps1'
+    $windowsRecord=Join-Path $windowsRoot '.qicheng-product-install.json'
+    if((Test-Path -LiteralPath $windowsStart -PathType Leaf) -and (Test-Path -LiteralPath $windowsRecord -PathType Leaf)){
+        try{
+            $windowsCommand=Get-Command -Name $windowsStart -ErrorAction Stop
+            if(-not $windowsCommand.Parameters.ContainsKey('WaitForHotkeys')){
+                $windowsViewerStatus='legacy-hotkeys-unconfirmed'
+            }else{
+                $windowsViewerStartRequested=$true
+                $windowsResult=& $windowsStart -WaitForHotkeys
+                if($windowsResult.status -eq 'hotkeys-confirmed'){
+                    $windowsHotkeysConfirmed=$true
+                    $windowsViewerStatus='hotkeys-confirmed'
+                }else{
+                    $windowsViewerStatus='hotkeys-unconfirmed'
+                }
+            }
+        }catch{
+            $windowsViewerStatus='hotkeys-unconfirmed'
+        }
+    }
+}
 $viewerArguments=if($Background){@('--background')}else{@('--show')}
 Start-Process -FilePath $viewer -ArgumentList $viewerArguments -WorkingDirectory $installRoot -WindowStyle Hidden|Out-Null
-[ordered]@{schemaVersion=1;status='started';installRoot=$installRoot;composeProject='qicheng-agent-channels';services=@('channel1','channel2');ports=@($port1,$port2);backendBuilt=[bool]$BuildBackend;viewerMode=if($Background){'background'}else{'visible'};tokenDisplayed=$false;volumesRemoved=$false}|ConvertTo-Json -Depth 4
+[ordered]@{schemaVersion=1;status='started';installRoot=$installRoot;composeProject='qicheng-agent-channels';services=@('channel1','channel2');ports=@($port1,$port2);backendBuilt=[bool]$BuildBackend;viewerMode=if($Background){'background'}else{'visible'};windowsViewerStartRequested=$windowsViewerStartRequested;windowsViewerStatus=$windowsViewerStatus;windowsHotkeysConfirmed=$windowsHotkeysConfirmed;tokenDisplayed=$false;volumesRemoved=$false}|ConvertTo-Json -Depth 4

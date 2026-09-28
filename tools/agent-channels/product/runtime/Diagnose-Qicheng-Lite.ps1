@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([string]$InstallRoot,[string]$DockerPath='docker',[string]$StartupRoot,[string]$LegacyStartupRoot,[int]$Port1=18761,[int]$Port2=18762)
 $ErrorActionPreference='Continue'
 . (Join-Path $PSScriptRoot 'Product.Common.ps1')

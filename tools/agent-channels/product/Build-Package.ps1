@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([Parameter(Mandatory=$true)][string]$OutputDirectory,[string]$Version='0.2.0-alpha.1-local')
 $ErrorActionPreference='Stop'
 $productRoot=$PSScriptRoot

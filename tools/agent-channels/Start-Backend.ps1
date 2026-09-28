@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([switch]$TwoChannels)
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot

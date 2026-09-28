@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([switch]$SkipPublicRoundTrip)
 
 $ErrorActionPreference='Stop'
@@ -60,7 +60,13 @@ try{
     Assert-True ($embeddedSourceManifest.PSObject.Properties.Name -notcontains 'repositoryCommit') 'source manifest leaked Git revision'
 
     $sourcePaths=@((Import-PowerShellDataFile -LiteralPath (Join-Path $productRoot 'Source-Allowlist.psd1')).Files)
+    foreach($powerShellSource in @(Get-ChildItem -LiteralPath $moduleRoot -Filter '*.ps1' -Recurse -File)){
+        $scriptBytes=[IO.File]::ReadAllBytes($powerShellSource.FullName)
+        Assert-True ($scriptBytes.Length -ge 3 -and $scriptBytes[0] -eq 0xEF -and $scriptBytes[1] -eq 0xBB -and $scriptBytes[2] -eq 0xBF) "PowerShell source must use UTF-8 BOM: $($powerShellSource.FullName)"
+    }
     $startSource=Get-Content -LiteralPath (Join-Path $build.windows.directory 'source\product\runtime\Start-Qicheng-Lite.ps1') -Raw
+    Assert-True ($startSource.Contains('-WaitForHotkeys') -and $startSource.IndexOf('$windowsResult=& $windowsStart -WaitForHotkeys') -lt $startSource.IndexOf('Start-Process -FilePath $viewer -ArgumentList $viewerArguments')) 'Lite viewer can start before Windows hotkeys are released.'
+    Assert-True ($startSource.Contains("Parameters.ContainsKey('WaitForHotkeys')") -and $startSource.Contains("legacy-hotkeys-unconfirmed") -and $startSource.Contains('windowsHotkeysConfirmed=$windowsHotkeysConfirmed')) 'Lite cannot recover when an installed Windows viewer lacks hotkey coordination.'
     $diagnoseSource=Get-Content -LiteralPath (Join-Path $build.windows.directory 'source\product\runtime\Diagnose-Qicheng-Lite.ps1') -Raw
     $startParam=[regex]::Match($startSource,'(?s)\bparam\(.*?\)').Value
     $diagnoseParam=[regex]::Match($diagnoseSource,'(?s)\bparam\(.*?\)').Value
@@ -186,7 +192,7 @@ while True: time.sleep(1)
     $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     & $compiler /nologo /target:winexe /optimize+ "/out:$install\dist\AgentChannels.exe" $fakeViewerSource
     Assert-True ($LASTEXITCODE -eq 0) 'fake viewer compilation failed'
-    $started=(& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -Background -BuildBackend -DockerPath $fakeDocker -HealthAttempts 3|Out-String|ConvertFrom-Json)
+    $started=(& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -Background -BuildBackend -NoWindowsChannels -DockerPath $fakeDocker -HealthAttempts 3|Out-String|ConvertFrom-Json)
     Assert-True ($started.status -eq 'started' -and $started.viewerMode -eq 'background') 'isolated start failed'
     foreach($n in 1..20){if(-not @(Get-TestOwnedProcesses -Root $testRoot).Count){break};Start-Sleep -Milliseconds 50}
     Assert-True (@(Get-TestOwnedProcesses -Root $testRoot).Count -eq 0) 'fake viewer did not exit after isolated start'
