@@ -112,12 +112,20 @@ if($ReuseExistingBackendImage){
         if($LASTEXITCODE -ne 0 -or $containerIds.Count -ne 1){throw "无法核验旧频道 $channel 容器；离线复用未进行安装。"}
         $containerId=[string]$containerIds[0]
         $containerImage=@(& $DockerPath inspect --format '{{.Image}}' $containerId 2>$null)
-        $project=@(& $DockerPath inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' $containerId 2>$null)
-        $service=@(& $DockerPath inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' $containerId 2>$null)
-        $workingDir=@(& $DockerPath inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' $containerId 2>$null)
+        $containerImageExit=$LASTEXITCODE
+        # PowerShell 5.1 strips embedded quotes from native arguments. Read the
+        # label map as JSON so the Docker template needs no quoted map keys.
+        $labelsText=@(& $DockerPath inspect --format '{{json .Config.Labels}}' $containerId 2>$null)
+        $labelsExit=$LASTEXITCODE
         $mountsText=@(& $DockerPath inspect --format '{{json .Mounts}}' $containerId 2>$null)
-        if($LASTEXITCODE -ne 0 -or $containerImage.Count -ne 1 -or [string]$containerImage[0] -cne [string]$imageId[0] -or $project.Count -ne 1 -or [string]$project[0] -cne 'qicheng-agent-channels' -or $service.Count -ne 1 -or [string]$service[0] -cne "channel$channel" -or $workingDir.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$workingDir[0]) -or -not([IO.Path]::GetFullPath([string]$workingDir[0]).Equals($installRoot,[StringComparison]::OrdinalIgnoreCase)) -or $mountsText.Count -ne 1){throw "旧频道 $channel 的镜像或 Compose 归属不匹配；拒绝复用。"}
-        $mounts=@([string]$mountsText[0]|ConvertFrom-Json -ErrorAction Stop)
+        $mountsExit=$LASTEXITCODE
+        if($containerImageExit -ne 0 -or $labelsExit -ne 0 -or $mountsExit -ne 0 -or $containerImage.Count -ne 1 -or $labelsText.Count -ne 1 -or $mountsText.Count -ne 1){throw "旧频道 $channel 的镜像或 Compose 归属不匹配；拒绝复用。"}
+        try{$labels=[string]$labelsText[0]|ConvertFrom-Json -ErrorAction Stop}catch{throw "旧频道 $channel 的 Compose 标签无效；拒绝复用。"}
+        $project=[string]$labels.PSObject.Properties['com.docker.compose.project'].Value
+        $service=[string]$labels.PSObject.Properties['com.docker.compose.service'].Value
+        $workingDir=[string]$labels.PSObject.Properties['com.docker.compose.project.working_dir'].Value
+        if([string]$containerImage[0] -cne [string]$imageId[0] -or $project -cne 'qicheng-agent-channels' -or $service -cne "channel$channel" -or [string]::IsNullOrWhiteSpace($workingDir) -or -not([IO.Path]::GetFullPath($workingDir).Equals($installRoot,[StringComparison]::OrdinalIgnoreCase))){throw "旧频道 $channel 的镜像或 Compose 归属不匹配；拒绝复用。"}
+        $mounts=ConvertFrom-Json -InputObject ([string]$mountsText[0]) -ErrorAction Stop
         $homeMount=@($mounts|Where-Object{$_.Type -eq 'volume' -and $_.Name -ceq "qicheng-lite-home-$channel" -and $_.Destination -ceq '/home/channel'})
         if($homeMount.Count -ne 1){throw "旧频道 $channel 的持久卷归属不匹配；拒绝复用。"}
     }

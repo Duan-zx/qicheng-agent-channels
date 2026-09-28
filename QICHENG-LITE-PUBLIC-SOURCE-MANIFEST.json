@@ -186,8 +186,8 @@
     },
     {
       "path": "tools/agent-channels/product/runtime/Install-Qicheng-Lite.ps1",
-      "bytes": 29216,
-      "sha256": "b5967338162979997ee5fdbc04bfdfdcc1f3e7324f50cf5a54a08e8b0cd79c3d"
+      "bytes": 29681,
+      "sha256": "555e030defe34a04522b8d7da7292800b2bb336b8d362bf450e09285efc80ddb"
     },
     {
       "path": "tools/agent-channels/product/runtime/Start-Qicheng-Lite.ps1",
@@ -231,8 +231,8 @@
     },
     {
       "path": "tools/agent-channels/product/tests/Test-ProductPackage.ps1",
-      "bytes": 63453,
-      "sha256": "24543ae7de41b976b8248cac9579b751c9181a9c4bc6ad8d8de5fdcd5e8b08e6"
+      "bytes": 67681,
+      "sha256": "b9a2b096329846285b1513533c82576f1844ebc26e1a05400071c29403356d6c"
     },
     {
       "path": "tools/agent-channels/product/tests/Test-LegacyStartupDiagnosis.ps1",

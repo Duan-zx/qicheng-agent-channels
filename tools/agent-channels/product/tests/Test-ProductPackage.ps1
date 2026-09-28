@@ -280,11 +280,21 @@ static class FakeDocker {
             if (args[0]=="compose" && Array.IndexOf(args,"ps")>=0) { Console.WriteLine("owned-"+args[args.Length-1]); return 0; }
             if (args[0]=="inspect") {
                 string format=String.Join(" ",args);
+                if (format.Contains("{{index .Config.Labels ") && !format.Contains("\"")) return 1;
                 if (format.Contains("{{.Image}}")) Console.WriteLine("sha256:fixture-image");
+                else if (format.Contains("{{json .Config.Labels}}")) {
+                    if (mode=="labels-fail") return 1;
+                    if (mode=="bad-labels") Console.WriteLine("{invalid");
+                    else Console.WriteLine("{\"com.docker.compose.project\":\"qicheng-agent-channels\",\"com.docker.compose.service\":\"channel1\",\"com.docker.compose.project.working_dir\":\""+ownedInstall.Replace("\\","\\\\").Replace("\"","\\\"")+"\"}");
+                }
                 else if (format.Contains("project.working_dir")) Console.WriteLine(mode=="foreign-owner" ? @"C:\foreign-lite" : ownedInstall);
                 else if (format.Contains("com.docker.compose.project")) Console.WriteLine("qicheng-agent-channels");
                 else if (format.Contains("com.docker.compose.service")) Console.WriteLine("channel1");
-                else if (format.Contains("{{json .Mounts}}")) Console.WriteLine("[{\"Type\":\"volume\",\"Name\":\""+(mode=="foreign-volume" ? "foreign-home" : "qicheng-lite-home-1")+"\",\"Destination\":\"/home/channel\"}]");
+                else if (format.Contains("{{json .Mounts}}")) {
+                    string bindName=mode=="split-volume-identity" ? "qicheng-lite-home-1" : "other";
+                    string homeName=mode=="foreign-volume" || mode=="split-volume-identity" ? "foreign-home" : "qicheng-lite-home-1";
+                    Console.WriteLine("[{\"Type\":\"bind\",\"Name\":\""+bindName+"\",\"Destination\":\"/tmp\"},{\"Type\":\"volume\",\"Name\":\""+homeName+"\",\"Destination\":\"/home/channel\"},{\"Type\":\"bind\",\"Name\":\"config\",\"Destination\":\"/app/config\"},{\"Type\":\"volume\",\"Name\":\"cache\",\"Destination\":\"/cache\"}]");
+                }
                 return 0;
             }
             if (args[0]=="create") { Console.WriteLine("aaaaaaaaaaaa"); return 0; }
@@ -360,13 +370,27 @@ exit /b %ERRORLEVEL%
         try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$replacedTagError=$_.Exception.Message}
         Assert-True ($replacedTagError -match '镜像或 Compose 归属不匹配' -and (Test-Path -LiteralPath $recordPath)) 'replaced image tag passed offline preflight'
         $env:QICHENG_LITE_FAKE_DOCKER_MODE='foreign-owner'
+        $env:QICHENG_LITE_FAKE_OWNED_INSTALL='C:\foreign-lite'
         $foreignOwnerError=''
         try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$foreignOwnerError=$_.Exception.Message}
         Assert-True ($foreignOwnerError -match '镜像或 Compose 归属不匹配' -and (Test-Path -LiteralPath $recordPath)) 'foreign Compose owner passed offline preflight'
+        $env:QICHENG_LITE_FAKE_OWNED_INSTALL=$singleInstall
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='labels-fail'
+        $labelExitError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$labelExitError=$_.Exception.Message}
+        Assert-True ($labelExitError -match '镜像或 Compose 归属不匹配' -and (Test-Path -LiteralPath $recordPath)) 'failed label inspect was overwritten by later successful inspect'
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='bad-labels'
+        $badLabelError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$badLabelError=$_.Exception.Message}
+        Assert-True ($badLabelError -match 'Compose 标签无效' -and (Test-Path -LiteralPath $recordPath)) 'invalid label JSON passed offline preflight'
         $env:QICHENG_LITE_FAKE_DOCKER_MODE='foreign-volume'
         $foreignVolumeError=''
         try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$foreignVolumeError=$_.Exception.Message}
         Assert-True ($foreignVolumeError -match '持久卷归属不匹配' -and (Test-Path -LiteralPath $recordPath)) 'foreign volume passed offline preflight'
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='split-volume-identity'
+        $splitVolumeError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$splitVolumeError=$_.Exception.Message}
+        Assert-True ($splitVolumeError -match '持久卷归属不匹配' -and (Test-Path -LiteralPath $recordPath)) 'Compose volume identity was assembled from different mounts'
         $env:QICHENG_LITE_FAKE_DOCKER_MODE='image-mismatch'
         $imageMismatchError=''
         try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$imageMismatchError=$_.Exception.Message}
@@ -415,6 +439,20 @@ exit /b %ERRORLEVEL%
         $offlinePlan=(& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker|Out-String|ConvertFrom-Json)
         $previewCalls=Get-Content -LiteralPath $dockerLog -Raw
         Assert-True ($offlinePlan.status -eq 'upgrade-preview' -and $offlinePlan.backendImageAction -eq 'reuse-local-image' -and -not $offlinePlan.imageContentVerified -and -not $offlinePlan.hostChangesMade -and $previewCalls -notmatch '(^|\s)(create|cp|rm)(\s|$)') 'offline preview mutated Docker or claimed image content verification'
+        $ps5PlanText=(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -PackageRoot $build.windows.directory -InstallRoot $singleInstall -DataRoot $singleOptions.DataRoot -StartMenuRoot $singleOptions.StartMenuRoot -DesktopRoot $singleOptions.DesktopRoot -StartupRoot $singleOptions.StartupRoot -LegacyStartupRoot $singleOptions.LegacyStartupRoot -ReuseExistingBackendImage -DockerPath $fakeDocker|Out-String)
+        $ps5PlanExit=$LASTEXITCODE
+        Assert-True ($ps5PlanExit -eq 0 -and ($ps5PlanText|ConvertFrom-Json).status -eq 'upgrade-preview') 'PowerShell 5.1 offline reuse preview could not read Docker Compose labels'
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='split-volume-identity'
+        $savedErrorActionPreference=$ErrorActionPreference
+        try{
+            # In Windows PowerShell 5.1, redirected native stderr becomes a
+            # NativeCommandError when EAP is Stop. Capture this expected error.
+            $ErrorActionPreference='Continue'
+            $ps5SplitText=(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -PackageRoot $build.windows.directory -InstallRoot $singleInstall -DataRoot $singleOptions.DataRoot -StartMenuRoot $singleOptions.StartMenuRoot -DesktopRoot $singleOptions.DesktopRoot -StartupRoot $singleOptions.StartupRoot -LegacyStartupRoot $singleOptions.LegacyStartupRoot -ReuseExistingBackendImage -DockerPath $fakeDocker 2>&1|Out-String)
+            $ps5SplitExit=$LASTEXITCODE
+        }finally{$ErrorActionPreference=$savedErrorActionPreference}
+        Assert-True ($ps5SplitExit -ne 0 -and (Test-Path -LiteralPath $recordPath) -and $ps5SplitText -match '持久卷归属不匹配') 'PowerShell 5.1 did not reject the mismatched volume for the expected reason'
+        Remove-Item Env:QICHENG_LITE_FAKE_DOCKER_MODE
         Remove-Item -LiteralPath $dockerLog -Force
         $whatIfText=(& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -WhatIf|Out-String)
         $whatIfCalls=Get-Content -LiteralPath $dockerLog -Raw
