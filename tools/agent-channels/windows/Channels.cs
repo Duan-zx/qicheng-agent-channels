@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.IO.Pipes;
 using System.Net;
 using System.Net.Http;
 using System.Runtime.InteropServices;
@@ -11,11 +13,42 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
+static class WindowsHostControl {
+    internal static string PipeName {
+        get {
+            string scope = Environment.GetEnvironmentVariable("QICHENG_WINDOWS_VIEWER_TEST_SCOPE");
+            Guid id;
+            string suffix = Guid.TryParseExact(scope, "N", out id) ? ".test." + id.ToString("N") : "";
+            return "Qicheng.WindowsChannels.Viewer." + Process.GetCurrentProcess().SessionId + suffix;
+        }
+    }
+
+    internal static string ReturnToHost() {
+        try {
+            using (NamedPipeClientStream pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut)) {
+                pipe.Connect(450);
+                using (StreamReader reader = new StreamReader(pipe, Encoding.UTF8))
+                using (StreamWriter writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true }) {
+                    writer.WriteLine("{\"ReturnToHost\":true}");
+                    Task<string> read = Task.Factory.StartNew(delegate { return reader.ReadLine(); });
+                    if (!read.Wait(1200)) return "timeout";
+                    return read.Result == "ok" ? "ok" : read.Result == "rejected" ? "rejected" : "unavailable";
+                }
+            }
+        } catch (TimeoutException) { return "timeout"; }
+        catch (IOException) { return "unavailable"; }
+        catch (UnauthorizedAccessException) { return "unavailable"; }
+        catch (AggregateException) { return "unavailable"; }
+        catch (ObjectDisposedException) { return "unavailable"; }
+    }
+}
+
 sealed class Channels : Form {
     [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr h, int id, uint mod, uint key);
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr h, int id);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint processId);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string value);
     const uint NoRepeatAlt = 0x4001;
     const int EmSetCueBanner = 0x1501;
@@ -35,7 +68,7 @@ sealed class Channels : Form {
     readonly StringBuilder pendingText = new StringBuilder();
     ApplicationContext context;
     EventWaitHandle showSignal;
-    bool polling, exiting, connected, stateKnown, collapsed;
+    bool polling, exiting, connected, stateKnown, collapsed, returningToHost;
     int channel = 1, generation, textGeneration, guestWidth = 1600, guestHeight = 900;
     string mode = "paused", statusError = "";
     DateTime statusErrorUntil = DateTime.MinValue;
@@ -235,7 +268,45 @@ sealed class Channels : Form {
     }
     void LayoutSurface() { screen.Bounds = ClientRectangle; LayoutBar(); }
     void SetCollapsed(bool value) { collapsed = value; LayoutSurface(); screen.Focus(); }
-    void ReturnToHost() { ClearPendingInput(); Hide(); ShowInTaskbar = false; if (previous != IntPtr.Zero) SetForegroundWindow(previous); }
+    async void ReturnToHost() {
+        if (returningToHost) return;
+        returningToHost = true;
+        ClearPendingInput();
+        int returnGeneration = generation;
+        bool windowsViewerWasActive = IsWindowsViewer(GetForegroundWindow()) || IsWindowsViewer(previous);
+        try {
+            string response = await Task.Run(delegate { return WindowsHostControl.ReturnToHost(); });
+            if (exiting || IsDisposed || generation != returnGeneration) return;
+            if (response == "ok") {
+                Hide(); ShowInTaskbar = false;
+                // Windows Viewer has already hidden itself. Restoring 'previous' would show it again.
+                return;
+            }
+            if (windowsViewerWasActive) {
+                string explanation = response == "rejected" ? "Windows 查看器版本较旧，未接受返回本机请求。"
+                    : response == "timeout" ? "Windows 查看器未在限时内确认返回本机。"
+                    : "暂时无法连接 Windows 查看器。";
+                string instruction = explanation + "\n请用 Windows 查看器托盘菜单的“返回本机”，或退出 Windows 查看器。";
+                tray.ShowBalloonTip(5000, "返回本机未完成", instruction, ToolTipIcon.Warning);
+                MessageBox.Show(instruction, "启程频道", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            Hide(); ShowInTaskbar = false;
+            if (previous != IntPtr.Zero && !IsWindowsViewer(previous)) SetForegroundWindow(previous);
+        } finally { returningToHost = false; }
+    }
+
+    static bool IsWindowsViewer(IntPtr window) {
+        if (window == IntPtr.Zero) return false;
+        try {
+            uint processId;
+            if (GetWindowThreadProcessId(window, out processId) == 0 || processId == 0) return false;
+            using (Process process = Process.GetProcessById((int)processId))
+                return String.Equals(process.ProcessName, "WindowsChannelsViewer", StringComparison.OrdinalIgnoreCase);
+        } catch (ArgumentException) { return false; }
+        catch (System.ComponentModel.Win32Exception) { return false; }
+        catch (InvalidOperationException) { return false; }
+    }
 
     void OpenChannel(int id) {
         if (exiting || id < 1 || id > 2) return;

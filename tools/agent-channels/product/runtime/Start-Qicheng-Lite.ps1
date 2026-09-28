@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([string]$InstallRoot,[switch]$Background,[switch]$BuildBackend,[switch]$NoWindowsChannels,[string]$DockerPath='docker',[ValidateRange(1,45)][int]$HealthAttempts=45,[int]$Port1=18761,[int]$Port2=18762)
+param([string]$InstallRoot,[switch]$Background,[switch]$LoginRecovery,[switch]$BuildBackend,[switch]$NoWindowsChannels,[string]$DockerPath='docker',[string]$DockerDesktopPath,[ValidateRange(1,300)][int]$DockerReadyTimeoutSeconds=120,[ValidateRange(1,45)][int]$HealthAttempts=45,[int]$Port1=18761,[int]$Port2=18762)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Product.Common.ps1')
 if($Port1 -ne 18761 -or $Port2 -ne 18762){throw '端口契约固定为 18761/18762；请移除自定义端口参数。'}
@@ -11,8 +11,82 @@ $viewer=Join-Path $installRoot 'dist\AgentChannels.exe'
 foreach($required in @($token,$compose,$viewer)){if(-not(Test-Path -LiteralPath $required -PathType Leaf)){throw "运行文件缺失：$required。请重新安装或导入 token。"}}
 $tokenValue=(Get-Content -LiteralPath $token -Raw).Trim()
 if(-not(Test-QichengLiteTokenValue -Value $tokenValue)){throw '本地 token 格式无效；未启动容器或查看器。'}
-& $DockerPath version --format '{{.Server.Version}}' 2>$null|Out-Null
-if($LASTEXITCODE -ne 0){throw 'Docker Linux engine 不可用。轻量版不捆绑 Docker Desktop；请先启动已获准的 Docker Linux 环境。'}
+function Invoke-BoundedDockerProbe([string[]]$Arguments,[Diagnostics.Stopwatch]$Timer,[int]$BudgetMilliseconds){
+    $remaining=$BudgetMilliseconds-[int]$Timer.ElapsedMilliseconds
+    if($remaining -le 0){return $null}
+    $process=$null
+    try {
+        $startInfo=New-Object Diagnostics.ProcessStartInfo
+        $startInfo.FileName=$DockerPath
+        $startInfo.Arguments=$Arguments -join ' '
+        $startInfo.UseShellExecute=$false
+        $startInfo.CreateNoWindow=$true
+        $startInfo.RedirectStandardOutput=$true
+        $startInfo.RedirectStandardError=$true
+        $process=[Diagnostics.Process]::Start($startInfo)
+        $remaining=$BudgetMilliseconds-[int]$Timer.ElapsedMilliseconds
+        if($remaining -le 0 -or -not $process.WaitForExit([Math]::Min(2000,$remaining))){
+            if(-not $process.HasExited){$process.Kill()}
+            return $null
+        }
+        if($process.ExitCode -ne 0){return $null}
+        return $process.StandardOutput.ReadToEnd().Trim()
+    }catch{return $null}
+    finally {if($process){$process.Dispose()}}
+}
+function Get-DockerLinuxState([Diagnostics.Stopwatch]$Timer,[int]$BudgetMilliseconds){
+    if(-not[string]::IsNullOrWhiteSpace($env:DOCKER_HOST) -and $env:DOCKER_HOST -notmatch '(?i)^npipe:////\./pipe/(docker_engine|dockerDesktopLinuxEngine)$'){return 'remote'}
+    $endpoint=Invoke-BoundedDockerProbe -Arguments @('context','inspect','--format','{{.Endpoints.docker.Host}}') -Timer $Timer -BudgetMilliseconds $BudgetMilliseconds
+    if([string]::IsNullOrWhiteSpace($endpoint)){return 'unknown-endpoint'}
+    if($endpoint -notmatch '(?i)^npipe:////\./pipe/(docker_engine|dockerDesktopLinuxEngine)$'){return 'remote'}
+    $osType=Invoke-BoundedDockerProbe -Arguments @('info','--format','{{.OSType}}') -Timer $Timer -BudgetMilliseconds $BudgetMilliseconds
+    if($osType -eq 'linux'){return 'ready'}
+    if($osType -eq 'windows'){return 'windows'}
+    return 'unavailable'
+}
+$readyTimer=[Diagnostics.Stopwatch]::StartNew()
+$readyBudgetMilliseconds=if($LoginRecovery){$DockerReadyTimeoutSeconds*1000}else{2000}
+$dockerState=Get-DockerLinuxState -Timer $readyTimer -BudgetMilliseconds $readyBudgetMilliseconds
+if($dockerState -eq 'remote'){throw '当前 Docker endpoint 不是本机 Docker Desktop 管道；拒绝启动远端容器。'}
+if($dockerState -eq 'unknown-endpoint'){throw '无法确认当前 Docker endpoint（Docker CLI 缺失、无响应或 context inspect 失败）；登录恢复未启动 Docker Desktop、后端或查看器。'}
+if($dockerState -eq 'windows'){throw '当前 Docker engine 为 Windows 模式；启程轻量版需要本机 Linux engine。'}
+$dockerReady=($dockerState -eq 'ready')
+if(-not $dockerReady -and $LoginRecovery){
+    if($readyTimer.ElapsedMilliseconds -ge $readyBudgetMilliseconds){throw "Docker Linux engine 不可用（登录恢复等待上限 $DockerReadyTimeoutSeconds 秒）。未启动后端或查看器；请检查 Docker Desktop。"}
+    if([string]::IsNullOrWhiteSpace($DockerDesktopPath)){
+        $desktopCandidates=@()
+        foreach($programRoot in @($env:ProgramFiles,${env:ProgramFiles(x86)})){
+            if(-not[string]::IsNullOrWhiteSpace($programRoot)){$desktopCandidates+=Join-Path $programRoot 'Docker\Docker\Docker Desktop.exe'}
+        }
+        $DockerDesktopPath=@($desktopCandidates|Where-Object{Test-Path -LiteralPath $_ -PathType Leaf}|Select-Object -First 1)[0]
+    }
+    if([string]::IsNullOrWhiteSpace($DockerDesktopPath) -or -not(Test-Path -LiteralPath $DockerDesktopPath -PathType Leaf)){
+        throw 'Docker Linux engine 不可用，且未找到已安装的 Docker Desktop。登录恢复未启动后端或查看器。'
+    }
+    $desktopPath=[IO.Path]::GetFullPath($DockerDesktopPath)
+    $desktopName=[IO.Path]::GetFileName($desktopPath)
+    $desktopRunning=$false
+    try {
+        $desktopRunning=@(Get-CimInstance Win32_Process -Filter ("Name='"+$desktopName.Replace("'","''")+"'") -ErrorAction Stop|Where-Object{[string]$_.ExecutablePath -and ([string]$_.ExecutablePath).Equals($desktopPath,[StringComparison]::OrdinalIgnoreCase)}).Count -gt 0
+    }catch {throw '无法确认 Docker Desktop 是否已运行；登录恢复未重复启动进程。请检查 Windows 进程查询权限。'}
+    if(-not $desktopRunning){Start-Process -FilePath $desktopPath -WindowStyle Hidden|Out-Null}
+    while(-not $dockerReady -and $readyTimer.ElapsedMilliseconds -lt $readyBudgetMilliseconds){
+        $sleepMilliseconds=[Math]::Min(500,$readyBudgetMilliseconds-[int]$readyTimer.ElapsedMilliseconds)
+        if($sleepMilliseconds -gt 0){Start-Sleep -Milliseconds $sleepMilliseconds}
+        $dockerState=Get-DockerLinuxState -Timer $readyTimer -BudgetMilliseconds $readyBudgetMilliseconds
+        if($dockerState -eq 'remote'){throw '当前 Docker endpoint 不是本机 Docker Desktop 管道；拒绝启动远端容器。'}
+        if($dockerState -eq 'unknown-endpoint'){
+            if($readyTimer.ElapsedMilliseconds -ge $readyBudgetMilliseconds){throw "Docker Linux engine 不可用（登录恢复等待上限 $DockerReadyTimeoutSeconds 秒）。未启动后端或查看器；请检查 Docker Desktop。"}
+            throw '无法确认当前 Docker endpoint（Docker CLI 缺失、无响应或 context inspect 失败）；登录恢复未启动后端或查看器。'
+        }
+        if($dockerState -eq 'windows'){throw '当前 Docker engine 为 Windows 模式；启程轻量版需要本机 Linux engine。'}
+        $dockerReady=($dockerState -eq 'ready')
+    }
+}
+if(-not $dockerReady){
+    if($LoginRecovery){throw "Docker Linux engine 不可用（登录恢复等待上限 $DockerReadyTimeoutSeconds 秒）。未启动后端或查看器；请检查 Docker Desktop。"}
+    throw 'Docker Linux engine 不可用。轻量版不捆绑 Docker Desktop；请先启动已获准的 Docker Linux 环境。'
+}
 $dockerArguments=@('compose','--project-name','qicheng-agent-channels','--project-directory',$installRoot,'-f',$compose,'--profile','second','up','-d')
 if($BuildBackend){$dockerArguments+='--build'}else{$dockerArguments+='--no-build'}
 $dockerArguments+=@('channel1','channel2')

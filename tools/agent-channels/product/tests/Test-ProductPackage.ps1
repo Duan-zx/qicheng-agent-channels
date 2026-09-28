@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([switch]$SkipPublicRoundTrip)
+param([switch]$SkipPublicRoundTrip,[switch]$RecoveryOnly,[switch]$HostReturnOnly)
 
 $ErrorActionPreference='Stop'
 $productRoot=Split-Path -Parent $PSScriptRoot
@@ -86,6 +86,83 @@ try{
     $viewerResult=Read-Json $selfTest
     Assert-True ($viewerResult.coordinate_mapping -and $viewerResult.jpeg_route -and $viewerResult.default_hidden -and $viewerResult.single_instance) 'viewer contract failed'
 
+    # Exercise the packaged Lite binary's actual pipe client against an isolated same-session server.
+    # This does not start either viewer, read a token, or touch the desktop/VM.
+    $hostReturnSource=Join-Path $testRoot 'HostReturnProtocol.cs'
+    $hostReturnExe=Join-Path $testRoot 'HostReturnProtocol.exe'
+    @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.IO.Pipes;
+using System.Reflection;
+using System.Threading;
+
+static class HostReturnProtocol {
+    static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+    static int Main(string[] args) {
+        Assembly lite = Assembly.LoadFrom(args[0]);
+        Type control = lite.GetType("WindowsHostControl", true);
+        MethodInfo call = control.GetMethod("ReturnToHost", BindingFlags.Static | BindingFlags.NonPublic);
+        Check(call != null, "packaged Lite lacks host return client");
+        Test(call, "ok", "ok");
+        Test(call, "rejected", "rejected");
+        Test(call, "stalled", "timeout");
+        Test(call, "missing", "timeout");
+        Console.WriteLine("host-return-protocol: passed");
+        return 0;
+    }
+    static void Test(MethodInfo call, string scenario, string expected) {
+        string scope = Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable("QICHENG_WINDOWS_VIEWER_TEST_SCOPE", scope);
+        string pipeName = "Qicheng.WindowsChannels.Viewer." + Process.GetCurrentProcess().SessionId + ".test." + scope;
+        string payload = null;
+        Exception serverError = null;
+        ManualResetEvent ready = new ManualResetEvent(false);
+        Thread server = null;
+        if (scenario != "missing") {
+            server = new Thread(delegate() {
+                try {
+                    using (NamedPipeServerStream pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1)) {
+                        ready.Set();
+                        pipe.WaitForConnection();
+                        using (StreamReader reader = new StreamReader(pipe))
+                        using (StreamWriter writer = new StreamWriter(pipe) { AutoFlush = true }) {
+                            payload = reader.ReadLine();
+                            if (scenario == "stalled") Thread.Sleep(2200);
+                            else writer.WriteLine(scenario);
+                        }
+                    }
+                } catch (IOException) { if (scenario != "stalled") serverError = new IOException("server pipe failed"); }
+                catch (Exception error) { serverError = error; }
+            });
+            server.IsBackground = true;
+            server.Start();
+            Check(ready.WaitOne(1000), "fake server did not become ready");
+        }
+        Stopwatch timer = Stopwatch.StartNew();
+        string result = (string)call.Invoke(null, null);
+        timer.Stop();
+        Check(result == expected, scenario + " returned " + result);
+        Check(timer.ElapsedMilliseconds < 2000, scenario + " blocked too long");
+        if (server != null && scenario != "stalled") {
+            Check(server.Join(1000), "fake server did not exit");
+            Check(serverError == null, "fake server failed: " + serverError);
+            Check(payload == "{\"ReturnToHost\":true}", "request did not use explicit host-return protocol");
+        }
+    }
+}
+'@|Set-Content -LiteralPath $hostReturnSource -Encoding UTF8
+    $hostReturnCompiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+    & $hostReturnCompiler /nologo /target:exe /optimize+ "/out:$hostReturnExe" $hostReturnSource
+    Assert-True ($LASTEXITCODE -eq 0) 'host-return protocol harness did not compile'
+    $hostReturnOutput=(& $hostReturnExe (Join-Path $build.windows.directory 'dist\AgentChannels.exe')|Out-String)
+    Assert-True ($LASTEXITCODE -eq 0 -and $hostReturnOutput -match 'host-return-protocol: passed') 'packaged Lite host-return protocol failed'
+    if($HostReturnOnly){
+        [ordered]@{schemaVersion=1;status='passed';hostReturnProtocol=$true;missingServerBounded=$true;oldViewerRejected=$true;stalledServerBounded=$true;realDesktopTouched=$false;realVmTouched=$false}|ConvertTo-Json -Depth 4
+        return
+    }
+
     $install=Join-Path $testRoot 'installed'
     $data=Join-Path $testRoot 'data'
     $startMenu=Join-Path $testRoot 'start-menu'
@@ -130,6 +207,7 @@ try{
     foreach($linkPath in @((Join-Path $startup '启程轻量工作台.lnk'),(Join-Path $desktop '启程轻量工作台.lnk'),(Join-Path $startMenu '启程轻量工作台.lnk'))){
         $link=Read-Link $linkPath
         Assert-True ($link.Arguments -match '-WindowStyle Hidden' -and $link.Arguments -match '-Background') "background shortcut contract failed: $linkPath"
+        Assert-True (($link.Arguments -match '-LoginRecovery') -eq ($linkPath -eq (Join-Path $startup '启程轻量工作台.lnk'))) "login recovery shortcut scope failed: $linkPath"
     }
     $manage=Read-Link (Join-Path $startMenu '管理启程轻量工作台.lnk')
     Assert-True ($manage.Arguments -match '-WindowStyle Hidden' -and $manage.Arguments -notmatch '-Background') 'management shortcut contract failed'
@@ -149,9 +227,32 @@ try{
     Assert-True ($restore.status -eq 'restored' -and $restore.backupPreserved) 'legacy shortcut restore failed'
     Assert-True (Test-Path -LiteralPath (Join-Path $legacyStartup 'unrelated.lnk')) 'restore changed unrelated shortcut'
 
-    $fakeDocker=Join-Path $testRoot 'fake-docker.cmd'
+    $fakeDocker=Join-Path $testRoot 'fake-docker.exe'
     $dockerLog=Join-Path $testRoot 'docker.log';$env:QICHENG_LITE_FAKE_DOCKER_LOG=$dockerLog
-    "@echo off`r`n>>`"%QICHENG_LITE_FAKE_DOCKER_LOG%`" echo %*`r`nexit /b 0`r`n"|Set-Content -LiteralPath $fakeDocker -Encoding ASCII
+    $fakeDockerSource=Join-Path $testRoot 'FakeDocker.cs'
+    [IO.File]::WriteAllText($fakeDockerSource,@'
+using System;
+using System.IO;
+using System.Threading;
+static class FakeDocker {
+    static int Main(string[] args) {
+        string mode=Environment.GetEnvironmentVariable("QICHENG_LITE_FAKE_DOCKER_MODE");
+        if (mode=="hang") Thread.Sleep(3000);
+        File.AppendAllText(Environment.GetEnvironmentVariable("QICHENG_LITE_FAKE_DOCKER_LOG"),String.Join(" ",args)+Environment.NewLine);
+        if (args.Length>0 && args[0]=="context") { if (mode=="context-fail") return 1; Console.WriteLine(mode=="remote" ? "tcp://example.invalid:2375" : "npipe:////./pipe/dockerDesktopLinuxEngine"); return 0; }
+        if (args.Length>0 && args[0]=="info") {
+            string marker=Environment.GetEnvironmentVariable("QICHENG_LITE_FAKE_DESKTOP_MARKER");
+            if (!String.IsNullOrEmpty(marker) && !File.Exists(marker)) return 1;
+            Console.WriteLine(mode=="windows" ? "windows" : "linux"); return 0;
+        }
+        if (args.Length>0 && args[0]=="version") { Console.WriteLine("1.0"); return 0; }
+        return 0;
+    }
+}
+'@,[Text.UTF8Encoding]::new($false))
+    $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+    & $compiler /nologo /target:exe /optimize+ "/out:$fakeDocker" $fakeDockerSource
+    Assert-True ($LASTEXITCODE -eq 0) 'fake Docker compilation failed'
     $port1=18761;$port2=18762
     $cmdInstall=Join-Path $testRoot 'cmd-installed';$cmdData=Join-Path $testRoot 'cmd-data';$cmdRunner=Join-Path $testRoot 'run-installer.cmd'
     @"
@@ -165,6 +266,9 @@ exit /b %ERRORLEVEL%
     Assert-True ($cmdOutput -match 'installed-start-failed' -and $cmdOutput -match 'was installed, but its first backend build or health check failed') 'double-click installer did not explain retained install and startup failure'
     Assert-True ($cmdOutput -notmatch 'installation finished') 'double-click installer printed false success after startup failure'
     Assert-True (Test-Path -LiteralPath (Join-Path $cmdInstall '.qicheng-lite-install.json')) 'startup failure did not retain installation'
+    if($RecoveryOnly){
+        function Invoke-RestMethod { param([string]$Uri,[hashtable]$Headers,[int]$TimeoutSec) [pscustomobject]@{input_target='private-linux-display';width=1600;height=900} }
+    }else{
     $requestLog=Join-Path $testRoot 'requests.log';$readyFile=Join-Path $testRoot 'server.ready';$serverScript=Join-Path $testRoot 'fake-state-server.py'
     @'
 import http.server,json,sys,threading,time
@@ -184,18 +288,72 @@ open(ready,'w').write('ready')
 while True: time.sleep(1)
 '@|Set-Content -LiteralPath $serverScript -Encoding UTF8
     $python=(Get-Command python.exe -ErrorAction Stop).Source
-    $serverProcess=Start-Process -FilePath $python -ArgumentList @($serverScript,$token,$readyFile,$requestLog,$port1,$port2) -WindowStyle Hidden -PassThru
-    foreach($n in 1..50){if(Test-Path -LiteralPath $readyFile){break};Start-Sleep -Milliseconds 100}
-    Assert-True (Test-Path -LiteralPath $readyFile) 'fake state server did not start'
+    $serverError=Join-Path $testRoot 'fake-state-server.err'
+    $serverProcess=Start-Process -FilePath $python -ArgumentList @($serverScript,$token,$readyFile,$requestLog,$port1,$port2) -WindowStyle Hidden -PassThru -RedirectStandardError $serverError
+    foreach($n in 1..100){if((Test-Path -LiteralPath $readyFile) -or $serverProcess.HasExited){break};Start-Sleep -Milliseconds 100}
+    Assert-True (Test-Path -LiteralPath $readyFile) ("fake state server did not start: "+$(if(Test-Path -LiteralPath $serverError){Get-Content -LiteralPath $serverError -Raw}else{'no stderr'}))
+    }
     $fakeViewerSource=Join-Path $testRoot 'FakeViewer.cs'
     [IO.File]::WriteAllText($fakeViewerSource,'public static class FakeViewer { [System.STAThread] public static int Main(string[] args) { return 0; } }',[Text.UTF8Encoding]::new($false))
     $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     & $compiler /nologo /target:winexe /optimize+ "/out:$install\dist\AgentChannels.exe" $fakeViewerSource
     Assert-True ($LASTEXITCODE -eq 0) 'fake viewer compilation failed'
-    $started=(& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -Background -BuildBackend -NoWindowsChannels -DockerPath $fakeDocker -HealthAttempts 3|Out-String|ConvertFrom-Json)
+    $probeOutput=Join-Path $testRoot 'fake-context.out';$probeError=Join-Path $testRoot 'fake-context.err'
+    $probeProcess=Start-Process -FilePath $fakeDocker -ArgumentList @('context','inspect','--format','{{.Endpoints.docker.Host}}') -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $probeOutput -RedirectStandardError $probeError
+    Assert-True ($probeProcess.ExitCode -eq 0 -and (Get-Content -LiteralPath $probeOutput -Raw).Trim() -eq 'npipe:////./pipe/dockerDesktopLinuxEngine') ("fake Docker context fixture failed: "+(Get-Content -LiteralPath $probeOutput -Raw))
+    try{$started=(& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -Background -BuildBackend -NoWindowsChannels -DockerPath $fakeDocker -HealthAttempts 3|Out-String|ConvertFrom-Json)}catch{throw ("isolated start failed; Docker calls: "+$(if(Test-Path -LiteralPath $dockerLog){Get-Content -LiteralPath $dockerLog -Raw}else{'none'})+"; error: "+$_.Exception.Message)}
     Assert-True ($started.status -eq 'started' -and $started.viewerMode -eq 'background') 'isolated start failed'
+    $recoveryMarker=Join-Path $testRoot 'desktop-ready.marker'
+    $desktopLog=Join-Path $testRoot 'desktop-start.log'
+    $env:QICHENG_LITE_FAKE_DESKTOP_MARKER=$recoveryMarker
+    $env:QICHENG_LITE_FAKE_DESKTOP_LOG=$desktopLog
+    $recoveryDocker=$fakeDocker
+    $desktopSource=Join-Path $testRoot 'FakeDesktop.cs'
+    $desktopExe=Join-Path $testRoot 'FakeDesktop.exe'
+    [IO.File]::WriteAllText($desktopSource,'public static class FakeDesktop { [System.STAThread] public static void Main() { System.IO.File.AppendAllText(System.Environment.GetEnvironmentVariable("QICHENG_LITE_FAKE_DESKTOP_LOG"), "started\n"); System.IO.File.WriteAllText(System.Environment.GetEnvironmentVariable("QICHENG_LITE_FAKE_DESKTOP_MARKER"), "ready"); System.Threading.Thread.Sleep(30000); } }',[Text.UTF8Encoding]::new($false))
+    & $compiler /nologo /target:winexe /optimize+ "/out:$desktopExe" $desktopSource
+    Assert-True ($LASTEXITCODE -eq 0) 'fake Desktop compilation failed'
+    $env:QICHENG_LITE_FAKE_DOCKER_MODE='remote'
+    $remoteError=''
+    try{& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -LoginRecovery -NoWindowsChannels -DockerPath $recoveryDocker -DockerDesktopPath $desktopExe -DockerReadyTimeoutSeconds 1 -ErrorAction Stop|Out-Null}catch{$remoteError=$_.Exception.Message}
+    Assert-True ($remoteError -match 'endpoint.*本机' -and -not(Test-Path -LiteralPath $desktopLog)) 'remote Docker context was accepted or launched Desktop'
+    $env:QICHENG_LITE_FAKE_DOCKER_MODE='context-fail'
+    $contextError=''
+    try{& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -LoginRecovery -NoWindowsChannels -DockerPath $recoveryDocker -DockerDesktopPath $desktopExe -DockerReadyTimeoutSeconds 1 -ErrorAction Stop|Out-Null}catch{$contextError=$_.Exception.Message}
+    Assert-True ($contextError -match '无法确认当前 Docker endpoint' -and -not(Test-Path -LiteralPath $desktopLog)) 'failed context inspect launched Desktop'
+    $missingDockerError=''
+    try{& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -LoginRecovery -NoWindowsChannels -DockerPath (Join-Path $testRoot 'missing-docker.exe') -DockerDesktopPath $desktopExe -DockerReadyTimeoutSeconds 1 -ErrorAction Stop|Out-Null}catch{$missingDockerError=$_.Exception.Message}
+    Assert-True ($missingDockerError -match '无法确认当前 Docker endpoint' -and -not(Test-Path -LiteralPath $desktopLog)) 'missing Docker CLI launched Desktop'
+    $env:QICHENG_LITE_FAKE_DOCKER_MODE='windows'
+    Set-Content -LiteralPath $recoveryMarker -Value 'ready' -NoNewline
+    $windowsError=''
+    try{& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -LoginRecovery -NoWindowsChannels -DockerPath $recoveryDocker -DockerDesktopPath $desktopExe -DockerReadyTimeoutSeconds 1 -ErrorAction Stop|Out-Null}catch{$windowsError=$_.Exception.Message}
+    Assert-True ($windowsError -match 'Windows 模式' -and -not(Test-Path -LiteralPath $desktopLog)) 'Windows engine was accepted or launched Desktop'
+    Remove-Item -LiteralPath $recoveryMarker -Force
+    $env:QICHENG_LITE_FAKE_DOCKER_MODE='hang'
+    $hangTimer=[Diagnostics.Stopwatch]::StartNew();$hangError=''
+    try{& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -LoginRecovery -NoWindowsChannels -DockerPath $recoveryDocker -DockerDesktopPath $desktopExe -DockerReadyTimeoutSeconds 1 -ErrorAction Stop|Out-Null}catch{$hangError=$_.Exception.Message}
+    $hangTimer.Stop()
+    Assert-True ($hangError -match '无法确认当前 Docker endpoint' -and $hangTimer.ElapsedMilliseconds -lt 2500 -and -not(Test-Path -LiteralPath $desktopLog)) "hanging Docker probe exceeded budget or opened Desktop ($($hangTimer.ElapsedMilliseconds) ms)"
+    Remove-Item Env:QICHENG_LITE_FAKE_DOCKER_MODE
+    $manualError=''
+    try{& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -NoWindowsChannels -DockerPath $recoveryDocker -DockerDesktopPath $desktopExe -DockerReadyTimeoutSeconds 2 -HealthAttempts 1 -ErrorAction Stop|Out-Null}catch{$manualError=$_.Exception.Message}
+    Assert-True ($manualError -match 'Docker Linux engine' -and -not(Test-Path -LiteralPath $desktopLog)) 'manual start did not fail without opening Desktop'
+    $recovered=(& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -Background -LoginRecovery -NoWindowsChannels -DockerPath $recoveryDocker -DockerDesktopPath $desktopExe -DockerReadyTimeoutSeconds 3 -HealthAttempts 3|Out-String|ConvertFrom-Json)
+    Assert-True ($recovered.status -eq 'started' -and (Test-Path -LiteralPath $recoveryMarker)) 'login recovery did not start fake Desktop and restore Lite'
+    Assert-True (@(Get-Content -LiteralPath $desktopLog).Count -eq 1) 'login recovery launched Desktop more than once'
+    Remove-Item -LiteralPath $recoveryMarker -Force
+    $timeoutError=''
+    try{& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -Background -LoginRecovery -NoWindowsChannels -DockerPath $recoveryDocker -DockerDesktopPath $desktopExe -DockerReadyTimeoutSeconds 1 -HealthAttempts 1 -ErrorAction Stop|Out-Null}catch{$timeoutError=$_.Exception.Message}
+    Assert-True ($timeoutError -match '等待上限 1 秒' -and @(Get-Content -LiteralPath $desktopLog).Count -eq 1) ("login recovery timeout or existing Desktop process guard failed: error=$timeoutError; starts="+@(Get-Content -LiteralPath $desktopLog).Count)
+    Assert-True ((Get-Content -LiteralPath $dockerLog -Raw) -notmatch '(^|\s)down(\s|$)|(^|\s)-v(\s|$)') 'recovery attempted destructive Docker action'
+    foreach($desktopProcess in @(Get-TestOwnedProcesses -Root $testRoot|Where-Object{$_.ExecutablePath -eq $desktopExe})){Stop-Process -Id ([int]$desktopProcess.ProcessId) -Force -ErrorAction SilentlyContinue}
     foreach($n in 1..20){if(-not @(Get-TestOwnedProcesses -Root $testRoot).Count){break};Start-Sleep -Milliseconds 50}
     Assert-True (@(Get-TestOwnedProcesses -Root $testRoot).Count -eq 0) 'fake viewer did not exit after isolated start'
+    if($RecoveryOnly){
+        [ordered]@{schemaVersion=1;status='passed';loginRecovery=$true;manualFastFailure=$true;desktopSingleInstance=$true;boundedTimeout=$true;hangingProbeBounded=$true;remoteContextRejected=$true;unknownContextRejected=$true;missingDockerCliRejected=$true;windowsEngineRejected=$true;realDockerTouched=$false;realDesktopTouched=$false;realStartupTouched=$false}|ConvertTo-Json -Depth 4
+        return
+    }
     $requests=@(Get-Content -LiteralPath $requestLog)
     Assert-True ($requests.Count -ge 2) 'authenticated state was not checked for both channels'
     $dockerCalls=Get-Content -LiteralPath $dockerLog -Raw
@@ -263,6 +421,9 @@ throw 'Unexpected fake Docker arguments'
         if([int]$process.ProcessId -ne $PID){Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue}
     }
     Remove-Item Env:QICHENG_LITE_FAKE_DOCKER_LOG -ErrorAction SilentlyContinue
+    Remove-Item Env:QICHENG_LITE_FAKE_DOCKER_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:QICHENG_LITE_FAKE_DESKTOP_MARKER -ErrorAction SilentlyContinue
+    Remove-Item Env:QICHENG_LITE_FAKE_DESKTOP_LOG -ErrorAction SilentlyContinue
     Remove-Item Env:QICHENG_LITE_EXPORT_DOCKER_LOG -ErrorAction SilentlyContinue
     if(Test-Path -LiteralPath $testRoot){Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue}
 }

@@ -160,7 +160,7 @@ try{
     $backgroundArgs='-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$startScript+'" -Background'
     New-Link (Join-Path $startMenuRoot '启程轻量工作台.lnk') $powershell $backgroundArgs
     New-Link (Join-Path $desktopRoot '启程轻量工作台.lnk') $powershell $backgroundArgs
-    New-Link (Join-Path $startupRoot '启程轻量工作台.lnk') $powershell $backgroundArgs
+    New-Link (Join-Path $startupRoot '启程轻量工作台.lnk') $powershell ($backgroundArgs+' -LoginRecovery')
     New-Link (Join-Path $startMenuRoot '管理启程轻量工作台.lnk') $powershell ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$startScript+'"')
     New-Link (Join-Path $startMenuRoot '诊断启程轻量工作台.lnk') $powershell ('-NoExit -NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path $installRoot 'Diagnose-Qicheng-Lite.ps1')+'"')
     New-Link (Join-Path $startMenuRoot '取回频道一下载文件.lnk') $powershell ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+(Join-Path $installRoot 'Export-Downloads.ps1')+'" -Channel 1 -Open')

@@ -111,8 +111,8 @@
                   },
                   {
                       "path":  "tools/agent-channels/windows/Channels.cs",
-                      "bytes":  32537,
-                      "sha256":  "6294895b665758427f3a3f086df8cddccc3f14cc2b7342fc7db543e9608d7298"
+                      "bytes":  36345,
+                      "sha256":  "6b7ddddce054fbae4b0208853a97b250dd95af9bc99ee61e15e7bd37cf91d362"
                   },
                   {
                       "path":  "tools/agent-channels/windows/Skin.cs",
@@ -151,8 +151,8 @@
                   },
                   {
                       "path":  "tools/agent-channels/product/QUICKSTART.zh-CN.md",
-                      "bytes":  5034,
-                      "sha256":  "55338111c33a96e7731225d6e139af7079fb6c9eb2d7569be66c32baa877e649"
+                      "bytes":  5560,
+                      "sha256":  "e214bf9d51fab69bd37af35902a04af5c5f5e76eb65dbb6f475def0cd2eca255"
                   },
                   {
                       "path":  "tools/agent-channels/product/Source-Allowlist.psd1",
@@ -176,13 +176,13 @@
                   },
                   {
                       "path":  "tools/agent-channels/product/runtime/Install-Qicheng-Lite.ps1",
-                      "bytes":  15742,
-                      "sha256":  "ac49685d60ff86c24c6b219772c72533a15738e2380b1586bfa5956341e3bfb4"
+                      "bytes":  15762,
+                      "sha256":  "5c001ab6a74c865b8bd7d2139cede52e7a556202cee40aea1db3c5f0c6da5df6"
                   },
                   {
                       "path":  "tools/agent-channels/product/runtime/Start-Qicheng-Lite.ps1",
-                      "bytes":  4527,
-                      "sha256":  "f243181e41345830b46e268363d4232fec91ee1fd353ce804b0350ae42bdca59"
+                      "bytes":  10256,
+                      "sha256":  "bf1ae7dd1f5fa202b626637ca228ae3b6d4bb2395b56f8fe6fd4d30fe9c05562"
                   },
                   {
                       "path":  "tools/agent-channels/product/runtime/Diagnose-Qicheng-Lite.ps1",
@@ -221,8 +221,8 @@
                   },
                   {
                       "path":  "tools/agent-channels/product/tests/Test-ProductPackage.ps1",
-                      "bytes":  24918,
-                      "sha256":  "7810ce59bb1d150c6a99e7558ac623537ba67c01cc2361152a3a43d87fc4edf2"
+                      "bytes":  38291,
+                      "sha256":  "f1a2cbc881c108a3958ed3b80061a8ebd899fce744a03f08484746b5f8c12628"
                   },
                   {
                       "path":  "tools/agent-channels/product/tests/Test-LegacyStartupDiagnosis.ps1",

@@ -166,8 +166,8 @@
                   {
                       "path":  "tools/windows-channels/viewer/Viewer.cs",
                       "kind":  "source",
-                      "bytes":  89952,
-                      "sha256":  "e73a20d910890d486886eab87730b5865c9583f362f58d4b70d48f711b3df41b"
+                      "bytes":  92846,
+                      "sha256":  "2867636f6241be9327382b1a0bc7cff49ec7ad0a9aaa39902c7c1b6b0825f389"
                   },
                   {
                       "path":  "tools/windows-channels/viewer/Build.ps1",
@@ -382,8 +382,8 @@
                   {
                       "path":  "tools/windows-channels/product/tests/Test-ProductPackage.ps1",
                       "kind":  "source",
-                      "bytes":  58655,
-                      "sha256":  "0f80ed4c2ba75e6ee62692aa2c00de91fed962086bfccfb790134d3f3b35a9bb"
+                      "bytes":  58713,
+                      "sha256":  "4bfeece78414829b8e1b594ec0c38262de6a98f0c54ebca05cd8b3fd867acb47"
                   },
                   {
                       "path":  "tools/windows-channels/theme/ai-space.png",

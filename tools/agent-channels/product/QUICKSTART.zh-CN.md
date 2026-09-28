@@ -4,7 +4,7 @@
 
 ## 先确认依赖
 
-轻量版需要已经可用的 Docker Linux engine。安装包不包含 Docker Desktop，也不声称 Docker Desktop 开源或无条件免费。首次构建容器镜像需要联网访问官方 Python 镜像与 Debian HTTPS 软件源；后续启动可复用本机镜像。
+轻量版需要 Docker Linux engine。安装包不包含 Docker Desktop，也不声称 Docker Desktop 开源或无条件免费。首次构建容器镜像需要联网访问官方 Python 镜像与 Debian HTTPS 软件源；后续启动可复用本机镜像。
 
 轻量版启动器运行在 Windows 宿主，需要系统 .NET Framework 4.x。发布包已经带有编译好的 `dist/AgentChannels.exe`，普通安装不需要重新编译；公开源码可用 `source/Build.ps1` 重建。
 
@@ -27,7 +27,7 @@
 
 第一条只显示计划；第二条才执行。token 必须是 64 位小写十六进制，复制后只允许当前用户和 SYSTEM 访问，值不会进入输出或 manifest。
 
-默认从托盘后台启动查看器（`--background`）。桌面、普通开始菜单和登录启动项都使用隐藏 PowerShell；“管理启程轻量工作台”用于打开可见管理界面。
+默认从托盘后台启动查看器（`--background`）。桌面、普通开始菜单和登录启动项都使用隐藏 PowerShell；“管理启程轻量工作台”用于打开可见管理界面。登录启动项会在确认本机 Docker 管道后、Linux engine 尚未就绪时启动本机已安装的 Docker Desktop，从首次探测起最多等待 120 秒；若仍不可用，则明确报错且不启动后端和查看器。Docker CLI 缺失或当前 endpoint 无法确认时不会启动 Desktop；远端 Docker context 和 Windows engine 也会被拒绝。它不会修改 Docker Desktop 自启动设置、接受许可或停止其他容器。桌面和开始菜单的手动入口仍要求 engine 已经可用，以便快速发现错误。
 
 为避免两套产品同时注册全局 Alt 快捷键，双击安装会停用**精确名为**“启程 Windows 频道.lnk”的旧当前用户 Startup 快捷方式，并把原文件备份到轻量版 DataRoot。不会改其他启动项，也不会杀进程。开始菜单“恢复旧 Windows 频道自启动”可恢复备份；目标已存在时拒绝覆盖。
 

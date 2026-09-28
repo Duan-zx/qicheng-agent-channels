@@ -333,7 +333,7 @@ if ($env:QICHENG_TEST_PROVISIONER_MARKER) { Set-Content -LiteralPath $env:QICHEN
     $viewerProcess = Start-Process -FilePath $installedViewer -ArgumentList $selfArgs -WorkingDirectory $installRoot -Wait -PassThru
     Assert-True ($viewerProcess.ExitCode -eq 0) 'Installed viewer self-test failed.'
     $viewerSelfTest = Get-Content -LiteralPath $selfTestPath -Raw | ConvertFrom-Json
-    Assert-True ($viewerSelfTest.arguments_valid -and $viewerSelfTest.project_count -eq 2 -and -not $viewerSelfTest.gui_tested) 'Installed viewer self-test output is invalid.'
+    Assert-True ($viewerSelfTest.arguments_valid -and $viewerSelfTest.project_count -eq 2 -and $viewerSelfTest.host_return_pipe -and -not $viewerSelfTest.gui_tested) 'Installed viewer self-test or hidden host-return pipe is invalid.'
     if ($RunHotkeyIntegration) {
         $previousScope = [Environment]::GetEnvironmentVariable('QICHENG_WINDOWS_VIEWER_TEST_SCOPE')
         $env:QICHENG_WINDOWS_VIEWER_TEST_SCOPE = [guid]::NewGuid().ToString('N')

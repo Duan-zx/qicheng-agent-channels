@@ -119,6 +119,7 @@ sealed class ViewerRequest {
     public int[] Channels;
     public bool Show;
     public string StatusPath;
+    public bool ReturnToHost;
 }
 
 static class ViewerInstance {
@@ -146,7 +147,7 @@ static class ViewerControl {
             using (StreamWriter writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true }) {
                 writer.WriteLine(new JavaScriptSerializer().Serialize(new ViewerRequest {
                     ConfigPath = options.ConfigPath, HostEnabled = map.HostEnabled, Channels = map.Channels,
-                    Show = options.ShowOnStart, StatusPath = options.HotkeyStatusPath
+                    Show = options.ShowOnStart, StatusPath = options.HotkeyStatusPath, ReturnToHost = false
                 }));
                 Task<string> responseRead = Task.Factory.StartNew(delegate { return reader.ReadLine(); });
                 if (!responseRead.Wait(15000)) throw new TimeoutException("control-response-timeout");
@@ -688,10 +689,12 @@ sealed class ViewerForm : Form {
     bool controlTransition;
     bool immersive;
     bool controlsHidden;
+    readonly bool isolatedSelfTest;
     string mode = "paused";
 
     internal ViewerForm(ViewerOptions options, ConfigurationSnapshot configuration) {
         this.configuration = configuration;
+        isolatedSelfTest = options.SelfTestPath != null;
         hotkeys = options.HotkeysFor(configuration.Bindings.Count);
         hotkeyStatusPath = options.HotkeyStatusPath;
         workingDirectory = SetupLauncher.InstallRoot();
@@ -872,13 +875,13 @@ sealed class ViewerForm : Form {
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("运行设置", null, delegate { LaunchSetup(); });
         menu.Items.Add("退出", null, delegate { exiting = true; Close(); });
-        tray.Icon = SystemIcons.Application; tray.Text = "启程 · Windows 频道"; tray.Visible = true; tray.ContextMenuStrip = menu;
+        tray.Icon = SystemIcons.Application; tray.Text = "启程 · Windows 频道"; tray.Visible = !isolatedSelfTest; tray.ContextMenuStrip = menu;
         tray.DoubleClick += delegate { ShowManagement(true); };
     }
 
     protected override void OnHandleCreated(EventArgs e) {
         base.OnHandleCreated(e);
-        RegisterShortcuts();
+        if (!isolatedSelfTest) RegisterShortcuts();
     }
 
     void RegisterShortcuts() {
@@ -912,6 +915,9 @@ sealed class ViewerForm : Form {
     }
 
     internal bool ApplyRequest(ViewerRequest request) {
+        // Lite can return both viewers to the host without knowing this viewer's private configuration.
+        // The pipe itself only grants access to the current Windows user.
+        if (request != null && request.ReturnToHost) { ShowLocal(true); return true; }
         if (request == null || !String.Equals(request.ConfigPath, configuration.Path, StringComparison.OrdinalIgnoreCase) ||
             request.Channels == null || request.Channels.Length != configuration.Bindings.Count) return false;
         HashSet<int> digits = new HashSet<int>();
@@ -942,6 +948,40 @@ sealed class ViewerForm : Form {
         WriteHotkeyStatus(request.StatusPath);
         if (request.Show) ShowManagement(true);
         return true;
+    }
+
+    // A hidden form and a random test-scoped pipe exercise the real receiver without a VM or visible shell.
+    internal bool SelfTestHostReturnPipe() {
+        int before = generation;
+        ViewerControl.Serve(this);
+        Task<string> rejected = SendSelfTestRequest("{\"ReturnToHost\":false}");
+        if (!PumpSelfTestReply(rejected) || rejected.Result != "rejected" || generation != before) return false;
+        Task<string> accepted = SendSelfTestRequest("{\"ReturnToHost\":true}");
+        return PumpSelfTestReply(accepted) && accepted.Result == "ok" &&
+            generation == before + 1 && selectedProject == -1 && !Visible &&
+            status.Text.StartsWith("已返回本机工作台", StringComparison.Ordinal);
+    }
+
+    static Task<string> SendSelfTestRequest(string payload) {
+        return Task.Factory.StartNew(delegate() {
+            using (NamedPipeClientStream pipe = new NamedPipeClientStream(".", ViewerControl.PipeName, PipeDirection.InOut)) {
+                pipe.Connect(1000);
+                using (StreamReader reader = new StreamReader(pipe, Encoding.UTF8))
+                using (StreamWriter writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true }) {
+                    writer.WriteLine(payload);
+                    return reader.ReadLine();
+                }
+            }
+        });
+    }
+
+    static bool PumpSelfTestReply(Task response) {
+        Stopwatch deadline = Stopwatch.StartNew();
+        while (!response.IsCompleted && deadline.ElapsedMilliseconds < 2500) {
+            Application.DoEvents();
+            Thread.Sleep(5);
+        }
+        return response.IsCompleted && !response.IsFaulted;
     }
 
     void RegisterShortcut(int id, int digit) {
@@ -1475,6 +1515,15 @@ static class ViewerApp {
                 try { ViewerOptions.Parse(new string[] { "--config", options.ConfigPath, "--python", options.PythonPath, "--channel-hotkeys", "4" }).HotkeysFor(2); }
                 catch (ArgumentException) { countRejected = true; }
                 hotkeyMapValid = hotkeyMapValid && duplicateRejected && hostConflictRejected && countRejected;
+                bool hostReturnPipe = false;
+                string previousScope = Environment.GetEnvironmentVariable("QICHENG_WINDOWS_VIEWER_TEST_SCOPE");
+                Environment.SetEnvironmentVariable("QICHENG_WINDOWS_VIEWER_TEST_SCOPE", Guid.NewGuid().ToString("N"));
+                try {
+                    using (ViewerForm hidden = new ViewerForm(options, configuration)) {
+                        hidden.InitializeHidden(false);
+                        hostReturnPipe = hidden.SelfTestHostReturnPipe();
+                    }
+                } finally { Environment.SetEnvironmentVariable("QICHENG_WINDOWS_VIEWER_TEST_SCOPE", previousScope); }
                 string body = "{\"arguments_valid\":true,\"project_count\":" + configuration.Bindings.Count +
                     ",\"quoting_valid\":" + (quoteOk ? "true" : "false") +
                     ",\"changed_config_refused\":" + (changedConfigRefused ? "true" : "false") +
@@ -1484,12 +1533,13 @@ static class ViewerApp {
                     ",\"host_hotkey_enabled\":" + (activeHotkeys.HostEnabled ? "true" : "false") +
                     ",\"channel_hotkeys\":[" + String.Join(",", Array.ConvertAll(activeHotkeys.Channels, x => x.ToString())) + "]" +
                     ",\"hotkey_map_valid\":" + (hotkeyMapValid ? "true" : "false") +
+                    ",\"host_return_pipe\":" + (hostReturnPipe ? "true" : "false") +
                     ",\"default_hidden\":" + (!options.ShowOnStart ? "true" : "false") +
                     ",\"dynamic_hotkeys\":true,\"immersive_shell\":true" +
                     ",\"single_instance_designed\":true,\"continuous_refresh_designed\":true" +
                     ",\"cli_invoked\":false,\"gui_tested\":false}";
                 File.WriteAllText(options.SelfTestPath, body, new UTF8Encoding(false));
-                Environment.Exit(quoteOk && changedConfigRefused && responsiveLayout && humanInputRouted && showFlagParsed && hotkeyMapValid ? 0 : 1);
+                Environment.Exit(quoteOk && changedConfigRefused && responsiveLayout && humanInputRouted && showFlagParsed && hotkeyMapValid && hostReturnPipe ? 0 : 1);
                 return;
             }
             using (EventWaitHandle activation = new EventWaitHandle(false, EventResetMode.AutoReset, ViewerInstance.ActivationName)) {
