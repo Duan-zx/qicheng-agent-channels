@@ -1,7 +1,7 @@
 """Fail-closed client for the loopback task lease broker.
 
-One MCP process owns one request identity and at most one lease. A failed or
-uncertain HTTP exchange permanently ends that process's input session.
+One MCP process owns at most one lease at a time. A confirmed release permits
+a new request identity; a failed or uncertain exchange ends the process's input.
 """
 
 import http.client
@@ -28,6 +28,13 @@ _MAX_RESPONSE = 16384
 _TIMEOUT = 5
 _TTL = 30
 _HEARTBEAT_INTERVAL = 10
+
+
+def _new_id(previous=None):
+    value = 'mcp-' + secrets.token_hex(16)
+    while value == previous:
+        value = 'mcp-' + secrets.token_hex(16)
+    return value
 
 
 def _input(action, fields):
@@ -78,8 +85,8 @@ class BrokerClient:
         self.credential = credential
         self.channel_id = channel_id
         self.expected_guest_identity = dict(expected_guest_identity)
-        self.request_id = 'mcp-' + secrets.token_hex(16)
-        self.task_id = 'mcp-' + secrets.token_hex(16)
+        self.request_id = _new_id()
+        self.task_id = _new_id()
         self.connection_factory = connection_factory or http.client.HTTPConnection
         self.clock = monotonic or time.monotonic
         self.phase = 'fresh'
@@ -124,10 +131,10 @@ class BrokerClient:
             self.deadline = None
             self._stop_heartbeat.set()
 
-    def _heartbeat(self):
-        while not self._stop_heartbeat.wait(_HEARTBEAT_INTERVAL):
+    def _heartbeat(self, stop_event):
+        while not stop_event.wait(_HEARTBEAT_INTERVAL):
             with self._lock:
-                if self.phase != 'active':
+                if self._stop_heartbeat is not stop_event or self.phase != 'active':
                     return
                 try:
                     self._renew_if_needed()
@@ -156,9 +163,14 @@ class BrokerClient:
 
     def begin(self):
         with self._lock:
-            if self.phase != 'fresh':
+            if self.phase not in ('fresh', 'finished'):
                 raise RuntimeError('Broker session cannot begin again')
             try:
+                if self.phase == 'finished':
+                    self.request_id = _new_id(self.request_id)
+                    self.task_id = _new_id(self.task_id)
+                    self._stop_heartbeat = threading.Event()
+                    self._heartbeat_thread = None
                 started = self.clock()
                 value = self._post('/v1/acquire', dict(
                     request_id=self.request_id, task_id=self.task_id,
@@ -166,7 +178,8 @@ class BrokerClient:
                 self._lease(value, started)
                 self.phase = 'active'
                 self._heartbeat_thread = threading.Thread(
-                    target=self._heartbeat, name='broker-lease-renew', daemon=True)
+                    target=self._heartbeat, args=(self._stop_heartbeat,),
+                    name='broker-lease-renew', daemon=True)
                 self._heartbeat_thread.start()
                 return {'session': 'active', 'channel_id': self.channel_id,
                         'expires_at': value['expires_at']}

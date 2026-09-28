@@ -33,34 +33,56 @@ class Connection:
         assert method == 'POST'
         assert headers['Authorization'] == 'Bearer ' + self.owner.credential
         assert headers['Content-Length'] == str(len(body))
+        self.path, self.body = path, json.loads(body)
         self.owner.raw_bodies.append((path, body))
-        self.owner.calls.append((path, json.loads(body)))
+        self.owner.calls.append((path, self.body))
         if path == '/v1/renew':
             self.owner.renew_sent.set()
 
     def getresponse(self):
         if self.owner.fail:
             raise ConnectionError('lost response')
-        path, body = self.owner.calls[-1]
+        path, body = self.path, self.body
         if path == '/v1/renew' and self.owner.block_renew:
             self.owner.renew_release.wait(1)
+        if path == '/v1/release' and self.owner.block_release:
+            self.owner.release_sent.set()
+            self.owner.release_continue.wait(1)
+        if path == '/v1/release' and self.owner.fail_release:
+            raise ConnectionError('release response lost')
         if self.owner.fail_ack and path == '/v1/ack':
             raise ConnectionError('ack response lost')
         if self.owner.reject_input and path == '/v1/input':
             return Response({'ok': False, 'error': 'guest_dirty'}, status=409)
-        if path == '/v1/acquire' or path == '/v1/renew':
-            return Response(dict(request_id=self.owner.client.request_id,
-                                 task_id=self.owner.client.task_id,
-                                 channel_id='channel-A', generation=1,
-                                 expires_at=123456.0,
-                                 guest_identity=self.owner.response_identity,
-                                 token='b' * 64))
+        if path == '/v1/acquire':
+            self.owner.generation += 1
+            self.owner.lease = dict(request_id=body['request_id'],
+                                    task_id=body['task_id'],
+                                    channel_id=body['channel_id'],
+                                    generation=self.owner.generation,
+                                    expires_at=123456.0,
+                                    guest_identity=dict(self.owner.response_identity),
+                                    token=f'{self.owner.generation:064x}')
+            return Response(self.owner.stale_acquire_response or self.owner.lease)
+        if path == '/v1/renew':
+            if (self.owner.lease is None
+                    or body['token'] != self.owner.lease['token']):
+                return Response({'error': 'lease_unavailable'}, status=409)
+            renewed = dict(self.owner.lease,
+                           guest_identity=dict(self.owner.response_identity))
+            self.owner.lease = renewed
+            return Response(self.owner.stale_renew_response or renewed)
         if path == '/v1/input':
             return Response({'ok': True, 'action': body['action']})
         if path == '/v1/ack':
             return Response({'ok': True, 'action_id': body['action_id']})
-        return Response({'released': {'request_id': self.owner.client.request_id,
-                                      'channel_id': 'channel-A'}})
+        if self.owner.lease is None or body['token'] != self.owner.lease['token']:
+            return Response({'error': 'lease_unavailable'}, status=409)
+        released = {'request_id': self.owner.lease['request_id'],
+                    'channel_id': self.owner.lease['channel_id']}
+        self.owner.last_released_lease = self.owner.lease
+        self.owner.lease = None
+        return Response({'released': self.owner.stale_release_response or released})
 
     def close(self):
         pass
@@ -75,12 +97,22 @@ class BrokerClientTests(unittest.TestCase):
         self.token_file.write_text(self.credential, encoding='ascii')
         self.calls = []
         self.raw_bodies = []
+        self.generation = 0
+        self.lease = None
+        self.last_released_lease = None
+        self.stale_acquire_response = None
+        self.stale_renew_response = None
+        self.stale_release_response = None
         self.fail = False
         self.fail_ack = False
         self.reject_input = False
         self.renew_sent = threading.Event()
         self.renew_release = threading.Event()
         self.block_renew = False
+        self.block_release = False
+        self.fail_release = False
+        self.release_sent = threading.Event()
+        self.release_continue = threading.Event()
         self.now = [0.0]
         self.identity = {'vm_id': '00000000-0000-0000-0000-00000000000a',
                          'bios_uuid': '00000000-0000-0000-0000-00000000000b',
@@ -111,7 +143,178 @@ class BrokerClientTests(unittest.TestCase):
         self.client.finish()
         self.assertEqual('finished', self.client.phase)
         self.assertEqual('/v1/release', self.calls[-1][0])
+        first_request_id = self.client.request_id
+        first_task_id = self.client.task_id
+        first_stop_event = self.client._stop_heartbeat
+        self.client.begin()
+        self.assertNotEqual(first_request_id, self.client.request_id)
+        self.assertNotEqual(first_task_id, self.client.task_id)
+        self.assertIsNot(first_stop_event, self.client._stop_heartbeat)
+        self.assertTrue(first_stop_event.is_set())
+        self.assertEqual(self.client.request_id, self.calls[-1][1]['request_id'])
+        self.assertEqual(self.client.task_id, self.calls[-1][1]['task_id'])
+        self.client.input('move', x=3, y=4)
+        self.client.finish()
+        self.assertEqual(['/v1/acquire', '/v1/input', '/v1/ack',
+                          '/v1/input', '/v1/ack', '/v1/release',
+                          '/v1/acquire', '/v1/input', '/v1/ack', '/v1/release'],
+                         [path for path, _ in self.calls])
+
+    def test_previous_heartbeat_cannot_renew_a_new_session(self):
+        class TimedOutEvent:
+            def __init__(self):
+                self.waiting = threading.Event()
+                self.resume = threading.Event()
+                self.passed_wait = threading.Event()
+                self.stopped = threading.Event()
+                self.first_wait = True
+
+            def wait(self, timeout):
+                if self.first_wait:
+                    self.first_wait = False
+                    self.waiting.set()
+                    if not self.resume.wait(1):
+                        raise AssertionError('old heartbeat wait was not released')
+                    self.passed_wait.set()
+                    return False  # Timeout won the race with finish() setting stop.
+                return self.stopped.wait(timeout)
+
+            def set(self):
+                self.stopped.set()
+
+        class ObservedLock:
+            def __init__(self, old_thread):
+                self.lock = threading.RLock()
+                self.old_thread = old_thread
+                self.old_attempted = threading.Event()
+
+            def __enter__(self):
+                if threading.current_thread() is self.old_thread:
+                    self.old_attempted.set()
+                self.lock.acquire()
+                return self
+
+            def __exit__(self, *_):
+                self.lock.release()
+
+        old_event = TimedOutEvent()
+        self.client._stop_heartbeat = old_event
+        self.client.begin()
+        old_thread = self.client._heartbeat_thread
+        self.assertTrue(old_event.waiting.wait(1))
+        observed_lock = ObservedLock(old_thread)
+        self.client._lock = observed_lock
+        with observed_lock:
+            old_event.resume.set()
+            self.assertTrue(old_event.passed_wait.wait(1))
+            self.assertTrue(observed_lock.old_attempted.wait(1))
+            self.assertTrue(old_thread.is_alive())
+            self.client.finish()
+            self.client.begin()
+            self.now[0] = 17.0
+        old_thread.join(1)
+        self.assertFalse(old_thread.is_alive())
+        self.assertEqual(0, len([p for p, _ in self.calls if p == '/v1/renew']))
+        self.client.input('move', x=1, y=2)
+        self.assertEqual(1, len([p for p, _ in self.calls if p == '/v1/renew']))
+
+    def test_failed_second_acquire_is_permanently_dead(self):
+        self.client.begin()
+        self.client.finish()
+        self.fail = True
         with self.assertRaises(RuntimeError): self.client.begin()
+        self.assertEqual('dead', self.client.phase)
+        self.fail = False
+        with self.assertRaises(RuntimeError): self.client.begin()
+        self.assertEqual(2, len([p for p, _ in self.calls if p == '/v1/acquire']))
+
+    def test_stale_acquire_response_from_previous_session_is_fatal(self):
+        self.client.begin()
+        self.client.finish()
+        previous = dict(self.last_released_lease)
+        self.stale_acquire_response = previous
+        with self.assertRaises(RuntimeError): self.client.begin()
+        self.assertNotEqual(previous['request_id'], self.calls[-1][1]['request_id'])
+        self.assertEqual('dead', self.client.phase)
+        with self.assertRaises(RuntimeError): self.client.begin()
+
+    def test_stale_renew_response_from_previous_session_is_fatal(self):
+        self.client.begin()
+        self.client.finish()
+        self.stale_renew_response = dict(self.last_released_lease)
+        self.client.begin()
+        self.now[0] = 17.0
+        with self.assertRaises(RuntimeError): self.client.input('move', x=1, y=2)
+        self.assertEqual('dead', self.client.phase)
+        self.assertEqual(['/v1/acquire', '/v1/release', '/v1/acquire', '/v1/renew'],
+                         [path for path, _ in self.calls])
+
+    def test_active_begin_never_acquires_a_second_lease(self):
+        self.client.begin()
+        with self.assertRaises(RuntimeError): self.client.begin()
+        self.assertEqual('active', self.client.phase)
+        self.assertEqual(1, len([p for p, _ in self.calls if p == '/v1/acquire']))
+        self.client.finish()
+
+    def test_second_session_lost_ack_forbids_a_third_begin(self):
+        self.client.begin()
+        self.client.finish()
+        self.client.begin()
+        self.fail_ack = True
+        with self.assertRaises(RuntimeError): self.client.input('key', key='Return')
+        self.assertEqual('dead', self.client.phase)
+        with self.assertRaises(RuntimeError): self.client.begin()
+        self.assertEqual(2, len([p for p, _ in self.calls if p == '/v1/acquire']))
+
+    def test_uncertain_release_is_permanently_dead(self):
+        self.client.begin()
+        self.fail_release = True
+        with self.assertRaises(RuntimeError): self.client.finish()
+        self.assertEqual('dead', self.client.phase)
+        with self.assertRaises(RuntimeError): self.client.begin()
+        self.assertEqual(1, len([p for p, _ in self.calls if p == '/v1/acquire']))
+
+    def test_stale_release_response_from_previous_session_is_fatal(self):
+        self.client.begin()
+        self.client.finish()
+        previous = self.last_released_lease
+        self.client.begin()
+        self.stale_release_response = {
+            'request_id': previous['request_id'],
+            'channel_id': previous['channel_id']}
+        with self.assertRaises(RuntimeError): self.client.finish()
+        self.assertEqual('dead', self.client.phase)
+        with self.assertRaises(RuntimeError): self.client.begin()
+        self.assertEqual(2, len([p for p, _ in self.calls if p == '/v1/acquire']))
+
+    def test_begin_waits_for_confirmed_release(self):
+        self.client.begin()
+        self.block_release = True
+        completed = threading.Event()
+        outcomes = []
+
+        def release():
+            outcomes.append(self.client.finish())
+
+        def acquire():
+            outcomes.append(self.client.begin())
+            completed.set()
+
+        finisher = threading.Thread(target=release)
+        beginner = threading.Thread(target=acquire)
+        finisher.start()
+        self.assertTrue(self.release_sent.wait(1))
+        beginner.start()
+        self.assertFalse(completed.wait(0.03))
+        self.assertEqual(1, len([p for p, _ in self.calls if p == '/v1/acquire']))
+        self.release_continue.set()
+        finisher.join(1)
+        beginner.join(1)
+        self.assertFalse(finisher.is_alive())
+        self.assertFalse(beginner.is_alive())
+        self.assertEqual(['finished', 'active'], [x['session'] for x in outcomes])
+        self.assertEqual(['/v1/acquire', '/v1/release', '/v1/acquire'],
+                         [p for p, _ in self.calls])
 
     def test_lost_input_response_ends_session_without_retry(self):
         self.client.begin()
