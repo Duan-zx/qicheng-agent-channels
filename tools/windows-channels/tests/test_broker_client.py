@@ -26,8 +26,9 @@ class Response:
 
 class Connection:
     def __init__(self, owner, host, port, timeout):
-        assert (host, port, timeout) == ('127.0.0.1', 18770, 5)
+        assert (host, port) == ('127.0.0.1', 18770)
         self.owner = owner
+        self.timeout = timeout
 
     def request(self, method, path, body, headers):
         assert method == 'POST'
@@ -36,6 +37,7 @@ class Connection:
         self.path, self.body = path, json.loads(body)
         self.owner.raw_bodies.append((path, body))
         self.owner.calls.append((path, self.body))
+        self.owner.timeouts.append((path, self.timeout))
         if path == '/v1/renew':
             self.owner.renew_sent.set()
 
@@ -43,6 +45,8 @@ class Connection:
         if self.owner.fail:
             raise ConnectionError('lost response')
         path, body = self.path, self.body
+        if path == '/v1/acquire' and self.owner.acquire_error is not None:
+            raise self.owner.acquire_error
         if path == '/v1/renew' and self.owner.block_renew:
             self.owner.renew_release.wait(1)
         if path == '/v1/release' and self.owner.block_release:
@@ -55,22 +59,28 @@ class Connection:
         if self.owner.reject_input and path == '/v1/input':
             return Response({'ok': False, 'error': 'guest_dirty'}, status=409)
         if path == '/v1/acquire':
+            self.owner.now[0] += self.owner.acquire_elapsed
             self.owner.generation += 1
             self.owner.lease = dict(request_id=body['request_id'],
                                     task_id=body['task_id'],
                                     channel_id=body['channel_id'],
                                     generation=self.owner.generation,
-                                    expires_at=123456.0,
+                                    expires_at=self.owner.now[0] + 30.0,
                                     guest_identity=dict(self.owner.response_identity),
                                     token=f'{self.owner.generation:064x}')
-            return Response(self.owner.stale_acquire_response or self.owner.lease)
+            payload = (self.owner.acquire_payload if self.owner.acquire_payload is not None
+                       else self.owner.stale_acquire_response or self.owner.lease)
+            self.owner.now[0] += self.owner.acquire_response_delay
+            return Response(payload, status=self.owner.acquire_status)
         if path == '/v1/renew':
             if (self.owner.lease is None
                     or body['token'] != self.owner.lease['token']):
                 return Response({'error': 'lease_unavailable'}, status=409)
             renewed = dict(self.owner.lease,
+                           expires_at=self.owner.now[0] + 30.0,
                            guest_identity=dict(self.owner.response_identity))
             self.owner.lease = renewed
+            self.owner.now[0] += self.owner.renew_response_delay
             return Response(self.owner.stale_renew_response or renewed)
         if path == '/v1/input':
             return Response({'ok': True, 'action': body['action']})
@@ -97,10 +107,17 @@ class BrokerClientTests(unittest.TestCase):
         self.token_file.write_text(self.credential, encoding='ascii')
         self.calls = []
         self.raw_bodies = []
+        self.timeouts = []
         self.generation = 0
         self.lease = None
         self.last_released_lease = None
         self.stale_acquire_response = None
+        self.acquire_payload = None
+        self.acquire_status = 200
+        self.acquire_error = None
+        self.acquire_elapsed = 0.0
+        self.acquire_response_delay = 0.0
+        self.renew_response_delay = 0.0
         self.stale_renew_response = None
         self.stale_release_response = None
         self.fail = False
@@ -122,7 +139,8 @@ class BrokerClientTests(unittest.TestCase):
                                    'channel-A', self.identity,
                                    connection_factory=lambda host, port, timeout:
                                    Connection(self, host, port, timeout),
-                                   monotonic=lambda: self.now[0])
+                                   monotonic=lambda: self.now[0],
+                                   wall_clock=lambda: self.now[0])
         self.addCleanup(self.client._kill)
 
     def test_explicit_begin_input_finish_and_no_token_in_results(self):
@@ -133,6 +151,8 @@ class BrokerClientTests(unittest.TestCase):
 
     def test_successful_session_and_action_ids(self):
         self.client.begin()
+        self.assertEqual(30, self.calls[0][1]['wait_seconds'])
+        self.assertEqual(('/v1/acquire', 35), self.timeouts[0])
         first = self.client.input('key', key='Enter')
         second = self.client.input('click', x=1, y=2)
         self.assertNotEqual(first['action_id'], second['action_id'])
@@ -140,6 +160,8 @@ class BrokerClientTests(unittest.TestCase):
         self.assertEqual(['/v1/acquire', '/v1/input', '/v1/ack',
                           '/v1/input', '/v1/ack'],
                          [path for path, _ in self.calls])
+        self.assertTrue(all(timeout == 5 for path, timeout in self.timeouts
+                            if path != '/v1/acquire'))
         self.client.finish()
         self.assertEqual('finished', self.client.phase)
         self.assertEqual('/v1/release', self.calls[-1][0])
@@ -159,6 +181,91 @@ class BrokerClientTests(unittest.TestCase):
                           '/v1/input', '/v1/ack', '/v1/release',
                           '/v1/acquire', '/v1/input', '/v1/ack', '/v1/release'],
                          [path for path, _ in self.calls])
+
+    def test_explicit_queue_bounds_and_local_validation(self):
+        for wait, timeout in ((0, 5), (300, 305)):
+            with self.subTest(wait=wait):
+                self.client.begin(wait_seconds=wait)
+                self.assertEqual(wait, self.calls[-1][1]['wait_seconds'])
+                self.assertEqual(('/v1/acquire', timeout), self.timeouts[-1])
+                self.client.finish()
+        count = len(self.calls)
+        for invalid in (True, 1.5, -1, 301, '30', None):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.client.begin(wait_seconds=invalid)
+        self.assertEqual('finished', self.client.phase)
+        self.assertEqual(count, len(self.calls))
+
+    def test_queued_acquire_does_not_age_new_lease(self):
+        self.acquire_elapsed = 30.0
+        self.client.begin()
+        self.assertEqual('active', self.client.phase)
+        self.assertEqual(58.0, self.client.deadline)
+        self.client.input('key', key='Return')
+        self.assertEqual(5, self.timeouts[-1][1])
+
+    def test_delayed_acquire_response_is_bounded_by_broker_expiry(self):
+        self.acquire_elapsed = 30.0
+        self.acquire_response_delay = 4.0
+        self.client.begin()
+        self.assertEqual('active', self.client.phase)
+        self.assertEqual(60.0, self.lease['expires_at'])
+        self.assertEqual(34.0, self.now[0])
+        self.assertEqual(58.0, self.client.deadline)  # 26s lease left, 2s margin.
+
+    def test_expired_acquire_response_is_terminal(self):
+        self.acquire_response_delay = 31.0
+        with self.assertRaises(RuntimeError): self.client.begin()
+        self.assertEqual('dead', self.client.phase)
+        with self.assertRaises(RuntimeError): self.client.begin()
+        self.assertEqual(['/v1/acquire'], [path for path, _ in self.calls])
+
+    def test_delayed_renew_response_is_bounded_by_broker_expiry(self):
+        self.client.begin()
+        self.now[0] = 17.0
+        self.renew_response_delay = 4.0
+        self.client.input('key', key='Return')
+        self.assertEqual(21.0, self.now[0])
+        self.assertEqual(47.0, self.lease['expires_at'])
+        self.assertEqual(45.0, self.client.deadline)
+
+    def test_expired_renew_response_is_terminal(self):
+        self.client.begin()
+        self.now[0] = 17.0
+        self.renew_response_delay = 31.0
+        with self.assertRaises(RuntimeError): self.client.input('key', key='Return')
+        self.assertEqual('dead', self.client.phase)
+        with self.assertRaises(RuntimeError): self.client.begin()
+        self.assertEqual(['/v1/acquire', '/v1/renew'],
+                         [path for path, _ in self.calls])
+
+    def test_queue_timeout_and_uncertain_acquire_are_terminal(self):
+        for failure in ('server_timeout', 'socket_timeout', 'connection_loss',
+                        'malformed_response'):
+            with self.subTest(failure=failure):
+                # A new client starts each independent failed exchange.
+                client = BrokerClient('http://127.0.0.1:18770', self.token_file,
+                                      'channel-A', self.identity,
+                                      connection_factory=lambda host, port, timeout:
+                                      Connection(self, host, port, timeout),
+                                      monotonic=lambda: self.now[0],
+                                      wall_clock=lambda: self.now[0])
+                self.addCleanup(client._kill)
+                self.acquire_status = 408 if failure == 'server_timeout' else 200
+                self.acquire_error = (TimeoutError('queue read timed out')
+                                      if failure == 'socket_timeout' else
+                                      ConnectionError('lost response')
+                                      if failure == 'connection_loss' else None)
+                self.acquire_payload = [] if failure == 'malformed_response' else None
+                before = len(self.calls)
+                with self.assertRaises(RuntimeError): client.begin()
+                self.assertEqual('dead', client.phase)
+                with self.assertRaises(RuntimeError): client.begin()
+                self.assertEqual(before + 1, len(self.calls))
+                self.assertEqual(('/v1/acquire', 35), self.timeouts[-1])
+                self.acquire_status = 200
+                self.acquire_error = None
+                self.acquire_payload = None
 
     def test_previous_heartbeat_cannot_renew_a_new_session(self):
         class TimedOutEvent:

@@ -41,12 +41,40 @@ class McpTests(unittest.TestCase):
                          ['windows_channel_state', 'windows_channel_screenshot',
                           'windows_channel_input'])
         self.assertIn('begin', tools[2]['inputSchema']['properties']['action']['enum'])
+        wait_schema = tools[2]['inputSchema']['properties']['wait_seconds']
+        self.assertEqual({'type': 'integer', 'minimum': 0, 'maximum': 300},
+                         {key: wait_schema[key] for key in ('type', 'minimum', 'maximum')})
+        self.assertIn('30 seconds', tools[2]['description'])
+        self.assertIn('confirmed finish permits a new begin', tools[2]['description'])
         bridge.tool('windows_channel_input', {'action': 'begin'})
         bridge.tool('windows_channel_input', {'action': 'key', 'key': 'Return'})
         bridge.tool('windows_channel_input', {'action': 'finish'})
         broker.begin.assert_called_once_with()
         broker.input.assert_called_once_with('key', key='Return')
         broker.finish.assert_called_once_with()
+        self.client.operation.assert_not_called()
+
+    def test_broker_wait_override_is_begin_only(self):
+        broker = Mock()
+        broker.begin.return_value = {'session': 'active'}
+        bridge = Bridge(self.client, broker)
+        bridge.tool('windows_channel_input', {'action': 'begin', 'wait_seconds': 0})
+        bridge.tool('windows_channel_input', {'action': 'begin', 'wait_seconds': 300})
+        self.assertEqual([unittest.mock.call(wait_seconds=0),
+                          unittest.mock.call(wait_seconds=300)], broker.begin.call_args_list)
+        for action in ('finish', 'key'):
+            with self.subTest(action=action), self.assertRaises(ValueError):
+                bridge.tool('windows_channel_input', {'action': action,
+                                                     'wait_seconds': 1})
+        broker.input.assert_not_called()
+        broker.finish.assert_not_called()
+        self.client.operation.assert_not_called()
+
+    def test_direct_mode_refuses_queue_argument(self):
+        with self.assertRaises(ValueError):
+            self.bridge.tool('windows_channel_input', {'action': 'key',
+                                                      'key': 'Return',
+                                                      'wait_seconds': 30})
         self.client.operation.assert_not_called()
 
     def test_broker_screenshot_is_direct_read_only_unprotected(self):
@@ -56,6 +84,9 @@ class McpTests(unittest.TestCase):
         self.client.operation.assert_called_once_with('screenshot')
         instructions = bridge.handle({'id': 1, 'method': 'initialize'})['result']['instructions']
         self.assertIn('not atomically protected', instructions)
+        self.assertIn('same-channel queue', instructions)
+        self.assertIn('confirmed finish permits a new begin', instructions)
+        self.assertIn('no host fallback', instructions.lower())
 
     def test_bounded_binary_read_and_eof(self):
         stream = io.BytesIO(b'{"id":1}\n{"id":2}\n')

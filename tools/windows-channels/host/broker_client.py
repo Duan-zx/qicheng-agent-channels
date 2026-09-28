@@ -6,6 +6,7 @@ a new request identity; a failed or uncertain exchange ends the process's input.
 
 import http.client
 import json
+import math
 import re
 import secrets
 import threading
@@ -27,6 +28,8 @@ _KEYS = frozenset(('Return', 'BackSpace', 'Tab', 'Escape', 'Delete',
 _MAX_RESPONSE = 16384
 _TIMEOUT = 5
 _TTL = 30
+_DEFAULT_WAIT_SECONDS = 30
+_MAX_WAIT_SECONDS = 300
 _HEARTBEAT_INTERVAL = 10
 
 
@@ -65,7 +68,7 @@ def _input(action, fields):
 
 class BrokerClient:
     def __init__(self, url, token_file, channel_id, expected_guest_identity,
-                 *, connection_factory=None, monotonic=None):
+                 *, connection_factory=None, monotonic=None, wall_clock=None):
         parsed = urlsplit(url)
         if (parsed.scheme != 'http' or parsed.hostname != '127.0.0.1'
                 or parsed.username or parsed.password or parsed.path not in ('', '/')
@@ -89,6 +92,7 @@ class BrokerClient:
         self.task_id = _new_id()
         self.connection_factory = connection_factory or http.client.HTTPConnection
         self.clock = monotonic or time.monotonic
+        self.wall_clock = wall_clock or time.time
         self.phase = 'fresh'
         self.lease_token = None
         self.deadline = None
@@ -96,13 +100,13 @@ class BrokerClient:
         self._stop_heartbeat = threading.Event()
         self._heartbeat_thread = None
 
-    def _post(self, path, payload):
+    def _post(self, path, payload, *, timeout=_TIMEOUT):
         # Count the actual UTF-8 HTTP bytes, not ASCII JSON escapes. A valid
         # 2000-character non-BMP text action can otherwise exceed 16 KiB here.
         body = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         if len(body) > 16384:
             raise ValueError('Broker request too large')
-        connection = self.connection_factory(self.host, self.port, timeout=_TIMEOUT)
+        connection = self.connection_factory(self.host, self.port, timeout=timeout)
         try:
             connection.request('POST', path, body=body, headers={
                 'Authorization': 'Bearer ' + self.credential,
@@ -154,27 +158,39 @@ class BrokerClient:
                 or not isinstance(value.get('token'), str)
                 or not _HEX.fullmatch(value['token'])
                 or not isinstance(value.get('expires_at'), (int, float))
-                or type(value['expires_at']) is bool):
+                or type(value['expires_at']) is bool
+                or not math.isfinite(value['expires_at'])):
             raise RuntimeError('Invalid broker lease response')
-        self.lease_token = value['token']
-        self.deadline = started + _TTL - 2
-        if self.clock() >= self.deadline:
+        now = self.clock()
+        # The broker and this client share the host wall clock. Its absolute
+        # expiry bounds a delayed HTTP response, while monotonic time keeps
+        # later local checks independent of wall-clock changes.
+        deadline = min(started + _TTL - 2,
+                       now + value['expires_at'] - self.wall_clock() - 2)
+        if now >= deadline:
             raise RuntimeError('Broker lease response arrived too late')
+        self.lease_token = value['token']
+        self.deadline = deadline
 
-    def begin(self):
+    def begin(self, wait_seconds=_DEFAULT_WAIT_SECONDS):
         with self._lock:
             if self.phase not in ('fresh', 'finished'):
                 raise RuntimeError('Broker session cannot begin again')
+            if type(wait_seconds) is not int or not 0 <= wait_seconds <= _MAX_WAIT_SECONDS:
+                raise ValueError('wait_seconds must be an integer between 0 and 300')
             try:
                 if self.phase == 'finished':
                     self.request_id = _new_id(self.request_id)
                     self.task_id = _new_id(self.task_id)
                     self._stop_heartbeat = threading.Event()
                     self._heartbeat_thread = None
-                started = self.clock()
                 value = self._post('/v1/acquire', dict(
                     request_id=self.request_id, task_id=self.task_id,
-                    channel_id=self.channel_id, ttl_seconds=_TTL))
+                    channel_id=self.channel_id, ttl_seconds=_TTL,
+                    wait_seconds=wait_seconds), timeout=wait_seconds + _TIMEOUT)
+                # The broker may allocate only after a queue wait. Its expiry
+                # still bounds any subsequent HTTP response delay.
+                started = self.clock()
                 self._lease(value, started)
                 self.phase = 'active'
                 self._heartbeat_thread = threading.Thread(

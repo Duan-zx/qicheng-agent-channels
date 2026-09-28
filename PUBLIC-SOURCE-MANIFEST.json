@@ -106,14 +106,14 @@
                   {
                       "path":  "tools/windows-channels/host/mcp.py",
                       "kind":  "source",
-                      "bytes":  8468,
-                      "sha256":  "624f301512e40d3f73b3fa779fb97c1ddb1d25adc8a7d1704967704c16e812ca"
+                      "bytes":  9467,
+                      "sha256":  "0023111270c1b9a91b71dd8500dcff99962036606ffc57ed792621bc4ccd10e5"
                   },
                   {
                       "path":  "tools/windows-channels/host/broker_client.py",
                       "kind":  "source",
-                      "bytes":  11203,
-                      "sha256":  "b10f46157cc482d2de662249653864f8d055ce1376bca55a068d7575400fa333"
+                      "bytes":  12187,
+                      "sha256":  "3f1b755e97127ae1477163b5bdcd0f1e6f0577477dff4422d992177fa1399124"
                   },
                   {
                       "path":  "tools/windows-channels/host/lease_client.py",
@@ -124,8 +124,8 @@
                   {
                       "path":  "tools/windows-channels/host/README.md",
                       "kind":  "source",
-                      "bytes":  3569,
-                      "sha256":  "c4365ed6aa0afa9576b428e0453d22b516362a788bf13a0d85f9e26a2c06d651"
+                      "bytes":  3714,
+                      "sha256":  "9a40791c44d4cfc053d17aaf10e56be7d8b4b2253a878d3a493d5dd3e1d4010e"
                   },
                   {
                       "path":  "tools/windows-channels/guest/__init__.py",
@@ -232,14 +232,14 @@
                   {
                       "path":  "tools/windows-channels/tests/test_host_mcp.py",
                       "kind":  "source",
-                      "bytes":  4300,
-                      "sha256":  "1ecc34a10f8bff68fe2ec422417416e537d6e0d3a0246cba9f16cf8bf682c01a"
+                      "bytes":  6165,
+                      "sha256":  "c74bf710db0c8d24476cc4d83d4836c241930996f68105195496e8fdf00599a5"
                   },
                   {
                       "path":  "tools/windows-channels/tests/test_broker_client.py",
                       "kind":  "source",
-                      "bytes":  21171,
-                      "sha256":  "ee74bf2d4835bef5cf8b23732a0d1ef7fd2ab79ff6eec6484de071f305ccc95f"
+                      "bytes":  26821,
+                      "sha256":  "964a3669f9a93744b421f5ddf96562892d38d0dadd4fc79d7d92f3e79493c7e7"
                   },
                   {
                       "path":  "tools/windows-channels/tests/test_wechat_cli.py",
