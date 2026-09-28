@@ -54,7 +54,34 @@ Expand-Archive 'D:\handoff\QichengTaskLease-0.1.0.zip' 'D:\handoff\unpacked'
 }
 ```
 
-配置只接受已存在且互不重叠的绝对项目目录、固定命令及最长 8 秒动作。`endpoint_id` 必须指向实际独占工具实例。端口要与真实 CLI 服务及自动化端口核对。配置、凭据、`leases.db` 和其 `.key` 文件均留在用户数据目录，不要放在仓库或压缩包里。数据库和密钥备份时成对保存。
+配置只接受已存在的绝对项目目录、固定命令及最长 8 秒动作。默认要求各频道项目目录互不重叠；两个频道都开启下述 `workspace` 时才允许指向完全相同的 Git 根，嵌套目录仍拒绝。`endpoint_id` 必须指向实际独占工具实例。端口要与真实 CLI 服务及自动化端口核对。配置、凭据、`leases.db` 和其 `.key` 文件均留在用户数据目录，不要放在仓库或压缩包里。数据库和密钥备份时成对保存。
+
+### 可选：按任务分配源码工作树与构建目录
+
+需要在同一项目上并行执行短时、固定的本地构建动作时，可在频道中增加 `workspace`。`project_path` 此时必须是 Git checkout 根；下面两个根目录须预先创建，且不能与源码目录或彼此重叠。不要把这两个根放在产品安装目录或 Git 仓内。
+
+```json
+"workspace": {
+  "worktree_root": "C:/Users/USER/Qicheng/worktrees",
+  "build_root": "C:/Users/USER/Qicheng/builds",
+  "ref": "HEAD"
+}
+```
+
+只有通过本 Broker 持有该频道租约、调用已配置的固定 `/v1/execute` 动作时才准备工作区。动作在独立的 detached worktree 中运行，`QICHENG_WORKTREE`、`QICHENG_BUILD_OUTPUT` 和 `QICHENG_EXCLUSIVE_PORTS` 环境变量分别给出工作目录、树外构建目录与此频道配置的固定端口（逗号分隔）。动作脚本须显式把产物写到 `QICHENG_BUILD_OUTPUT`，并使用本频道端口；不要在固定参数中写回原始共享项目路径。Broker 无法强制任意外部程序遵循环境变量。工作区来自已提交的 ref，不会复制未提交修改；同一 `request_id` 重试会检查原绑定，ref 改变或目录被其他文件占用时拒绝复用。当前固定动作仍限 8 秒；长时间编译和未接入 Broker 的客户端不在这个执行路径的保护范围内。生成的工作树与产物不会自动清理，调用者需按实际任务保留和删除，且须先确认没有任务仍在使用。
+
+固定动作执行器会持续排空输出，但每路只在内存和回执中保留前 16 KiB，并标明截断。最长 8 秒的截止时间覆盖工作进程退出及继承输出管道的关闭；操作系统创建进程本身不能被严格计时。超时会尽力结束进程树；Windows 上普通后代进入随 Broker 句柄关闭而终止的 Job。故意借外部服务脱离进程树的动作和已发生的外部副作用仍需另行核对。
+
+Broker 在动作启动前就持久标记端点 `action_dirty`，只有确认进程树清理完成才自动清除。Broker 中途崩溃、启动失败或清理结果不确定时会保留标记；即使租约释放或服务重启，同端点新任务也不能进入。先停止 Broker，检查关联动作/子进程确已停止，并核对项目、构建产物及外部副作用。然后在目标机私有数据根上预览；只有本人确认后才加三个显式参数清理该端点标记。工具会拒绝仍有活动租约的端点，不删除工作树或构建产物，也不清理其他端点。
+
+```powershell
+$tool = "$env:LOCALAPPDATA\Programs\QichengTaskLease\reconcile_action_dirty.py"
+$db = "$env:LOCALAPPDATA\Qicheng\TaskLease\leases.db"
+python -B $tool --db $db --endpoint-id <实际端点ID>
+python -B $tool --db $db --endpoint-id <实际端点ID> --apply --broker-stopped --action-stopped-verified
+```
+
+该命令只接受已停止 Broker 与动作的人工核验回执；不要因超时响应就自动清理或重复执行有副作用动作。若固定配置在脏状态下改变，Broker 会拒绝启动，需先按原端点核对并离线处理。
 
 可选的私有 Windows guest 通道需要在对应 channel 增加 `guest`，其中 `host_config_path` 和 `broker_token_file` 必须是目标机上的绝对路径，`project` 必须是 host 配置中已有的项目名：
 

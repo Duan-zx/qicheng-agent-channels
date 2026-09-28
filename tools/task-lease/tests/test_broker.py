@@ -12,12 +12,15 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from broker import Broker, BrokerHTTPServer  # noqa: E402
+from bounded_action import ActionResult  # noqa: E402
+from reconcile_action_dirty import reconcile  # noqa: E402
 
 
 class BrokerHTTPTests(unittest.TestCase):
@@ -32,6 +35,9 @@ class BrokerHTTPTests(unittest.TestCase):
         (root / "project-C").mkdir()
         actions = {"check": {"argv": [sys.executable, "-c", "print('guarded')"],
                              "timeout_seconds": 2},
+                   "loud": {"argv": [sys.executable, "-c",
+                           "import os; os.write(1,b'a'*200000); os.write(2,b'b'*200000)"],
+                           "timeout_seconds": 2},
                    "hold": {"argv": [sys.executable, "-c",
                            "import pathlib,time; pathlib.Path('started').touch(); "
                            "deadline=time.monotonic()+2; "
@@ -215,6 +221,119 @@ class BrokerHTTPTests(unittest.TestCase):
         self.assertEqual(200, self.call("/v1/execute", {**payload,
             "channel_id": "channel-B", "token": successor["token"]})[0])
 
+    def test_execute_bounded_output_reaches_http_response(self):
+        status, lease = self.acquire("loud-attempt", "channel-A")
+        self.assertEqual(200, status)
+        status, result = self.call("/v1/execute", {
+            "channel_id": "channel-A", "token": lease["token"], "action": "loud"})
+        self.assertEqual(200, status)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(16384, len(result["stdout"]))
+        self.assertEqual(16384, len(result["stderr"]))
+        self.assertTrue(result["stdout_truncated"])
+        self.assertTrue(result["stderr_truncated"])
+
+    def test_uncertain_action_blocks_successor_after_release_and_restart(self):
+        status, lease = self.acquire("uncertain-action", "channel-A")
+        self.assertEqual(200, status)
+        uncertain = ActionResult(exit_code=None, timed_out=True, stdout=b"",
+                                 stderr=b"", stdout_truncated=False,
+                                 stderr_truncated=False, termination_uncertain=True)
+        with patch("broker.run_action", return_value=uncertain):
+            status, result = self.call("/v1/execute", {"channel_id": "channel-A",
+                "token": lease["token"], "action": "check"})
+        self.assertEqual(504, status)
+        self.assertTrue(result["termination_uncertain"])
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        status, denied = self.acquire("successor", "channel-B")
+        self.assertEqual(503, status)
+        self.assertEqual("action_dirty", denied["error"])
+        status, state = self.call("/v1/status?channel_id=channel-A")
+        self.assertEqual(200, status)
+        self.assertTrue(state["channels"][0]["action_dirty"])
+        root = Path(self.temp.name)
+        restarted = Broker(config_path=root / "config.json",
+                           credential_path=root / "broker.token",
+                           db_path=root / "leases.db", clock=lambda: self.now[0])
+        self.assertTrue(restarted.status("channel-A")["channels"][0]["action_dirty"])
+        self.assertEqual("action_dirty", restarted.acquire({
+            "channel_id": "channel-B", "task_id": "successor",
+            "request_id": "successor-after-restart"})["error"])
+
+    def test_action_is_marked_before_launch_and_cleared_after_confirmed_exit(self):
+        status, lease = self.acquire("complete-action", "channel-A")
+        self.assertEqual(200, status)
+        def completed(*_args, **_kwargs):
+            self.assertTrue(self.server.broker._action_dirty("wechat-1"))
+            return ActionResult(exit_code=0, timed_out=False, stdout=b"ok",
+                                stderr=b"", stdout_truncated=False,
+                                stderr_truncated=False, termination_uncertain=False)
+        with patch("broker.run_action", side_effect=completed):
+            status, result = self.call("/v1/execute", {"channel_id": "channel-A",
+                "token": lease["token"], "action": "check"})
+        self.assertEqual(200, status)
+        self.assertTrue(result["ok"])
+        self.assertFalse(self.server.broker._action_dirty("wechat-1"))
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        self.assertEqual(200, self.acquire("next", "channel-B")[0])
+
+    def test_launch_failure_leaves_prelaunch_fence_until_offline_reconciliation(self):
+        status, lease = self.acquire("crashed-action", "channel-A")
+        self.assertEqual(200, status)
+        def failed(*_args, **_kwargs):
+            self.assertTrue(self.server.broker._action_dirty("wechat-1"))
+            raise OSError("worker startup failed")
+        with patch("broker.run_action", side_effect=failed):
+            status, result = self.call("/v1/execute", {"channel_id": "channel-A",
+                "token": lease["token"], "action": "check"})
+        self.assertEqual(503, status)
+        self.assertEqual("action_unavailable", result["error"])
+        self.assertTrue(result["action_dirty"])
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        root = Path(self.temp.name)
+        restarted = Broker(config_path=root / "config.json",
+                           credential_path=root / "broker.token",
+                           db_path=root / "leases.db", clock=lambda: self.now[0])
+        self.assertEqual("action_dirty", restarted.acquire({
+            "channel_id": "channel-B", "task_id": "next",
+            "request_id": "next-after-failure"})["error"])
+
+    def test_success_exit_with_uncertain_cleanup_is_not_reported_as_success(self):
+        status, lease = self.acquire("uncertain-cleanup", "channel-A")
+        self.assertEqual(200, status)
+        uncertain = ActionResult(exit_code=0, timed_out=False, stdout=b"ok",
+                                 stderr=b"", stdout_truncated=False,
+                                 stderr_truncated=False, termination_uncertain=True)
+        with patch("broker.run_action", return_value=uncertain):
+            status, result = self.call("/v1/execute", {"channel_id": "channel-A",
+                "token": lease["token"], "action": "check"})
+        self.assertEqual(503, status)
+        self.assertEqual("action_uncertain", result["error"])
+        self.assertTrue(self.server.broker._action_dirty("wechat-1"))
+
+    def test_action_dirty_reconciliation_requires_stopped_action_and_no_lease(self):
+        self.now[0] = time.time()
+        status, lease = self.acquire("reconcile-action", "channel-A")
+        self.assertEqual(200, status)
+        root = Path(self.temp.name)
+        db_path = str(root / "leases.db")
+        self.server.broker._mark_action_dirty(
+            self.server.broker.channels["channel-A"], "reconcile-action")
+        with self.assertRaisesRegex(RuntimeError, "active lease"):
+            reconcile(db_path, "wechat-1")
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        self.assertEqual("reconcile-plan", reconcile(db_path, "wechat-1")["status"])
+        with self.assertRaisesRegex(ValueError, "requires"):
+            reconcile(db_path, "wechat-1", apply=True)
+        cleared = reconcile(db_path, "wechat-1", apply=True,
+                            broker_stopped=True, action_stopped_verified=True)
+        self.assertEqual("cleared", cleared["status"])
+        self.assertFalse(self.server.broker.status("channel-A")["channels"][0]["action_dirty"])
+
     def test_execute_serializes_release_and_successor(self):
         status, first = self.acquire("attempt-1", "channel-A")
         self.assertEqual(200, status)
@@ -284,11 +403,234 @@ class BrokerHTTPTests(unittest.TestCase):
         package = Path(self.temp.name) / "old-package"
         package.mkdir()
         source = Path(__file__).resolve().parents[1]
-        for name in ("broker.py", "lease.py"):
+        for name in ("broker.py", "lease.py", "bounded_action.py"):
             shutil.copy2(source / name, package / name)
         result = subprocess.run([sys.executable, str(package / "broker.py"), "--help"],
                                 capture_output=True, text=True, timeout=5)
         self.assertEqual(0, result.returncode, result.stderr)
+
+    def _workspace_broker(self):
+        root = Path(self.temp.name)
+        work_root, build_root = root / "worktrees", root / "builds"
+        work_root.mkdir(exist_ok=True)
+        build_root.mkdir(exist_ok=True)
+        config = json.loads((root / "config.json").read_text(encoding="utf-8"))
+        script = ("import json,os,pathlib,time; "
+                  "p=pathlib.Path(os.environ['QICHENG_BUILD_OUTPUT']); "
+                  "data=dict(cwd=os.getcwd(),worktree=os.environ['QICHENG_WORKTREE'],"
+                  "build=str(p),started=time.time(),"
+                  "ports=os.environ['QICHENG_EXCLUSIVE_PORTS']); "
+                  "(p/'started').touch(); "
+                  "time.sleep(1); data['finished']=time.time(); "
+                  "pathlib.Path('source-output.json').write_text(json.dumps(data)); "
+                  "(p/'result.json').write_text(json.dumps(data))")
+        for entry, port in zip(config["channels"], (40101, 40102, 40103)):
+            source = Path(entry["project_path"])
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            (source / "tracked.txt").write_text("source", encoding="utf-8")
+            subprocess.run(["git", "-C", str(source), "add", "tracked.txt"], check=True)
+            subprocess.run(["git", "-C", str(source), "-c", "user.name=Test",
+                            "-c", "user.email=test@example.invalid", "commit", "-qm",
+                            "initial"], check=True)
+            entry["workspace"] = {"worktree_root": str(work_root),
+                                  "build_root": str(build_root), "ref": "HEAD"}
+            entry["exclusive_ports"] = [port]
+            entry["actions"] = {"build": {"argv": [sys.executable, "-c", script],
+                                          "timeout_seconds": 3}}
+        path = root / "workspace-config.json"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        return Broker(config_path=path, credential_path=root / "broker.token",
+                      db_path=root / "leases.db", clock=lambda: self.now[0]), config
+
+    def test_workspace_isolated_parallel_and_retry_binding(self):
+        broker, config = self._workspace_broker()
+        first = broker.acquire({"channel_id": "channel-A", "task_id": "task",
+                                "request_id": "request-A"})
+        second = broker.acquire({"channel_id": "channel-C", "task_id": "task",
+                                 "request_id": "request-C"})
+        command = lambda channel, lease: broker.execute({
+            "channel_id": channel, "token": lease["token"], "action": "build"})
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            runs = list(pool.map(lambda pair: command(*pair),
+                                 [("channel-A", first), ("channel-C", second)]))
+        self.assertTrue(all(run["ok"] for run in runs), runs)
+        self.assertNotEqual(runs[0]["workspace"]["worktree"],
+                            runs[1]["workspace"]["worktree"])
+        records = [json.loads((Path(run["workspace"]["build_output"])
+                               / "result.json").read_text()) for run in runs]
+        self.assertLess(max(record["started"] for record in records),
+                        min(record["finished"] for record in records))
+        for run, port, entry in zip(runs, (40101, 40103),
+                                    (config["channels"][0], config["channels"][2])):
+            workspace = run["workspace"]
+            record = json.loads((Path(workspace["build_output"]) / "result.json").read_text())
+            self.assertEqual(str(port), record["ports"])
+            self.assertEqual(workspace["worktree"], record["cwd"])
+            self.assertEqual(workspace["worktree"], record["worktree"])
+            self.assertEqual(workspace["build_output"], record["build"])
+            self.assertEqual(record, json.loads((Path(workspace["worktree"]) /
+                                                 "source-output.json").read_text()))
+            self.assertFalse((Path(entry["project_path"]) / "source-output.json").exists())
+        again = command("channel-A", first)
+        self.assertEqual(runs[0]["workspace"], again["workspace"])
+        restarted = Broker(config_path=Path(self.temp.name) / "workspace-config.json",
+                           credential_path=Path(self.temp.name) / "broker.token",
+                           db_path=Path(self.temp.name) / "leases.db",
+                           clock=lambda: self.now[0])
+        self.assertEqual(runs[0]["workspace"], command("channel-A", first)["workspace"])
+        self.assertEqual(runs[0]["workspace"], restarted.execute({
+            "channel_id": "channel-A", "token": first["token"],
+            "action": "build"})["workspace"])
+        with self.assertRaises(ValueError):
+            broker.execute({"channel_id": "channel-A", "token": first["token"],
+                            "action": "build", "cwd": str(Path(self.temp.name))})
+        broker.release({"channel_id": "channel-A", "token": first["token"]})
+        with self.assertRaises(Exception):
+            command("channel-A", first)
+
+    def test_workspace_config_rejects_overlap_and_unrecorded_target(self):
+        broker, config = self._workspace_broker()
+        root = Path(self.temp.name)
+        path = root / "workspace-config.json"
+        config["channels"][0]["workspace"]["build_root"] = str(root / "project-C")
+        path.write_text(json.dumps(config), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            Broker(config_path=path, credential_path=root / "broker.token",
+                   db_path=root / "leases.db")
+        config["channels"][0]["workspace"]["build_root"] = str(root / "builds")
+        (root / "other-worktrees").mkdir()
+        config["channels"][1]["workspace"]["worktree_root"] = str(root / "other-worktrees")
+        config["channels"][1]["workspace"]["build_root"] = str(root / "worktrees")
+        path.write_text(json.dumps(config), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "conflict"):
+            Broker(config_path=path, credential_path=root / "broker.token",
+                   db_path=root / "leases.db")
+        config["channels"][1]["workspace"]["build_root"] = str(root / "builds")
+        config["channels"][1]["workspace"]["worktree_root"] = str(root / "worktrees")
+        path.write_text(json.dumps(config), encoding="utf-8")
+        lease = broker.acquire({"channel_id": "channel-A", "task_id": "task",
+                                "request_id": "request-A"})
+        first = broker.execute({"channel_id": "channel-A", "token": lease["token"],
+                                "action": "build"})
+        self.assertTrue(first["ok"])
+        marker = Path(first["workspace"]["build_output"]) / ".qicheng-attempt.json"
+        marker.write_text("{}", encoding="utf-8")
+        denied = broker.execute({"channel_id": "channel-A", "token": lease["token"],
+                                 "action": "build"})
+        self.assertEqual("workspace_unavailable", denied["error"])
+        self.assertEqual(1, len(list(Path(first["workspace"]["worktree"]).glob(
+            "source-output.json"))))
+
+    def test_two_channels_compile_same_source_in_parallel(self):
+        _, config = self._workspace_broker()
+        root = Path(self.temp.name)
+        config["channels"][2]["project_path"] = config["channels"][0]["project_path"]
+        path = root / "shared-source-config.json"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        broker = Broker(config_path=path, credential_path=root / "broker.token",
+                        db_path=root / "shared-source-leases.db", clock=lambda: self.now[0])
+        leases = [broker.acquire({"channel_id": channel, "task_id": "same-project",
+                                  "request_id": "request-" + channel})
+                  for channel in ("channel-A", "channel-C")]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda pair: broker.execute({
+                "channel_id": pair[0], "token": pair[1]["token"], "action": "build"}),
+                zip(("channel-A", "channel-C"), leases)))
+        self.assertTrue(all(result["ok"] for result in results), results)
+        self.assertNotEqual(results[0]["workspace"]["worktree"],
+                            results[1]["workspace"]["worktree"])
+        self.assertNotEqual(results[0]["workspace"]["build_output"],
+                            results[1]["workspace"]["build_output"])
+        receipts = [json.loads((Path(result["workspace"]["build_output"])
+                                / "result.json").read_text()) for result in results]
+        self.assertLess(max(receipt["started"] for receipt in receipts),
+                        min(receipt["finished"] for receipt in receipts))
+        self.assertEqual(["40101", "40103"],
+                         [receipt["ports"] for receipt in receipts])
+        self.assertFalse((Path(config["channels"][0]["project_path"])
+                          / "source-output.json").exists())
+        del config["channels"][2]["workspace"]
+        path.write_text(json.dumps(config), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "roots must not overlap"):
+            Broker(config_path=path, credential_path=root / "broker.token",
+                   db_path=root / "shared-source-leases.db")
+
+    def test_two_channels_same_source_with_separate_workspace_roots(self):
+        _, config = self._workspace_broker()
+        root = Path(self.temp.name)
+        work_c, build_c = root / "worktrees-C", root / "builds-C"
+        work_c.mkdir()
+        build_c.mkdir()
+        config["channels"][2]["project_path"] = config["channels"][0]["project_path"]
+        config["channels"][2]["workspace"]["worktree_root"] = str(work_c)
+        config["channels"][2]["workspace"]["build_root"] = str(build_c)
+        path = root / "separate-roots-config.json"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        broker = Broker(config_path=path, credential_path=root / "broker.token",
+                        db_path=root / "separate-roots-leases.db",
+                        clock=lambda: self.now[0])
+        leases = [broker.acquire({"channel_id": channel, "task_id": "same-project",
+                                  "request_id": "separate-" + channel})
+                  for channel in ("channel-A", "channel-C")]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda pair: broker.execute({
+                "channel_id": pair[0], "token": pair[1]["token"], "action": "build"}),
+                zip(("channel-A", "channel-C"), leases)))
+        self.assertTrue(all(result["ok"] for result in results), results)
+        receipts = [json.loads((Path(result["workspace"]["build_output"])
+                                / "result.json").read_text()) for result in results]
+        self.assertLess(max(receipt["started"] for receipt in receipts),
+                        min(receipt["finished"] for receipt in receipts))
+        self.assertTrue(Path(results[0]["workspace"]["worktree"]).is_dir())
+        self.assertTrue(Path(results[1]["workspace"]["worktree"]).is_dir())
+
+    def test_workspace_same_endpoint_waits_for_fixed_action(self):
+        broker, _ = self._workspace_broker()
+        first = broker.acquire({"channel_id": "channel-A", "task_id": "task-A",
+                                "request_id": "request-A"})
+        with self.assertRaises(Exception):
+            broker.acquire({"channel_id": "channel-B", "task_id": "task-B",
+                            "request_id": "request-B"})
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            running = pool.submit(broker.execute, {"channel_id": "channel-A",
+                "token": first["token"], "action": "build"})
+            deadline = time.monotonic() + 3
+            while not list((Path(self.temp.name) / "builds").glob("*/*/started")):
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(.01)
+            releasing = pool.submit(broker.release, {"channel_id": "channel-A",
+                "token": first["token"]})
+            self.assertFalse(releasing.done())
+            self.assertTrue(running.result(timeout=5)["ok"])
+            releasing.result(timeout=5)
+        second = broker.acquire({"channel_id": "channel-B", "task_id": "task-B",
+                                 "request_id": "request-B"})
+        result = broker.execute({"channel_id": "channel-B", "token": second["token"],
+                                 "action": "build"})
+        self.assertTrue(result["ok"])
+        self.assertEqual("40102", json.loads((Path(result["workspace"]["build_output"])
+            / "result.json").read_text())["ports"])
+
+    def test_workspace_ids_fit_deep_windows_roots(self):
+        _, config = self._workspace_broker()
+        root = Path(self.temp.name)
+        deep = root / ("x" * 100)
+        work_root, build_root = deep / "worktrees", deep / "builds"
+        work_root.mkdir(parents=True)
+        build_root.mkdir()
+        for channel in config["channels"]:
+            channel["workspace"]["worktree_root"] = str(work_root)
+            channel["workspace"]["build_root"] = str(build_root)
+        path = root / "deep-workspace-config.json"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        broker = Broker(config_path=path, credential_path=root / "broker.token",
+                        db_path=root / "deep-leases.db", clock=lambda: self.now[0])
+        lease = broker.acquire({"channel_id": "channel-A", "task_id": "task",
+                                "request_id": "deep-request"})
+        result = broker.execute({"channel_id": "channel-A", "token": lease["token"],
+                                 "action": "build"})
+        self.assertTrue(result["ok"], result)
+        self.assertLessEqual(len(Path(result["workspace"]["worktree"]).name), 17)
 
 
 class GuestInputTests(unittest.TestCase):

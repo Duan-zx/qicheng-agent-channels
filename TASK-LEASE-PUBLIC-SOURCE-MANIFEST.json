@@ -1,4 +1,4 @@
-{
+﻿{
     "schemaVersion":  1,
     "component":  "task-lease-public-source",
     "policy":  "Explicit source allowlist; separate from the install package manifest and private Git identity.",
@@ -26,20 +26,38 @@
                   {
                       "path":  "tools/task-lease/README.md",
                       "kind":  "source",
-                      "bytes":  12775,
-                      "sha256":  "e25296eb301ed60e9f7236e066ff00a503606947122b4582f437a0961088e4f0"
+                      "bytes":  17025,
+                      "sha256":  "cb44c92b3d234d2ac0836eed47a90bc485a0b1d285f8742f39f34c10640b5038"
                   },
                   {
                       "path":  "tools/task-lease/broker.py",
                       "kind":  "source",
-                      "bytes":  40922,
-                      "sha256":  "479e95cfbeefc6962d66133a6d84347b0842c820a918791dc0576446720a6048"
+                      "bytes":  50344,
+                      "sha256":  "6ad46233a4eae1fb2210bf8106bc380c26612d028518c631d0617dabbfde917f"
                   },
                   {
                       "path":  "tools/task-lease/lease.py",
                       "kind":  "source",
                       "bytes":  25588,
                       "sha256":  "3a19107cdc125e5fc8a9a41dc88a325b12f8167ab607cb0d11d4a87bd4124151"
+                  },
+                  {
+                      "path":  "tools/task-lease/attempt_workspace.py",
+                      "kind":  "source",
+                      "bytes":  7890,
+                      "sha256":  "17bd5b631aed5b4462c69e30b976ef37b8c2ee33ed5ef9f3a07fff11afc95e83"
+                  },
+                  {
+                      "path":  "tools/task-lease/bounded_action.py",
+                      "kind":  "source",
+                      "bytes":  9949,
+                      "sha256":  "760629a7ebaba461858dacb1395aa1c42eff57af1e6b22c085550b53aa4ac610"
+                  },
+                  {
+                      "path":  "tools/task-lease/reconcile_action_dirty.py",
+                      "kind":  "source",
+                      "bytes":  3300,
+                      "sha256":  "8aa6741be6b2d349a4075ed5c237c20a49e09e59471338f866b0b4ea6f65322e"
                   },
                   {
                       "path":  "tools/task-lease/guest_bridge.py",
@@ -56,26 +74,38 @@
                   {
                       "path":  "tools/task-lease/tests/test_broker.py",
                       "kind":  "source",
-                      "bytes":  47609,
-                      "sha256":  "34a32d5a73c7635613c1094507439c9121eb124d6de5221f2a17948a4bc1ebc5"
+                      "bytes":  68567,
+                      "sha256":  "8547fdbdc2f0c4dc8c36fb8a35ed8faece0f94c8517ffd09f781d4b7a054a92b"
+                  },
+                  {
+                      "path":  "tools/task-lease/tests/test_attempt_workspace.py",
+                      "kind":  "source",
+                      "bytes":  5216,
+                      "sha256":  "a68a25a969684cb3760571ead1d02a28cd461da8dd3aa36a9247f14af87e17aa"
+                  },
+                  {
+                      "path":  "tools/task-lease/tests/test_bounded_action.py",
+                      "kind":  "source",
+                      "bytes":  7709,
+                      "sha256":  "73d6ac27bf6ea4cd1a60110a1b2aab4f914029526fb517b073c30f9f3e6dcd97"
                   },
                   {
                       "path":  "tools/task-lease/product/README.zh-CN.md",
                       "kind":  "source",
-                      "bytes":  11868,
-                      "sha256":  "7af025502989268ac0e27d7ec1322206e63c4d34fb0a6de3300c9b6252302b27"
+                      "bytes":  15133,
+                      "sha256":  "177d3cdd0df086b6c5fd2bee722e1b286a794886023a4e18adf9f3e6052d7370"
                   },
                   {
                       "path":  "tools/task-lease/product/Build-Package.ps1",
                       "kind":  "source",
-                      "bytes":  2605,
-                      "sha256":  "1aa68ab7d9fec8175411bd104512f7c3ace928925ff9fa063c2a3d3d7f3d41fc"
+                      "bytes":  2676,
+                      "sha256":  "8b88c4a7a0b0c67a56513f1dd7cb7cc16146efc0655c34ec1a318ce52266e187"
                   },
                   {
                       "path":  "tools/task-lease/product/Export-PublicSource.ps1",
                       "kind":  "source",
-                      "bytes":  4471,
-                      "sha256":  "59d7b2e3aca7919cb747a44891492efe266ec27f8d9d90cdb977d5b222f487fe"
+                      "bytes":  4612,
+                      "sha256":  "59ee3de01c1eefe12b7d5c57450238312820fb00954a5150880eda8417751ab5"
                   },
                   {
                       "path":  "tools/task-lease/product/runtime/Common.ps1",
@@ -140,14 +170,14 @@
                   {
                       "path":  "tools/task-lease/product/tests/Test-ProductPackage.ps1",
                       "kind":  "source",
-                      "bytes":  8977,
-                      "sha256":  "f01e49cb5ba255511ade836b01828a28ebe7859dd08beaeb13340d7a632d1226"
+                      "bytes":  9446,
+                      "sha256":  "c82a141ca130854f9ef00073b2274d1126e9a8a71d87076a52d73f66c436ca5f"
                   },
                   {
                       "path":  "tools/task-lease/product/tests/Test-PublicSourceExport.ps1",
                       "kind":  "source",
-                      "bytes":  4046,
-                      "sha256":  "2d6c2a68a555691856dd655787296bb94ddba4c6c6597e35c65b5c01c8eceb49"
+                      "bytes":  4267,
+                      "sha256":  "f19578095176d6ab93486a375dded9876e34b7cfbf0981854f8bded904c0fc46"
                   },
                   {
                       "path":  "tools/task-lease/product/tests/test_guest_token_migration.py",

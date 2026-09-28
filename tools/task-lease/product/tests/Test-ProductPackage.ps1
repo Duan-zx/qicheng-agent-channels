@@ -18,6 +18,9 @@ try {
     if ($plan.status -ne 'install' -or (Test-Path -LiteralPath $install)) { throw 'Dry run changed host or gave wrong plan.' }
     $result=(& $installer -PackageRoot $extracted -InstallRoot $install -DataRoot $data -Apply | ConvertFrom-Json)
     if ($result.status -ne 'installed' -or -not (Test-Path -LiteralPath (Join-Path $data 'broker.token'))) { throw 'Install failed.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $install 'attempt_workspace.py') -PathType Leaf)) { throw 'Packaged attempt workspace helper is missing.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $install 'bounded_action.py') -PathType Leaf)) { throw 'Packaged bounded action runner is missing.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $install 'reconcile_action_dirty.py') -PathType Leaf)) { throw 'Packaged action reconciliation tool is missing.' }
     if (Test-Path -LiteralPath (Join-Path $install 'broker.token')) { throw 'Token entered install tree.' }
     $autostart=Join-Path $install 'product\runtime\Install-TaskLeaseAutostart.ps1'
     $autostartRejected=$false

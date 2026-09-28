@@ -13,7 +13,7 @@ Qicheng has two installation paths. Start with Lite for browser work. Add native
 | **Qicheng Lite** | Isolated browser profiles, web workflows and downloads | Windows host, Docker Desktop with a Linux engine; internet for the first image build |
 | **Qicheng Windows Channels** | Native desktop tools in separate Windows guests | Hyper-V capable Windows host, Python 3.12+, and your own licensed Windows guest installations |
 
-The optional **Task Lease** broker lets explicitly connected Codex MCP and n8n jobs queue for the same native channel and run on different channels at once. Lite does not require it. The broker does not automatically intercept other Computer Use, CLI or n8n actions.
+The optional **Task Lease** broker lets explicitly connected Codex MCP and n8n jobs queue for the same native channel and run on different channels at once. The local alpha.16 source candidate can also give a configured, short fixed action its own Git worktree and build directory. Lite does not require the broker. It does not automatically intercept other Computer Use, CLI or n8n actions.
 
 **Download status:** [public Releases](https://github.com/Duan-zx/qicheng-agent-channels/releases) currently contain earlier Alpha builds. This candidate branch includes newer source, but matching public installers have not been released. Check a Release's version and package hash before installing; do not assume the latest source is already in a download.
 

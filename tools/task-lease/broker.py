@@ -10,16 +10,17 @@ import argparse
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import select
 import socket
-import subprocess
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from bounded_action import run_action
 from lease import (ChannelBusy, EndpointBusy, InvalidToken, LeaseGone,
                    LeaseStore, RequestConflict, WaitCancelled, WaitQueueFull,
                    WaitTimedOut)
@@ -79,6 +80,7 @@ class Channel:
     actions: dict
     exclusive_ports: tuple[int, ...]
     guest: dict | None
+    workspace: dict | None
 
 
 class Broker:
@@ -90,7 +92,7 @@ class Broker:
         self.channels = {}
         for entry in config["channels"]:
             required = {"channel_id", "endpoint_id", "tool_id", "project_id", "project_path"}
-            if not isinstance(entry, dict) or not required <= set(entry) or set(entry) - required - {"actions", "exclusive_ports", "guest"}:
+            if not isinstance(entry, dict) or not required <= set(entry) or set(entry) - required - {"actions", "exclusive_ports", "guest", "workspace"}:
                 raise ValueError("each channel needs binding fields and optional actions")
             for key in ("channel_id", "endpoint_id", "tool_id", "project_id"):
                 LeaseStore._id(entry[key], key)
@@ -103,6 +105,28 @@ class Broker:
             actions = entry.get("actions", {})
             ports = entry.get("exclusive_ports", [])
             guest = entry.get("guest")
+            workspace = entry.get("workspace")
+            if workspace is not None:
+                if guest is not None:
+                    raise ValueError("guest and workspace cannot share a channel")
+                if not isinstance(workspace, dict) or set(workspace) != {
+                        "worktree_root", "build_root", "ref"}:
+                    raise ValueError("workspace requires fixed worktree_root, build_root and ref")
+                # Import only for opted-in channels so existing broker packages
+                # remain usable without the workspace preparer.
+                from attempt_workspace import _REF, _plain_path, _separate
+                roots = [_plain_path(workspace[name], name)
+                         for name in ("worktree_root", "build_root")]
+                if not all(root.is_dir() for root in roots):
+                    raise ValueError("workspace roots must already exist")
+                if not (_separate(project_path, roots[0]) and
+                        _separate(project_path, roots[1]) and
+                        _separate(*roots)):
+                    raise ValueError("workspace source and roots must not overlap")
+                if not isinstance(workspace["ref"], str) or not _REF.fullmatch(workspace["ref"]):
+                    raise ValueError("invalid workspace ref")
+                workspace = {"worktree_root": str(roots[0]),
+                             "build_root": str(roots[1]), "ref": workspace["ref"]}
             if guest is not None:
                 if not isinstance(guest, dict) or set(guest) != {
                         "host_config_path", "project", "broker_token_file"}:
@@ -155,12 +179,18 @@ class Broker:
                             raise ValueError("CLI port must be an exclusive_port")
             channel = Channel(**{**entry, "project_path": str(project_path),
                                  "actions": actions, "exclusive_ports": tuple(ports),
-                                 "guest": guest})
+                                 "guest": guest, "workspace": workspace})
             if channel.channel_id in self.channels:
                 raise ValueError("duplicate channel_id")
             for existing in self.channels.values():
                 existing_root = Path(existing.project_path)
-                if project_path == existing_root or project_path in existing_root.parents or existing_root in project_path.parents:
+                shared_isolated_source = (project_path == existing_root
+                                          and workspace is not None
+                                          and existing.workspace is not None)
+                if (not shared_isolated_source and
+                        (project_path == existing_root or
+                         project_path in existing_root.parents or
+                         existing_root in project_path.parents)):
                     raise ValueError("channel project roots must not overlap")
                 if set(ports) & set(existing.exclusive_ports) and channel.endpoint_id != existing.endpoint_id:
                     raise ValueError("shared TCP port requires the same endpoint_id")
@@ -170,6 +200,23 @@ class Broker:
                                 for name in ("vm_id", "bios_uuid", "token_file"))):
                     raise ValueError("shared guest requires the same endpoint_id")
             self.channels[channel.channel_id] = channel
+        for channel in self.channels.values():
+            if channel.workspace is not None:
+                for other in self.channels.values():
+                    source = Path(other.project_path)
+                    for name in ("worktree_root", "build_root"):
+                        root = Path(channel.workspace[name])
+                        if source == root or source in root.parents or root in source.parents:
+                            raise ValueError("workspace root overlaps a channel project root")
+                    if other.workspace is not None:
+                        for left in ("worktree_root", "build_root"):
+                            for right in ("worktree_root", "build_root"):
+                                first = Path(channel.workspace[left])
+                                second = Path(other.workspace[right])
+                                if first == second and left == right:
+                                    continue  # A shared root still has distinct hashed IDs.
+                                if first == second or first in second.parents or second in first.parents:
+                                    raise ValueError("workspace roots conflict across channels")
         if not self.channels:
             raise ValueError("at least one channel is required")
         self.default_ttl = LeaseStore._ttl(config.get("default_ttl_seconds", 60))
@@ -193,6 +240,7 @@ class Broker:
             if any(channel.guest is not None for channel in self.channels.values()) else None)
         self.store = LeaseStore(db_path, **({"clock": clock} if clock is not None else {}))
         self._reconcile_guest_bindings()
+        self._init_action_dirty()
 
     def _digest(self, value: object) -> str:
         encoded = json.dumps(value, ensure_ascii=True, sort_keys=True,
@@ -288,6 +336,55 @@ class Broker:
         if row is None or not hmac.compare_digest(row["fingerprint"], fingerprint):
             raise RuntimeError("registered guest binding changed")
 
+    def _action_binding_fingerprint(self, channel: Channel) -> str:
+        return self._digest({"channel_id": channel.channel_id,
+                             "endpoint_id": channel.endpoint_id,
+                             "tool_id": channel.tool_id,
+                             "project_id": channel.project_id,
+                             "project_path": channel.project_path,
+                             "exclusive_ports": channel.exclusive_ports,
+                             "workspace": channel.workspace,
+                             "actions": channel.actions})
+
+    def _init_action_dirty(self):
+        with self.store._transaction() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS action_dirty (
+                endpoint_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL,
+                request_id TEXT NOT NULL, fingerprint TEXT NOT NULL)""")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(action_dirty)")}
+            if columns != {"endpoint_id", "channel_id", "request_id", "fingerprint"}:
+                raise RuntimeError("action dirty schema is unsupported")
+            for row in db.execute("SELECT * FROM action_dirty"):
+                channel = self.channels.get(row["channel_id"])
+                if (channel is None or channel.endpoint_id != row["endpoint_id"] or
+                        not hmac.compare_digest(
+                            row["fingerprint"], self._action_binding_fingerprint(channel))):
+                    raise RuntimeError("dirty action binding changed; reconcile offline")
+
+    def _action_dirty(self, endpoint_id: str) -> bool:
+        with self.store._transaction() as db:
+            return db.execute("SELECT 1 FROM action_dirty WHERE endpoint_id=?",
+                              (endpoint_id,)).fetchone() is not None
+
+    def _mark_action_dirty(self, channel: Channel, request_id: str):
+        with self.store._transaction() as db:
+            db.execute("BEGIN IMMEDIATE")
+            inserted = db.execute("""INSERT OR IGNORE INTO action_dirty
+                (endpoint_id, channel_id, request_id, fingerprint)
+                VALUES (?, ?, ?, ?)""", (channel.endpoint_id, channel.channel_id,
+                request_id, self._action_binding_fingerprint(channel)))
+            return inserted.rowcount == 1
+
+    def _clear_action_dirty(self, channel: Channel, request_id: str):
+        with self.store._transaction() as db:
+            db.execute("BEGIN IMMEDIATE")
+            cleared = db.execute("""DELETE FROM action_dirty WHERE endpoint_id=?
+                AND channel_id=? AND request_id=? AND fingerprint=?""",
+                (channel.endpoint_id, channel.channel_id, request_id,
+                 self._action_binding_fingerprint(channel)))
+            if cleared.rowcount != 1:
+                raise RuntimeError("action dirty binding changed; reconcile offline")
+
     def _attempt_fingerprint(self, channel: Channel, active, action, fields):
         return self._digest({
             "channel_id": channel.channel_id, "request_id": active.request_id,
@@ -375,6 +472,8 @@ class Broker:
             raise ValueError("ttl_seconds exceeds configured maximum")
         wait = LeaseStore._wait(payload.get("wait_seconds", 0))
         owner = (channel.channel_id, payload["request_id"])
+        if self._action_dirty(channel.endpoint_id):
+            return {"ok": False, "error": "action_dirty"}
         dirty = self._dirty_owner(channel.endpoint_id)
         if dirty is not None and dirty != owner:
             return {"ok": False, "error": "guest_dirty"}
@@ -390,6 +489,8 @@ class Broker:
                     abort_reason = "guest_binding_unavailable"
             if abort_reason is None and self._dirty_owner(channel.endpoint_id) not in (None, owner):
                 abort_reason = "guest_dirty"
+            if abort_reason is None and self._action_dirty(channel.endpoint_id):
+                abort_reason = "action_dirty"
             return abort_reason is not None
         try:
             result = self.store.acquire(
@@ -406,6 +507,9 @@ class Broker:
         if dirty is not None and dirty != owner:
             self.store.release(channel.channel_id, result.token)
             return {"ok": False, "error": "guest_dirty"}
+        if self._action_dirty(channel.endpoint_id):
+            self.store.release(channel.channel_id, result.token)
+            return {"ok": False, "error": "action_dirty"}
         if channel.guest is not None:
             try:
                 self._assert_guest_binding(channel)
@@ -486,7 +590,8 @@ class Broker:
         def entry(channel):
             active = self.store.current(channel.channel_id)
             result = {"channel_id": channel.channel_id,
-                      "lease": active.public() if active else None}
+                      "lease": active.public() if active else None,
+                      "action_dirty": self._action_dirty(channel.endpoint_id)}
             if channel.guest is not None:
                 result["guest_dirty"] = self._dirty_owner(channel.endpoint_id) is not None
             return result
@@ -507,19 +612,67 @@ class Broker:
             # Recheck the immutable binding under the execution fence. No caller
             # supplied command, cwd or port can redirect the operation.
             if (active.endpoint_id != channel.endpoint_id or
+                    active.project_id != channel.project_id or
                     active.project_path != channel.project_path or
                     active.tool_id != channel.tool_id):
                 raise ValueError("lease binding differs from channel configuration")
+            if self._action_dirty(channel.endpoint_id):
+                return {"action": action_name, "ok": False,
+                        "error": "action_dirty"}
+            cwd = channel.project_path
+            env = None
+            workspace_result = None
+            if channel.workspace is not None:
+                from attempt_workspace import prepare
+                # IDs are derived from the lease binding, never from paths or
+                # commands supplied by the HTTP client. Replays use the same IDs.
+                task_key = hashlib.sha256(json.dumps(
+                    [channel.channel_id, active.task_id], separators=(",", ":")
+                    ).encode("utf-8")).hexdigest()
+                attempt_key = hashlib.sha256(json.dumps(
+                    [channel.channel_id, active.task_id, active.request_id],
+                    separators=(",", ":")).encode("utf-8")).hexdigest()
+                try:
+                    workspace_result = prepare(
+                        channel.project_path, channel.workspace["worktree_root"],
+                        channel.workspace["build_root"], "t" + task_key[:16],
+                        "a" + attempt_key[:16], channel.workspace["ref"])
+                except Exception:
+                    return {"action": action_name, "ok": False,
+                            "error": "workspace_unavailable"}
+                cwd = workspace_result["worktree"]
+                env = os.environ.copy()
+                env.update(QICHENG_WORKTREE=cwd,
+                           QICHENG_BUILD_OUTPUT=workspace_result["build_output"],
+                           QICHENG_EXCLUSIVE_PORTS=",".join(map(str, channel.exclusive_ports)))
+            # Persist the fence before launching the worker. A broker crash leaves
+            # this row in place, so lease expiry cannot admit a successor.
+            if not self._mark_action_dirty(channel, active.request_id):
+                return {"action": action_name, "ok": False,
+                        "error": "action_dirty"}
             try:
-                result = subprocess.run(spec["argv"], cwd=channel.project_path,
-                                        stdin=subprocess.DEVNULL, capture_output=True,
-                                        timeout=spec["timeout_seconds"], shell=False)
-            except subprocess.TimeoutExpired:
-                return {"action": action_name, "ok": False, "error": "timeout"}
-            return {"action": action_name, "ok": result.returncode == 0,
-                    "exit_code": result.returncode,
-                    "stdout": result.stdout[:16384].decode("utf-8", "replace"),
-                    "stderr": result.stderr[:16384].decode("utf-8", "replace")}
+                result = run_action(spec["argv"], cwd=cwd, env=env,
+                                    timeout_seconds=spec["timeout_seconds"])
+            except OSError:
+                return {"action": action_name, "ok": False,
+                        "error": "action_unavailable", "action_dirty": True}
+            if result.termination_uncertain:
+                return {"action": action_name, "ok": False,
+                        "error": "timeout" if result.timed_out else "action_uncertain",
+                        "termination_uncertain": True}
+            self._clear_action_dirty(channel, active.request_id)
+            if result.timed_out:
+                return {"action": action_name, "ok": False, "error": "timeout",
+                        "termination_uncertain": False}
+            response = {"action": action_name, "ok": result.exit_code == 0,
+                    "exit_code": result.exit_code,
+                    "stdout": result.stdout.decode("utf-8", "replace"),
+                    "stderr": result.stderr.decode("utf-8", "replace"),
+                    "stdout_truncated": result.stdout_truncated,
+                    "stderr_truncated": result.stderr_truncated}
+            if workspace_result is not None:
+                response["workspace"] = workspace_result
+            return response
         return self.store.execute_owned(channel.channel_id, payload["token"], run)
 
     def input(self, payload: dict) -> dict:
@@ -670,7 +823,9 @@ class BrokerHandler(BaseHTTPRequestHandler):
         else:
             if result.get("error") == "client_disconnected":
                 return
-            code = {"timeout": 504, "guest_unavailable": 503,
+            code = {"timeout": 504, "workspace_unavailable": 503,
+                    "action_dirty": 503, "action_uncertain": 503,
+                    "action_unavailable": 503, "guest_unavailable": 503,
                      "input_failed": 502, "guest_release_uncertain": 503,
                      "attempt_unavailable": 503, "already_attempted": 409,
                      "action_conflict": 409, "ack_unavailable": 409,

@@ -1,5 +1,28 @@
 # Task lease core
 
+## Source-only attempt workspace preparer
+
+`attempt_workspace.py` is a standalone local CLI for Git source checkouts. Its
+three absolute paths must name an existing checkout root, an existing worktree
+root, and an existing build-output root. The roots must not overlap. For example:
+
+```powershell
+python tools/task-lease/attempt_workspace.py --source C:\source\project --worktree-root C:\private\worktrees --build-root C:\private\builds --task-id task1 --attempt-id attempt1
+```
+
+It prints JSON with a detached `worktree`, a separate `build_output` directory,
+and the pinned commit. A repeated call with the same IDs and source commit
+returns those paths after checking the record and Git registration. An ID
+bound to another source or commit, an existing unrecorded path, or a link or
+junction in the attempt path is rejected. A failed preparation removes only a
+new clean worktree; it does not delete existing user files. The caller owns
+build commands, cleanup, and the lifetime of each prepared attempt. This
+prepares the committed revision only; uncommitted source changes are not copied.
+The standalone caller must explicitly pass its chosen source checkout and ref.
+The broker can also call this preparer for an opted-in channel, as described
+below. It does not allocate or enforce network ports.
+Run its tests with `python -B -m unittest discover -s tools/task-lease/tests -p test_attempt_workspace.py -v`.
+
 Optional Windows user-level package and n8n setup: [product/README.zh-CN.md](product/README.zh-CN.md).
 
 `lease.py` is a local SQLite allocator for one task per channel and one active
@@ -46,7 +69,7 @@ non-secret identifiers; adapters resolve them from their own trusted config.
 The resolved `project_path` is an identity binding, not file-system isolation.
 
 This is the allocation primitive only. It does not yet enforce every MCP/CLI
-action, allocate free channels or queues, isolate project worktrees, or recover
+action, allocate free channels, or recover
 a dead task early. Those require integration with the service supervisor.
 
 Run tests with `python -m unittest discover -s tools/task-lease/tests -v`.
@@ -108,9 +131,10 @@ those are resolved from the trusted configuration. A new execution attempt
 needs a new globally unique `request_id`. Callers must renew before expiry and
 release on success, failure or cancellation. TTL allows eventual recovery if a
 caller crashes for ordinary channels. Guest input has a persistent dirty gate
-described below. Configured project roots must be absolute, existing, and
-non-overlapping across channels; task-specific worktree creation still belongs
-to the launcher.
+described below. Configured project roots must be absolute and existing. Two
+channels may share exactly the same Git project root only when both opt into
+workspace isolation; other overlaps are rejected. An opted-in workspace channel creates its
+task-specific worktree at fixed-action execution time.
 
 `wait_seconds` is optional. Omit it or set it to `0` for the original immediate
 `409 busy` behavior. A positive value up to 300 seconds waits in a durable FIFO
@@ -131,12 +155,57 @@ Codex and n8n can call the same loopback HTTP endpoints: acquire, execute a
 registered action, renew before expiry, and release in a final step. The
 `check-login` action above is a read-only probe; register only approved fixed
 commands. Each action has literal arguments and an absolute executable path;
-callers cannot pass arbitrary command text, cwd or port. The action runs from
-the bound project directory under the endpoint execution lock. Command output is
-limited to 16 KiB per stream in the HTTP response, but the child process may
-produce more output internally. Keep actions below eight seconds and do not
-use this bridge for long-running automation sessions. A timeout kills the
-direct process; it may not kill processes that CLI starts independently.
+callers cannot pass arbitrary command text, cwd or port. Without a workspace
+binding, the action runs from the bound project directory under the endpoint
+execution lock. The runner drains output while keeping at most 16 KiB per
+stream in memory and reports truncation. Its deadline covers process exit and
+inherited output pipes after worker startup; operating-system process creation
+cannot be strictly timed. On timeout it attempts to terminate the process tree.
+Keep actions below eight seconds and do not use this bridge for
+long-running automation sessions. Deliberately detached descendants or CLI
+side effects cannot be proven stopped merely from a timeout response.
+Before each action starts, the broker persists `action_dirty` for that endpoint
+and clears it only after confirmed process-tree cleanup. A broker crash or
+uncertain cleanup leaves the marker in place and denies new actions even after
+lease release or restart. Windows actions run in a Job configured to kill
+ordinary descendants when the broker closes its handle; deliberately detached
+processes and external side effects still need separate verification.
+The offline `reconcile_action_dirty.py` tool requires an explicit stopped-broker
+and stopped-action verification, plus no active lease, before clearing only
+that endpoint. It never cleans generated worktrees or external side effects.
+
+For a source checkout channel, add the optional fixed `workspace` binding:
+
+```json
+"workspace": {
+  "worktree_root": "C:/private/worktrees",
+  "build_root": "C:/private/builds",
+  "ref": "HEAD"
+}
+```
+
+`project_path` then names the existing Git checkout root. Separate channels can
+share that exact source root because their attempt directory IDs also include
+the channel ID; each still needs its own endpoint and nonconflicting ports for
+parallel actions. Both workspace roots
+must already exist, be absolute, and remain separate from each other and from
+every configured channel project root. A channel cannot combine `workspace`
+with guest input. When a valid lease holder executes a registered action, the
+broker prepares a detached worktree from the configured ref inside the endpoint
+execution fence. The task and attempt directory IDs are stable hashes of the
+lease's channel, task and request IDs, using compact directory names for
+Windows path limits, so retries of the same binding reuse the
+recorded paths. A changed source commit or tampered record fails closed. The
+command runs with its cwd set to that worktree and receives
+`QICHENG_WORKTREE`, `QICHENG_BUILD_OUTPUT`, and `QICHENG_EXCLUSIVE_PORTS` in its
+environment. The last value is a comma-separated list of the channel's fixed
+ports, or an empty string. The broker returns the preparation record in the
+execute result; a preparation failure returns `workspace_unavailable` (503)
+without starting the command. Workspace paths and ports cannot be selected in
+the HTTP request. The configured executable and literal argv remain fixed,
+and the eight-second action limit still applies. Port variables inform the
+child process; the broker cannot force a child that ignores them to bind there.
+Existing channels without `workspace` keep their original cwd and response.
 
 For WeChat Developer Tools, use the actual local CLI service port and
 automation WebSocket port of the intended instance. Configure both in

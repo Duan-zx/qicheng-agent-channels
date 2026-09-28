@@ -27,8 +27,8 @@ try {
         if ($relative -ine 'PUBLIC-SOURCE-MANIFEST.json' -and -not $expected.Contains($relative)) { throw "Unexpected exported file: $relative" }
     }
     if ($actualFiles.Count -ne $expected.Count + 1) { throw 'Exported file count mismatch.' }
-    foreach ($required in @('LICENSE','tools/task-lease/broker.py','tools/task-lease/product/Build-Package.ps1',
-            'tools/task-lease/tests/test_lease.py','tools/windows-channels/host/lease_client.py')) {
+    foreach ($required in @('LICENSE','tools/task-lease/broker.py','tools/task-lease/attempt_workspace.py','tools/task-lease/bounded_action.py','tools/task-lease/reconcile_action_dirty.py','tools/task-lease/product/Build-Package.ps1',
+            'tools/task-lease/tests/test_lease.py','tools/task-lease/tests/test_attempt_workspace.py','tools/task-lease/tests/test_bounded_action.py','tools/windows-channels/host/lease_client.py')) {
         if (-not $expected.Contains($required.Replace('/','\'))) { throw "Required source missing: $required" }
     }
     $rejected = $false
