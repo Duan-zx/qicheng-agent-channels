@@ -12,7 +12,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -99,6 +99,21 @@ class BrokerHTTPTests(unittest.TestCase):
         return self.call("/v1/run", {"request_id": request_id, "task_id": request_id,
                                      "channel_id": channel_id, "action": action, **extra})
 
+    def n8n_run(self, request_id, execution_id="42", workflow_id="workflow-1", **extra):
+        return self.atomic_run(request_id, "channel-B", n8n_execution_id=execution_id,
+                               n8n_workflow_id=workflow_id, **extra)
+
+    def n8n_cancel(self, request_id, execution_id="42", workflow_id="workflow-1"):
+        return self.call("/v1/cancel-run", {
+            "request_id": request_id, "task_id": request_id,
+            "channel_id": "channel-B", "action": "check",
+            "n8n_execution_id": execution_id, "n8n_workflow_id": workflow_id})
+
+    def enable_n8n(self):
+        self.server.broker.n8n_status = {"base_url": "http://127.0.0.1:5678",
+                                          "api_key_file": Path(self.temp.name) / "n8n.key"}
+        self.server.broker.n8n_status["api_key_file"].write_text("test-key", encoding="ascii")
+
     def wait_for_queue(self, count):
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
@@ -157,6 +172,165 @@ class BrokerHTTPTests(unittest.TestCase):
                            db_path=root / "leases.db", clock=lambda: self.now[0])
         self.assertEqual(first, restarted.run({"request_id": "atomic-one",
             "task_id": "atomic-one", "channel_id": "channel-A", "action": "check"}))
+
+    def test_n8n_wait_needs_status_source_and_both_ids(self):
+        self.assertEqual(400, self.n8n_run("missing", wait_seconds=1)[0])
+        self.assertEqual(400, self.atomic_run("one-id", "channel-B",
+            n8n_execution_id="42", wait_seconds=1)[0])
+        with closing(sqlite3.connect(Path(self.temp.name) / "leases.db")) as db:
+            self.assertEqual(0, db.execute("SELECT COUNT(*) FROM atomic_runs").fetchone()[0])
+
+    def test_n8n_status_reads_only_matching_running_execution(self):
+        seen = []
+        mode = ["running"]
+        class StatusHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append((self.path, self.headers.get("X-N8N-API-KEY")))
+                if mode[0] == "redirect":
+                    self.send_response(302)
+                    self.send_header("Location", "http://example.com/steal")
+                    self.end_headers()
+                    return
+                body = json.dumps({"id": "43" if mode[0] == "wrong-id" else "42",
+                                   "workflowId": "workflow-1",
+                                   "status": "running"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args):
+                pass
+        status_server = ThreadingHTTPServer(("127.0.0.1", 0), StatusHandler)
+        thread = threading.Thread(target=status_server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(status_server.server_close)
+        self.addCleanup(status_server.shutdown)
+        self.enable_n8n()
+        self.server.broker.n8n_status["base_url"] = f"http://127.0.0.1:{status_server.server_port}"
+        self.assertTrue(self.server.broker._n8n_running("42", "workflow-1"))
+        self.assertFalse(self.server.broker._n8n_running("42", "other-workflow"))
+        mode[0] = "wrong-id"
+        self.assertFalse(self.server.broker._n8n_running("42", "workflow-1"))
+        mode[0] = "redirect"
+        self.assertFalse(self.server.broker._n8n_running("42", "workflow-1"))
+        self.assertEqual(("/api/v1/executions/42?includeData=false", "test-key"), seen[0])
+
+    def test_n8n_queued_cancel_and_binding_replay(self):
+        self.enable_n8n()
+        _, owner = self.acquire("owner-n8n", "channel-A")
+        with patch.object(self.server.broker, "_n8n_running", return_value=True):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(self.n8n_run, "queued", wait_seconds=2)
+                self.wait_for_queue(1)
+                self.assertEqual(409, self.n8n_cancel("queued", "other")[0])
+                self.assertEqual(409, self.n8n_cancel("queued", workflow_id="other")[0])
+                self.assertEqual((200, {"ok": True, "cancelled": True,
+                                        "request_id": "queued"}), self.n8n_cancel("queued"))
+                self.assertEqual(410, future.result(timeout=4)[0])
+        self.wait_for_queue(0)
+        self.assertEqual(410, self.n8n_run("queued")[0])
+        self.assertEqual(409, self.n8n_run("queued", execution_id="43")[0])
+        self.assertEqual(409, self.n8n_run("queued", workflow_id="other")[0])
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": owner["token"]})[0])
+
+    def test_n8n_status_unreadable_cancels_wait_and_other_request_survives(self):
+        self.enable_n8n()
+        _, owner = self.acquire("owner-unreadable", "channel-A")
+        live = {"first": True, "second": True}
+        def running(execution_id, _workflow_id):
+            return live[execution_id]
+        with patch.object(self.server.broker, "_n8n_running", side_effect=running):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(self.n8n_run, "first", "first", wait_seconds=2)
+                second = pool.submit(self.n8n_run, "second", "second", wait_seconds=2)
+                self.wait_for_queue(2)
+                live["first"] = False
+                self.assertEqual(410, first.result(timeout=4)[0])
+                self.assertEqual(409, self.n8n_cancel("second", "first")[0])
+                self.assertEqual(200, self.call("/v1/release", {
+                    "channel_id": "channel-A", "token": owner["token"]})[0])
+                self.assertEqual(200, second.result(timeout=4)[0])
+
+    def test_n8n_initial_404_grace_still_requires_running_before_action(self):
+        self.enable_n8n()
+        _, owner = self.acquire("owner-404", "channel-A")
+        reads = []
+        def appearing(_execution_id, _workflow_id):
+            reads.append(1)
+            return None if len(reads) <= 2 else True
+        with patch.object(self.server.broker, "_n8n_running", side_effect=appearing):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(self.n8n_run, "appearing", wait_seconds=2)
+                self.wait_for_queue(1)
+                self.assertEqual(200, self.call("/v1/release", {
+                    "channel_id": "channel-A", "token": owner["token"]})[0])
+                self.assertEqual(200, future.result(timeout=4)[0])
+        self.assertGreaterEqual(len(reads), 3)
+
+    def test_n8n_persistent_404_removes_waiter_without_action(self):
+        self.enable_n8n()
+        _, owner = self.acquire("owner-missing", "channel-A")
+        with patch.object(self.server.broker, "_n8n_running", return_value=None), \
+                patch("broker.run_action") as action:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(self.n8n_run, "missing-execution", wait_seconds=2)
+                self.wait_for_queue(1)
+                self.assertEqual((410, {"ok": False, "error": "run_cancelled",
+                                        "request_id": "missing-execution"}),
+                                 future.result(timeout=4))
+            self.wait_for_queue(0)
+            action.assert_not_called()
+        self.assertEqual(410, self.n8n_run("missing-execution")[0])
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": owner["token"]})[0])
+
+    def test_n8n_final_refusal_release_failure_is_unknown_on_http_and_replay(self):
+        self.enable_n8n()
+        states = iter((True, False))
+        with patch.object(self.server.broker, "_n8n_running",
+                          side_effect=lambda *_args: next(states)), \
+                patch.object(self.server.broker.store, "release",
+                             side_effect=RuntimeError("release failed")), \
+                patch("broker.run_action") as action:
+            status, result = self.n8n_run("release-uncertain")
+        self.assertEqual(503, status)
+        self.assertEqual({"ok": False, "error": "result_unknown",
+                          "request_id": "release-uncertain"}, result)
+        self.assertEqual((status, result), self.n8n_run("release-uncertain"))
+        action.assert_not_called()
+
+    def test_n8n_initial_refusal_has_one_terminal_receipt_without_lease(self):
+        self.enable_n8n()
+        with patch.object(self.server.broker, "_n8n_running", return_value=False), \
+                patch.object(self.server.broker, "acquire") as acquire:
+            status, result = self.n8n_run("refused-before-acquire")
+        self.assertEqual(410, status)
+        self.assertEqual({"ok": False, "error": "run_cancelled",
+                          "request_id": "refused-before-acquire"}, result)
+        self.assertEqual((status, result), self.n8n_run("refused-before-acquire"))
+        acquire.assert_not_called()
+
+    def test_n8n_started_action_ignores_later_cancel(self):
+        self.enable_n8n()
+        entered = threading.Event()
+        finish = threading.Event()
+        def held(*_args, **_kwargs):
+            entered.set()
+            self.assertTrue(finish.wait(3))
+            return ActionResult(0, False, b"done", b"", False, False, False)
+        with patch.object(self.server.broker, "_n8n_running", return_value=True), \
+                patch("broker.run_action", side_effect=held):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(self.n8n_run, "started")
+                self.assertTrue(entered.wait(2))
+                self.assertEqual((200, {"ok": True, "cancelled": False,
+                                        "request_id": "started"}), self.n8n_cancel("started"))
+                finish.set()
+                self.assertEqual(200, future.result(timeout=5)[0])
+        self.assertIsNone(self.server.broker.store.current("channel-B"))
+        self.assertEqual(200, self.n8n_run("started")[0])
 
     def test_atomic_run_nonzero_exit_is_http_failure_and_replays(self):
         status, first = self.atomic_run("failed-run", action="fail")

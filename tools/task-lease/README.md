@@ -160,9 +160,19 @@ non-Lite) channel, `/v1/run` keeps acquisition, execution, and release in the
 Broker. Waiting for a channel can be cancelled on client disconnect; once
 acquired, disconnect does not stop the bounded action or its cleanup. An
 isolated n8n 2.39.6 CLI execution marked `canceled` kept its HTTP wait
-connected and later executed the queued action. For n8n, omit `wait_seconds`
-until external cancellation monitoring is available; handle `409 busy` with
-a new scheduled attempt. A stable
+connected, so n8n callers should omit `wait_seconds` by default and handle
+`409 busy` with a new scheduled attempt. To queue with cancellation monitoring in the tested CLI
+mode, configure a loopback `n8n_status` public-API source with a private API
+key file, and pass `n8n_execution_id: $execution.id` and
+`n8n_workflow_id: $workflow.id` with a unique request ID. The Broker checks
+for a matching `running` execution while queued and again before starting.
+Unreadable or canceled status withdraws the queued run. `/v1/cancel-run`
+can explicitly cancel a matching run before it starts; after it starts, the
+bounded action finishes and releases its lease. Isolated CLI tests verified
+queued cancellation, normal FIFO continuation, started-action cleanup, replay,
+and failure receipts. Webhook/UI modes and the interval between the last status
+read and action start remain unverified. For a strict stop-before-start order,
+obtain the Broker cancellation receipt before stopping n8n. A stable
 `request_id` binds the task, channel configuration, and action: concurrent
 retries return `run_in_progress`, completed retries replay the stored result,
 nonzero fixed-action exits return HTTP 502 `action_failed` with the exit code
