@@ -75,4 +75,6 @@ MCP 适配器在真实后端完成 stdio initialize/tools/state；输入与截�
 
 首次Windows客体准备仍有手工步骤；必须保持可用的已登录交互会话；显示不是视频级远程桌面。一例输入无可见结果在重启后恢复，根因尚未确定。
 
+01 当前 Lite 浏览器顶栏仍有 Firefox 安全功能提示。Firefox 日志为用户命名空间创建 `EPERM`，Docker 容器非特权且 seccomp 生效；[Mozilla 的问题记录](https://bugzilla.mozilla.org/show_bug.cgi?id=1938410)说明 Docker 默认 seccomp 可导致该提示。网页频道的可用性与浏览器全部安全特性可用是两件事；候选版未隐藏警告或改动容器权限。
+
 公开包不分发Windows系统、用户账号或第三方商业应用。评估系统的有效期及授权要求不会因启程封装而改变。
