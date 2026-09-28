@@ -12,6 +12,7 @@ if([string]::IsNullOrWhiteSpace($InstallRoot)){$InstallRoot=$PSScriptRoot}
 $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
 $record=Read-QichengLiteInstallRecord -InstallRoot $installRoot
 if(-not $record){throw '启程轻量版安装记录缺失。'}
+if($Channel -gt (Get-QichengLiteChannelCount -Record $record)){throw "频道 $Channel 未启用；可在安装器中选 2 个频道后重新启用。"}
 if([string]::IsNullOrWhiteSpace($DataRoot)){$DataRoot=[string]$record.dataRoot}
 $dataRoot=Resolve-QichengLitePath -Path $DataRoot -Label 'DataRoot'
 $compose=Join-Path $installRoot 'compose.yaml'
@@ -28,7 +29,14 @@ $project=([string]($projectOutput|Select-Object -First 1)).Trim()
 $serviceOutput=& $DockerPath inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' $containerId 2>$null
 $serviceExit=$LASTEXITCODE
 $containerService=([string]($serviceOutput|Select-Object -First 1)).Trim()
-if($projectExit -ne 0 -or $serviceExit -ne 0 -or $project -cne 'qicheng-agent-channels' -or $containerService -cne $service){throw '容器归属验证失败，未导出任何文件。'}
+$workingDirOutput=& $DockerPath inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' $containerId 2>$null
+$workingDirExit=$LASTEXITCODE
+$workingDir=([string]($workingDirOutput|Select-Object -First 1)).Trim()
+$sameInstall=$false
+if($workingDir -match '^[A-Za-z]:[\\/]'){
+    try{$sameInstall=[string]::Equals(([IO.Path]::GetFullPath($workingDir.Replace('/','\')) -replace '[\\/]+$',''),($installRoot -replace '[\\/]+$',''),[StringComparison]::OrdinalIgnoreCase)}catch{}
+}
+if($projectExit -ne 0 -or $serviceExit -ne 0 -or $workingDirExit -ne 0 -or $project -cne 'qicheng-agent-channels' -or $containerService -cne $service -or -not $sameInstall){throw '容器归属验证失败，未导出任何文件。'}
 $channelName=if($Channel -eq 1){'频道一'}else{'频道二'}
 $destinationParent=Join-Path $dataRoot ('Downloads\'+$channelName)
 New-Item -ItemType Directory -Path $destinationParent -Force|Out-Null

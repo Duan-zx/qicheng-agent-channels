@@ -66,6 +66,7 @@ sealed class Channels : Form {
     readonly NotifyIcon tray = new NotifyIcon();
     readonly ToolTip tips = new ToolTip();
     readonly StringBuilder pendingText = new StringBuilder();
+    readonly int channelCount;
     ApplicationContext context;
     EventWaitHandle showSignal;
     bool polling, exiting, connected, stateKnown, collapsed, returningToHost;
@@ -88,7 +89,7 @@ sealed class Channels : Form {
                 && KeyName(Keys.L, true, false) == "ctrl+l" && KeyName(Keys.Tab, false, false) == "Tab"
                 && InputAllowed("human", true, true) && !InputAllowed("human", false, true) && !InputAllowed("agent", true, true)
                 && MatchesInputRoute(1, 4, 1, 4) && !MatchesInputRoute(1, 4, 2, 4) && !MatchesInputRoute(1, 4, 1, 5);
-            bool credentialRouting = TestCredentialRouting();
+            bool credentialRouting = TestCredentialRouting() && TestChannelSelection();
             File.WriteAllText(args[1], JsonResult(mapping, contract, credentialRouting));
             Environment.Exit(mapping && contract && credentialRouting ? 0 : 1); return;
         }
@@ -103,7 +104,8 @@ sealed class Channels : Form {
             try {
                 string root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
                 string token = ReadViewerToken(root);
-                using (Channels viewer = new Channels(token)) {
+                int count = ReadChannelCount(root);
+                using (Channels viewer = new Channels(token, count)) {
                     ApplicationContext app = new ApplicationContext(); viewer.Start(app, show); Application.Run(app);
                 }
             } catch (Exception ex) { MessageBox.Show(ex.Message + "\n请先运行 Start-Backend.ps1。", "启程频道", MessageBoxButtons.OK, MessageBoxIcon.Error); }
@@ -128,6 +130,34 @@ sealed class Channels : Form {
 
     static bool ValidToken(string token) {
         return System.Text.RegularExpressions.Regex.IsMatch(token, "\\A[a-f0-9]{64}\\z");
+    }
+
+    static int ReadChannelCount(string root) {
+        string path = Path.Combine(root, ".qicheng-lite-install.json");
+        if (!File.Exists(path)) return 2; // Legacy installations had two channels.
+        Dictionary<string, object> record = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+        object value;
+        if (!record.TryGetValue("channelCount", out value)) return 2;
+        int count;
+        if (!Int32.TryParse(Convert.ToString(value), out count) || (count != 1 && count != 2))
+            throw new InvalidDataException("安装记录中的频道数无效，请重新安装。");
+        return count;
+    }
+
+    static bool TestChannelSelection() {
+        string root = Path.Combine(Path.GetTempPath(), "QichengViewerCountTest-" + Guid.NewGuid().ToString("N"));
+        try {
+            Directory.CreateDirectory(root);
+            if (ReadChannelCount(root) != 2) return false;
+            string path = Path.Combine(root, ".qicheng-lite-install.json");
+            File.WriteAllText(path, "{\"channelCount\":1}");
+            if (ReadChannelCount(root) != 1) return false;
+            File.WriteAllText(path, "{\"channelCount\":2}");
+            if (ReadChannelCount(root) != 2) return false;
+            File.WriteAllText(path, "{\"channelCount\":3}");
+            try { ReadChannelCount(root); return false; } catch (InvalidDataException) { }
+            return true;
+        } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
     static bool TestCredentialRouting() {
@@ -158,7 +188,8 @@ sealed class Channels : Form {
             + ",\"input_queue_generation_guard\":true,\"gui_tested\":false}";
     }
 
-    Channels(string token) {
+    Channels(string token, int count) {
+        channelCount = count;
         Text = "启程 · AI 频道"; Font = new Font("Microsoft YaHei UI", 9F); AutoScaleMode = AutoScaleMode.Dpi;
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
         BackColor = Theme.Back; KeyPreview = true; http.Timeout = TimeSpan.FromSeconds(10);
@@ -167,7 +198,7 @@ sealed class Channels : Form {
         Resize += delegate { LayoutSurface(); }; LayoutSurface(); WireInput();
         ContextMenuStrip menu = new ContextMenuStrip();
         menu.Items.Add("打开频道一 · Alt+2", null, delegate { OpenChannel(1); });
-        menu.Items.Add("打开频道二 · Alt+3", null, delegate { OpenChannel(2); });
+        if (channelCount == 2) menu.Items.Add("打开频道二 · Alt+3", null, delegate { OpenChannel(2); });
         menu.Items.Add("回到本机 · Alt+1", null, delegate { ReturnToHost(); });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出并暂停输入", null, async delegate { await ExitViewer(); });
@@ -181,7 +212,7 @@ sealed class Channels : Form {
     void BuildBar() {
         bar.Size = new Size(1184, 58); bar.Fill = Theme.Panel; bar.Edge = Theme.Edge; bar.Radius = 22; Controls.Add(bar); bar.BringToFront();
         string[] labels = { "本机", "频道 1", "频道 2" };
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i <= channelCount; i++) {
             int id = i;
             channelButtons[i] = new SignalButton { Text = labels[i], Shortcut = "Alt+" + (i + 1), Font = Font, AccessibleName = labels[i] };
             channelButtons[i].Click += delegate { if (id == 0) ReturnToHost(); else OpenChannel(id); }; tips.SetToolTip(channelButtons[i], labels[i] + " · Alt+" + (i + 1)); bar.Controls.Add(channelButtons[i]);
@@ -260,16 +291,16 @@ sealed class Channels : Form {
 
     protected override void OnHandleCreated(EventArgs e) {
         base.OnHandleCreated(e);
-        bool a = RegisterHotKey(Handle, 1, NoRepeatAlt, 0x31), b = RegisterHotKey(Handle, 2, NoRepeatAlt, 0x32), c = RegisterHotKey(Handle, 3, NoRepeatAlt, 0x33);
+        bool a = RegisterHotKey(Handle, 1, NoRepeatAlt, 0x31), b = RegisterHotKey(Handle, 2, NoRepeatAlt, 0x32), c = channelCount == 1 || RegisterHotKey(Handle, 3, NoRepeatAlt, 0x33);
         if (!a || !b || !c) tray.ShowBalloonTip(5000, "快捷键冲突", "部分 Alt+1/2/3 已被占用，可使用托盘切换。", ToolTipIcon.Warning);
     }
     protected override void OnHandleDestroyed(EventArgs e) {
-        for (int i = 1; i <= 3; i++) UnregisterHotKey(Handle, i);
+        for (int i = 1; i <= channelCount + 1; i++) UnregisterHotKey(Handle, i);
         base.OnHandleDestroyed(e);
     }
 
     protected override void WndProc(ref Message m) {
-        if (m.Msg == 0x0312) { int id = m.WParam.ToInt32(); if (id == 1) ReturnToHost(); else OpenChannel(id - 1); }
+        if (m.Msg == 0x0312) { int id = m.WParam.ToInt32(); if (id == 1) ReturnToHost(); else if (id <= channelCount + 1) OpenChannel(id - 1); }
         base.WndProc(ref m);
     }
 
@@ -291,7 +322,7 @@ sealed class Channels : Form {
         }
         int width = Math.Min(1184, available), y = 8, height = 42, x = 10, channelWidth = width >= 1120 ? 110 : 72;
         bar.Width = width;
-        for (int i = 0; i < 3; i++) { channelButtons[i].Shortcut = width >= 1120 ? "Alt+" + (i + 1) : ""; channelButtons[i].Bounds = new Rectangle(x, y, channelWidth, height); x += channelWidth + 2; }
+        for (int i = 0; i <= channelCount; i++) { channelButtons[i].Shortcut = width >= 1120 ? "Alt+" + (i + 1) : ""; channelButtons[i].Bounds = new Rectangle(x, y, channelWidth, height); x += channelWidth + 2; }
         x += 6; int identityWidth = width >= 1120 ? 86 : 70; identity.Bounds = new Rectangle(x, y, identityWidth, height); x += identityWidth + 8;
         int statusWidth = width >= 1120 ? 126 : 92; statusShell.Bounds = new Rectangle(x, y, statusWidth, height); status.Bounds = new Rectangle(8, 2, Math.Max(1, statusWidth - 16), height - 4); x += statusWidth + 8;
         int humanWidth = width >= 1120 ? 90 : 74, agentWidth = width >= 1120 ? 88 : 72, pauseWidth = width >= 1120 ? 68 : 60;
@@ -350,7 +381,7 @@ sealed class Channels : Form {
     }
 
     void OpenChannel(int id) {
-        if (exiting || id < 1 || id > 2) return;
+        if (exiting || id < 1 || id > channelCount) return;
         IntPtr foreground = GetForegroundWindow(); if (foreground != Handle) previous = foreground;
         ClearPendingInput(); generation++; channel = id; connected = false; stateKnown = false; mode = "paused"; ClearStatusError(); ReplaceImage(null);
         Text = "启程 · 频道" + id; Rectangle bounds = Screen.FromPoint(Cursor.Position).Bounds; Bounds = bounds; WindowState = FormWindowState.Normal;
@@ -463,7 +494,7 @@ sealed class Channels : Form {
         else if (mode == "human") { modeText = "你正在操作"; detail = "人工输入已启用；完成后可将控制交给 AI 或暂停。"; }
         else { modeText = "输入已暂停"; detail = "人工与 AI 的输入都已暂停，选择一个控制方式后继续。"; }
         identity.Text = "频道 " + channel; status.Text = "●  " + modeText; status.ForeColor = color; statusShell.Edge = Color.FromArgb(108, color); statusShell.Invalidate(); tips.SetToolTip(status, statusErrorUntil > DateTime.UtcNow ? statusError : detail);
-        for (int i = 0; i < 3; i++) { channelButtons[i].Selected = i == channel; channelButtons[i].Signal = i == channel ? color : Color.FromArgb(90, 99, 116); channelButtons[i].Invalidate(); }
+        for (int i = 0; i <= channelCount; i++) { channelButtons[i].Selected = i == channel; channelButtons[i].Signal = i == channel ? color : Color.FromArgb(90, 99, 116); channelButtons[i].Invalidate(); }
         if (humanButton != null) { humanButton.Tone = mode == "human" && connected ? ButtonTone.HumanActive : ButtonTone.Human; humanButton.Invalidate(); }
         if (agentButton != null) { agentButton.Tone = mode == "agent" && connected ? ButtonTone.AgentActive : ButtonTone.Agent; agentButton.Invalidate(); }
         if (pauseButton != null) { pauseButton.Tone = mode == "paused" && connected ? ButtonTone.PauseActive : ButtonTone.Pause; pauseButton.Invalidate(); }
@@ -476,9 +507,9 @@ sealed class Channels : Form {
 
     async Task ExitViewer() {
         if (exiting) return; exiting = true; ClearPendingInput(); pollTimer.Stop(); bool paused = true;
-        for (int id = 1; id <= 2; id++) { try { await PostState(id, "/api/control", new { mode = "paused" }); } catch { paused = false; } }
+        for (int id = 1; id <= channelCount; id++) { try { await PostState(id, "/api/control", new { mode = "paused" }); } catch { paused = false; } }
         if (!paused && MessageBox.Show("部分频道未确认暂停，仍要退出查看器吗？", "启程频道", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) { exiting = false; pollTimer.Start(); return; }
-        for (int i = 1; i <= 3; i++) UnregisterHotKey(Handle, i); if (showSignal != null) showSignal.Set(); tray.Visible = false; context.ExitThread();
+        for (int i = 1; i <= channelCount + 1; i++) UnregisterHotKey(Handle, i); if (showSignal != null) showSignal.Set(); tray.Visible = false; context.ExitThread();
     }
 
     protected override void Dispose(bool disposing) {

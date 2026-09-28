@@ -50,6 +50,9 @@ function Test-CompatibleWindowsStartup([string]$ShortcutPath,[string]$LiteRoot){
 }
 $record=Read-QichengLiteInstallRecord -InstallRoot $installRoot
 Add-Check 'install-record' ($null -ne $record) $(if($record){"版本 $($record.version)"}else{'安装记录缺失'})
+$channelCount=0
+if($record){try{$channelCount=Get-QichengLiteChannelCount -Record $record}catch{Add-Check 'channel-selection' $false $_.Exception.Message}}
+if($channelCount){Add-Check 'channel-selection' $true "$channelCount 个频道"}
 foreach($item in @(
     @{Name='viewer';Path='dist\AgentChannels.exe'},
     @{Name='compose';Path='compose.yaml'},
@@ -83,9 +86,8 @@ if($dockerAvailable){
     try{$composeOutput=(& $DockerPath compose --project-name qicheng-agent-channels --project-directory $installRoot -f (Join-Path $installRoot 'compose.yaml') --profile second ps --format json 2>&1|Out-String);$composeOk=($LASTEXITCODE -eq 0)}catch{$composeOk=$false;$composeOutput=$_.Exception.Message}
     Add-Check 'compose-project' $composeOk $(if($composeOk){'qicheng-agent-channels 可读取'}else{'无法读取项目状态'})
 }
-$port1=18761
-$port2=18762
-foreach($port in @($port1,$port2)){
+$ports=@(18761);if($channelCount -eq 2){$ports+=18762}
+foreach($port in $ports){
     $ready=$false
     if($tokenValid){
         try{
@@ -105,4 +107,4 @@ $legacyPresent=Test-Path -LiteralPath $legacy -PathType Leaf
 $windowsCompatible=$legacyPresent -and (Test-CompatibleWindowsStartup -ShortcutPath $legacy -LiteRoot $installRoot)
 Add-Check 'legacy-alt-conflict' (-not $legacyPresent -or $windowsCompatible) $(if($windowsCompatible){'已核对 Windows 频道启动项、安装记录、包校验及 Lite 快捷键重映射：Alt+4..9，无 host 快捷键'}elseif($legacyPresent){'Windows 频道启动项的兼容性未证实，可能争用 Alt 快捷键'}else{'未发现旧启动项'})
 $failed=@($checks.ToArray()|Where-Object{-not $_.passed}).Count
-[ordered]@{schemaVersion=1;status=if($failed){'attention-required'}else{'healthy'};installRoot=$installRoot;composeProject='qicheng-agent-channels';ports=@($port1,$port2);checks=$checks.ToArray();failedChecks=$failed;mutationsMade=$false;tokenDisplayed=$false}|ConvertTo-Json -Depth 6
+[ordered]@{schemaVersion=1;status=if($failed){'attention-required'}else{'healthy'};installRoot=$installRoot;composeProject='qicheng-agent-channels';channelCount=$channelCount;ports=$ports;checks=$checks.ToArray();failedChecks=$failed;mutationsMade=$false;tokenDisplayed=$false}|ConvertTo-Json -Depth 6

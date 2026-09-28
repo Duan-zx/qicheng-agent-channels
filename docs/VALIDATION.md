@@ -116,3 +116,7 @@ MCP 适配器在真实后端完成 stdio initialize/tools/state；输入与截�
 公开包不分发Windows系统、用户账号或第三方商业应用。评估系统的有效期及授权要求不会因启程封装而改变。
 
 2026-09-28 的本地候选给 Lite 与 Windows MCP 状态、截图工具声明 `readOnlyHint=true`，输入工具显式声明为写操作。Lite 46 项、Windows 110 项 Python 测试通过。01 的两条 Windows 租约 MCP 从新版 Host 启动后，独立 Codex 模型分别读取 A/B 客体状态；A 完成 `begin→finish`，B 完成 `state→begin→move→finish`，均没有点击或输入文字，Broker 末态无租约或脏状态。该调用依赖用户对两个专用频道的明确授权、人工“交给 AI”和本机 Task Lease；只读标注本身不是权限控制。Lite 两频道仍处暂停，未将其 AI 输入记为通过；DELL 独立安装、最终版冷启动与真实微信项目编译仍待验证。
+
+2026-09-28 后续 Lite alpha.13 本地候选增加 Windows 首装 1/2 个频道选择，默认 1 个；旧双频道安装升级保持 2 个，缩减时仅在 Compose 安装目录归属匹配后停止频道二容器并保留数据卷。下载导出也核对容器工作目录，异目录在复制前拒绝。PS5.1 和 pwsh 的隔离假 Docker/REST 恢复专项通过；公开候选 Python 42/42 通过。独立 Checker 从未公开的最终 ZIP 核对 70/70 包文件及 45/45 源码清单，在隔离目录用 PS5.1 完成单/双频道安装，Viewer 自测退出 0 且报告 `gui_tested=false`。01 正式 Lite 仍运行早期双频道版；真实 Docker 2→1→2、GUI 快捷键、用户机器首装与浏览器长期使用尚未验收。这些源码更改尚无对应公开 Release。
+
+实际只读截图证实两个正式 Lite 频道已显示新版深色欢迎页，但 Firefox 原生标签/地址栏、会话恢复标签及 reduced-security 提示仍可见。隔离首启出现 Mozilla Privacy Notice 标签；正常停止/重启、无 URL 启动和温和关闭的试验得到不同会话恢复表现，现阶段没有安全可靠的自动消除方式。候选版没有隐藏安全提示、替用户接受条款或放宽 Docker 权限。

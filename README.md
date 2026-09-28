@@ -4,7 +4,7 @@
 
 ![Concept diagram of Qicheng workspaces; not a product screenshot](docs/images/workspace-concept.svg)
 
-**Give each computer-using AI task its own workspace.** Run two browser jobs in separate Linux desktops while you keep using your Windows PC. Press **Alt+2** or **Alt+3** to look in; press **Alt+1** to return home. Take control of one channel, hand it back to a connected AI client, or pause it without changing the other channel.
+**Give each computer-using AI task its own workspace.** Run one or two browser jobs in separate Linux desktops while you keep using your Windows PC. Press **Alt+2** for the first channel, **Alt+3** when a second is enabled, and **Alt+1** to return home. Take control of one channel, hand it back to a connected AI client, or pause it without changing the other channel.
 
 Qicheng has two installation paths. Start with Lite for browser work. Add native Windows channels only when a task needs a Windows desktop application, such as WeChat Developer Tools. Qicheng provides the workspace and controls; bring your own AI client. No model subscription or API key is included.
 
@@ -20,11 +20,11 @@ The optional **Task Lease** broker lets explicitly connected Codex MCP and n8n j
 ## Try Lite
 
 1. Download a matching Lite Release, verify its hash, extract it and run the installer included in the package. Docker's Linux engine must be available.
-2. The viewer stays in the tray. Use **Alt+2 / Alt+3** for the two workspaces and **Alt+1** for your own desktop.
+2. In the alpha.13 source candidate, first installation can choose one or two Lite channels; one is the default. The viewer stays in the tray. Use **Alt+2** for channel one, **Alt+3** when channel two is enabled, and **Alt+1** for your own desktop.
 3. Choose **Take control** to use a channel yourself. Choose **Give to AI** before a connected client sends input. Each channel keeps its own browser profile and Downloads volume.
 4. Run the installed diagnostics if a channel is unavailable. The package quickstart lists data locations and AI connection steps.
 
-When both editions are installed, Lite keeps Alt+1/2/3 and native Windows channels start at Alt+4. The Windows setup wizard limits its count accordingly. Hotkey conflicts are reported by diagnostics; available keys depend on the installed version.
+When both editions are installed, Lite uses Alt+1/2 and optionally Alt+3; native Windows channels start at Alt+4. The Windows setup wizard limits its count accordingly. Hotkey conflicts are reported by diagnostics; available keys depend on the installed version.
 
 ## What is open source
 

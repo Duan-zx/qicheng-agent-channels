@@ -3,7 +3,13 @@ setlocal
 title Install Qicheng Lite
 set "RESULT=%TEMP%\qicheng-lite-install-%RANDOM%-%RANDOM%.json"
 set "QICHENG_LITE_RESULT=%RESULT%"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-Qicheng-Lite.ps1" -PackageRoot "%~dp0." -Apply -NonInteractive -DisableLegacyWindowsChannelsStartup -LaunchAfterInstall %* > "%RESULT%"
+set "CHANNEL_ARGS="
+if "%~1"=="" if not defined QICHENG_LITE_NO_PAUSE if not exist "%LOCALAPPDATA%\Programs\QichengLite\.qicheng-lite-install.json" (
+  echo Choose the number of Lite channels. One uses fewer resources; two can be enabled later.
+  choice /c 12 /n /m "Install 1 or 2 channels? [1/2] "
+  if errorlevel 2 (set "CHANNEL_ARGS=-ChannelCount 2") else (set "CHANNEL_ARGS=-ChannelCount 1")
+)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-Qicheng-Lite.ps1" -PackageRoot "%~dp0." -Apply -NonInteractive -DisableLegacyWindowsChannelsStartup -LaunchAfterInstall %CHANNEL_ARGS% %* > "%RESULT%"
 set "INSTALL_EXIT=%ERRORLEVEL%"
 if exist "%RESULT%" type "%RESULT%"
 if not "%INSTALL_EXIT%"=="0" (

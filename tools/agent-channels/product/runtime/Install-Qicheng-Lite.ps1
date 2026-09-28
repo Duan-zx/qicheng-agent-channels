@@ -15,6 +15,7 @@ param(
     [ValidateRange(1,45)][int]$HealthAttempts=45,
     [int]$Port1=18761,
     [int]$Port2=18762,
+    [ValidateSet(1,2)][int]$ChannelCount=0,
     [switch]$NonInteractive,
     [switch]$Apply
 )
@@ -28,6 +29,7 @@ if([string]::IsNullOrWhiteSpace($PackageRoot)){$PackageRoot=$PSScriptRoot}
 $packageRoot=Resolve-QichengLitePath -Path $PackageRoot -Label 'PackageRoot'
 $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
 $existingRecord=Read-QichengLiteInstallRecord -InstallRoot $installRoot
+if($ChannelCount -eq 0){$ChannelCount=if($existingRecord){Get-QichengLiteChannelCount -Record $existingRecord}else{1}}
 if([string]::IsNullOrWhiteSpace($DataRoot)){
     $DataRoot=if($existingRecord -and -not[string]::IsNullOrWhiteSpace([string]$existingRecord.dataRoot)){[string]$existingRecord.dataRoot}else{Get-QichengLiteDataRoot}
 }
@@ -89,7 +91,8 @@ if($brokerTokenValue -and $existingRecord -and (Test-Path -LiteralPath (Join-Pat
 
 $legacyLink=Join-Path $legacyStartupRoot '启程 Windows 频道.lnk'
 $legacyBackup=Join-Path $dataRoot 'compatibility-backup\启程 Windows 频道.lnk'
-$plan=[ordered]@{schemaVersion=1;status='not-installed';version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;files=$expected.Count;tokenAction=if($ImportTokenPath){'import'}elseif($tokenValue){'preserve'}else{'generate'};composeProject='qicheng-agent-channels';ports=@(18761,18762);defaultViewerMode='background';disableLegacyWindowsChannelsStartup=[bool]$DisableLegacyWindowsChannelsStartup;legacyShortcutPresent=(Test-Path -LiteralPath $legacyLink -PathType Leaf);volumesRemoved=$false;applyRequested=[bool]$Apply;hostChangesMade=$false}
+$selectedPorts=@(18761);if($ChannelCount -eq 2){$selectedPorts+=18762}
+$plan=[ordered]@{schemaVersion=1;status='not-installed';version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;files=$expected.Count;tokenAction=if($ImportTokenPath){'import'}elseif($tokenValue){'preserve'}else{'generate'};composeProject='qicheng-agent-channels';channelCount=$ChannelCount;ports=$selectedPorts;defaultViewerMode='background';disableLegacyWindowsChannelsStartup=[bool]$DisableLegacyWindowsChannelsStartup;legacyShortcutPresent=(Test-Path -LiteralPath $legacyLink -PathType Leaf);volumesRemoved=$false;applyRequested=[bool]$Apply;hostChangesMade=$false}
 if(-not $Apply){$plan|ConvertTo-Json -Depth 5;return}
 
 $viewerPath=Join-Path $installRoot 'dist\AgentChannels.exe'
@@ -135,7 +138,7 @@ try{
         }
         [IO.File]::WriteAllText((Join-Path $tokenDirectory 'viewer.token'),$viewerTokenValue,[Text.UTF8Encoding]::new($false))
     }
-    $record=[ordered]@{schemaVersion=1;product='Qicheng Lite';version=[string]$manifest.version;installedAt=(Get-Date).ToUniversalTime().ToString('o');dataRoot=$dataRoot;composeProject='qicheng-agent-channels';tokenPath='.local/channel.token';startupLink=(Join-Path $startupRoot '启程轻量工作台.lnk');startMenuRoot=$startMenuRoot;desktopLink=(Join-Path $desktopRoot '启程轻量工作台.lnk')}
+    $record=[ordered]@{schemaVersion=1;product='Qicheng Lite';version=[string]$manifest.version;installedAt=(Get-Date).ToUniversalTime().ToString('o');dataRoot=$dataRoot;composeProject='qicheng-agent-channels';channelCount=$ChannelCount;tokenPath='.local/channel.token';startupLink=(Join-Path $startupRoot '启程轻量工作台.lnk');startMenuRoot=$startMenuRoot;desktopLink=(Join-Path $desktopRoot '启程轻量工作台.lnk')}
     $record|ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $stage '.qicheng-lite-install.json') -Encoding UTF8
     if(Test-Path -LiteralPath $installRoot){$backup=Join-Path $parent ('.QichengLite.backup.'+[guid]::NewGuid().ToString('N'));Move-Item -LiteralPath $installRoot -Destination $backup}
     Move-Item -LiteralPath $stage -Destination $installRoot
@@ -195,7 +198,8 @@ try{
     New-Link (Join-Path $startMenuRoot '管理启程轻量工作台.lnk') $powershell ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$startScript+'"')
     New-Link (Join-Path $startMenuRoot '诊断启程轻量工作台.lnk') $powershell ('-NoExit -NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path $installRoot 'Diagnose-Qicheng-Lite.ps1')+'"')
     New-Link (Join-Path $startMenuRoot '取回频道一下载文件.lnk') $powershell ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+(Join-Path $installRoot 'Export-Downloads.ps1')+'" -Channel 1 -Open')
-    New-Link (Join-Path $startMenuRoot '取回频道二下载文件.lnk') $powershell ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+(Join-Path $installRoot 'Export-Downloads.ps1')+'" -Channel 2 -Open')
+    if($ChannelCount -eq 2){New-Link (Join-Path $startMenuRoot '取回频道二下载文件.lnk') $powershell ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+(Join-Path $installRoot 'Export-Downloads.ps1')+'" -Channel 2 -Open')}
+    elseif(Test-Path -LiteralPath (Join-Path $startMenuRoot '取回频道二下载文件.lnk')){Remove-Item -LiteralPath (Join-Path $startMenuRoot '取回频道二下载文件.lnk') -Force}
     New-Link (Join-Path $startMenuRoot '恢复旧 Windows 频道自启动.lnk') $powershell ('-NoExit -NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path $installRoot 'Restore-LegacyWindowsChannelsStartup.ps1')+'" -Apply')
     $legacyDisabled=$false
     if($DisableLegacyWindowsChannelsStartup -and (Test-Path -LiteralPath $legacyLink -PathType Leaf)){
@@ -226,4 +230,4 @@ $startStatus=$null
 if($LaunchAfterInstall){
     try{$startStatus=(& (Join-Path $installRoot 'Start-Qicheng-Lite.ps1') -Background -BuildBackend -DockerPath $DockerPath -HealthAttempts $HealthAttempts|Out-String|ConvertFrom-Json).status}catch{$startStatus='start-failed';$startError=$_.Exception.Message}
 }
-[ordered]@{schemaVersion=1;status=if($startStatus -eq 'start-failed'){'installed-start-failed'}else{'installed'};version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;tokenImported=[bool]$ImportTokenPath;tokenDisplayed=$false;composeProject='qicheng-agent-channels';ports=@(18761,18762);viewerMode='background';legacyStartupDisabled=$legacyDisabled;legacyBackup=if($legacyDisabled){$legacyBackup}else{$null};startStatus=$startStatus;startError=if($startStatus -eq 'start-failed'){$startError}else{$null};volumesRemoved=$false;hostChangesMade=$true}|ConvertTo-Json -Depth 5
+[ordered]@{schemaVersion=1;status=if($startStatus -eq 'start-failed'){'installed-start-failed'}else{'installed'};version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;tokenImported=[bool]$ImportTokenPath;tokenDisplayed=$false;composeProject='qicheng-agent-channels';channelCount=$ChannelCount;ports=$selectedPorts;viewerMode='background';legacyStartupDisabled=$legacyDisabled;legacyBackup=if($legacyDisabled){$legacyBackup}else{$null};startStatus=$startStatus;startError=if($startStatus -eq 'start-failed'){$startError}else{$null};volumesRemoved=$false;hostChangesMade=$true}|ConvertTo-Json -Depth 5

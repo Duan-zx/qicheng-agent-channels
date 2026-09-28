@@ -45,6 +45,15 @@ function Read-QichengLiteInstallRecord {
     Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
 }
 
+function Get-QichengLiteChannelCount {
+    param([Parameter(Mandatory=$true)]$Record)
+    # Records written before the channel selector always installed both channels.
+    if($null -eq $Record.PSObject.Properties['channelCount']){return 2}
+    $value=[string]$Record.channelCount
+    if($value -cnotmatch '^[12]$'){throw '安装记录中的 channelCount 无效；拒绝猜测频道数。'}
+    return [int]$value
+}
+
 function Test-QichengLiteTokenValue {
     param([Parameter(Mandatory=$true)][string]$Value)
     $Value -cmatch '^[a-f0-9]{64}$'

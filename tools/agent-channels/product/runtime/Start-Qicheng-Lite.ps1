@@ -5,6 +5,9 @@ $ErrorActionPreference='Stop'
 if($Port1 -ne 18761 -or $Port2 -ne 18762){throw '端口契约固定为 18761/18762；请移除自定义端口参数。'}
 if([string]::IsNullOrWhiteSpace($InstallRoot)){$InstallRoot=$PSScriptRoot}
 $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
+$record=Read-QichengLiteInstallRecord -InstallRoot $installRoot
+if(-not $record){throw '安装记录缺失；未启动容器或查看器。'}
+$channelCount=Get-QichengLiteChannelCount -Record $record
 $token=Join-Path $installRoot '.local\channel.token'
 $compose=Join-Path $installRoot 'compose.yaml'
 $brokerToken=Join-Path $installRoot '.local\broker.token'
@@ -101,25 +104,41 @@ if(-not $dockerReady){
 }
 $dockerComposeArguments=@('compose','--project-name','qicheng-agent-channels','--project-directory',$installRoot,'-f',$compose)
 if($brokerEnabled){$dockerComposeArguments+=@('-f',$brokerCompose)}
+$services=@('channel1');$ports=@(18761)
+if($channelCount -eq 2){$services+= 'channel2';$ports+=18762}
+# Check ownership before any Compose mutation when reducing an existing installation.
+if($channelCount -eq 1){
+    $oldIds=@(& $DockerPath @dockerComposeArguments --profile second ps -q channel2 2>$null|Where-Object{$_}|ForEach-Object{$_.Trim()})
+    if($LASTEXITCODE -ne 0){throw '无法确认旧频道二容器状态；未启动查看器。'}
+    foreach($oldId in $oldIds){
+        $workingDirOutput=& $DockerPath inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' $oldId 2>$null
+        $workingDirExit=$LASTEXITCODE
+        $workingDir=([string]($workingDirOutput|Select-Object -First 1)).Trim()
+        if($workingDirExit -ne 0 -or -not [string]::Equals(($workingDir -replace '[\\/]+$',''),($installRoot -replace '[\\/]+$',''),[StringComparison]::OrdinalIgnoreCase)){throw '发现频道二项目目录不匹配；拒绝停止其他安装的容器。'}
+    }
+}
 $dockerArguments=@($dockerComposeArguments)+@('--profile','second','up','-d')
 if($BuildBackend){$dockerArguments+='--build'}else{$dockerArguments+='--no-build'}
-$dockerArguments+=@('channel1','channel2')
+$dockerArguments+=$services
 & $DockerPath @dockerArguments
 if($LASTEXITCODE -ne 0){
     if($brokerEnabled){
-        & $DockerPath @dockerComposeArguments stop channel1 channel2|Out-Null
-        if($LASTEXITCODE -ne 0){throw 'Broker 模式启动失败，且无法停止两频道容器。请立即手动停止这两个容器；未启动查看器。'}
+        & $DockerPath @dockerComposeArguments stop @services|Out-Null
+        if($LASTEXITCODE -ne 0){throw 'Broker 模式启动失败，且无法停止已选频道容器。请立即手动检查；未启动查看器。'}
     }
-    throw '两频道后端启动失败。Broker 模式下已停止两频道；未删除容器或 volume；请运行诊断。'
+    throw '后端启动失败。Broker 模式下已停止已选频道；未删除容器或 volume；请运行诊断。'
 }
-$port1=18761
-$port2=18762
+if($channelCount -eq 1){
+    foreach($oldId in $oldIds){
+        & $DockerPath @dockerComposeArguments stop channel2|Out-Null
+        if($LASTEXITCODE -ne 0){throw '无法停止旧频道二容器；未启动查看器。'}
+    }
+}
 $ready=@{}
-$ready[$port1]=$false
-$ready[$port2]=$false
+foreach($port in $ports){$ready[$port]=$false}
 $headers=@{Authorization=('Bearer '+$tokenValue)}
 foreach($attempt in 1..$HealthAttempts){
-    foreach($port in @($port1,$port2)){
+    foreach($port in $ports){
         if(-not $ready[$port]){
             try{
                 $state=Invoke-RestMethod -Uri ("http://127.0.0.1:$port/api/state") -Headers $headers -TimeoutSec 2
@@ -127,15 +146,15 @@ foreach($attempt in 1..$HealthAttempts){
             }catch{}
         }
     }
-    if($ready[$port1] -and $ready[$port2]){break}
+    if(@($ports|Where-Object{-not $ready[$_]}).Count -eq 0){break}
     Start-Sleep -Milliseconds 500
 }
-if(-not($ready[$port1] -and $ready[$port2])){
+if(@($ports|Where-Object{-not $ready[$_]}).Count -gt 0){
     if($brokerEnabled){
-        & $DockerPath @dockerComposeArguments stop channel1 channel2|Out-Null
-        if($LASTEXITCODE -ne 0){throw "Broker 模式健康检查失败，且无法停止 $port1/$port2 容器。请立即手动停止这两个容器；未启动查看器。"}
+        & $DockerPath @dockerComposeArguments stop @services|Out-Null
+        if($LASTEXITCODE -ne 0){throw 'Broker 模式健康检查失败，且无法停止已选频道容器。请立即手动检查；未启动查看器。'}
     }
-    throw "容器已请求启动，但 $port1/$port2 健康检查未全部通过（Broker 模式要求 input_auth=broker-v2，旧镜像需用 -BuildBackend 重建）。Broker 模式下已停止两频道；未启动查看器，未删除 volume。"
+    throw "容器已请求启动，但已选端口 $($ports -join '/') 健康检查未全部通过（Broker 模式要求 input_auth=broker-v2，旧镜像需用 -BuildBackend 重建）。Broker 模式下已停止已选频道；未启动查看器，未删除 volume。"
 }
 $windowsViewerStartRequested=$false
 $windowsHotkeysConfirmed=$false
@@ -166,4 +185,4 @@ if(-not $NoWindowsChannels -and -not[string]::IsNullOrWhiteSpace($env:LOCALAPPDA
 }
 $viewerArguments=if($Background){@('--background')}else{@('--show')}
 Start-Process -FilePath $viewer -ArgumentList $viewerArguments -WorkingDirectory $installRoot -WindowStyle Hidden|Out-Null
-[ordered]@{schemaVersion=1;status='started';installRoot=$installRoot;composeProject='qicheng-agent-channels';services=@('channel1','channel2');ports=@($port1,$port2);backendBuilt=[bool]$BuildBackend;viewerMode=if($Background){'background'}else{'visible'};windowsViewerStartRequested=$windowsViewerStartRequested;windowsViewerStatus=$windowsViewerStatus;windowsHotkeysConfirmed=$windowsHotkeysConfirmed;tokenDisplayed=$false;volumesRemoved=$false}|ConvertTo-Json -Depth 4
+[ordered]@{schemaVersion=1;status='started';installRoot=$installRoot;composeProject='qicheng-agent-channels';channelCount=$channelCount;services=$services;ports=$ports;backendBuilt=[bool]$BuildBackend;viewerMode=if($Background){'background'}else{'visible'};windowsViewerStartRequested=$windowsViewerStartRequested;windowsViewerStatus=$windowsViewerStatus;windowsHotkeysConfirmed=$windowsHotkeysConfirmed;tokenDisplayed=$false;volumesRemoved=$false}|ConvertTo-Json -Depth 4

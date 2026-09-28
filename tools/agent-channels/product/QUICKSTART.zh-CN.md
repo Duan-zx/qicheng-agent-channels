@@ -18,7 +18,7 @@
 
 需要多个 AI 任务操作同一频道时，可另外接入 Task Lease。该模式使用独立的 `.local\broker.token`；两个 token 不能相同。仅安装轻量版不会自动创建 Task Lease 租约。
 
-双击安装会创建两个频道，使用固定 Compose 项目 `qicheng-agent-channels`，端口仅绑定 `127.0.0.1:18761` 和 `127.0.0.1:18762`。它不会执行 `docker compose down -v`，不会删除 volume，也不会停止无关进程。
+首次双击安装可选择 1 或 2 个频道；命令行无交互时默认 1 个，适合资源较紧的电脑。频道一使用 `127.0.0.1:18761`，选 2 个时另启频道二 `127.0.0.1:18762`；Compose 项目固定为 `qicheng-agent-channels`。安装记录保存选择，升级不传参数时沿用原选择；旧版双频道安装升级按 2 个保留。明确要增减频道时运行 `Install-Qicheng-Lite.ps1 -ChannelCount 1` 或 `-ChannelCount 2`，先查看计划，再加 `-Apply` 执行。切到 1 个频道时，下次启动会核对并停止本安装的旧频道二容器；不会删除它的 volume，重新选 2 可继续使用原数据。它不会执行 `docker compose down -v`，不会删除 volume，也不会停止无关进程。
 
 要复用已有 token，请从 PowerShell 显式运行：
 
@@ -35,7 +35,7 @@
 
 诊断遇到该 Startup 快捷方式时会检查它实际指向的 Windows 频道安装、安装记录、发布包文件校验和启动器的 Lite 热键协调能力。经核实的兼容版会自动为 Windows 频道使用 Alt+4..9 并关闭 host 快捷键，此时不报冲突；旧版或证据不完整的启动项仍报告可能冲突。诊断只读，不修改启动项，也不读取 Windows 频道私有 token。
 
-来宾浏览器下载保存在 Docker volume 内。开始菜单“取回频道一/二下载文件”会先核对容器确实属于本产品，再把 `/home/channel/Downloads` 手动导出为 `%LOCALAPPDATA%\Qicheng\Lite\Downloads\频道N\时间戳` 快照并打开目录。每次使用新目录，不覆盖以前同名文件；来宾原文件和 volume 保留。
+来宾浏览器下载保存在 Docker volume 内。开始菜单只为已选频道提供“取回频道下载文件”入口；导出时会先核对容器确实属于本产品，再把 `/home/channel/Downloads` 手动导出为 `%LOCALAPPDATA%\Qicheng\Lite\Downloads\频道N\时间戳` 快照并打开目录。每次使用新目录，不覆盖以前同名文件；来宾原文件和 volume 保留。
 
 ## 开发者 Linux 后端脚本
 
@@ -47,15 +47,15 @@ sh ./product/runtime/linux/install.sh --prefix /absolute/path
 
 ## 诊断与边界
 
-Windows 开始菜单可运行“诊断启程轻量工作台”。诊断只读，不启动、不停止、不重建容器，并使用本地 token 验证两个私有 Linux 显示的认证状态和尺寸。
+Windows 开始菜单可运行“诊断启程轻量工作台”。诊断只读，不启动、不停止、不重建容器，并使用本地 token 验证已选频道的私有 Linux 显示、认证状态和尺寸。选 1 个频道时不把未启用的 18762 报为故障。
 
-本版本提供本地安装、两频道容器启动、托盘查看器、诊断和源码重建。它不安装 Docker、不替用户接受第三方许可、不登录业务账号，也不把工程测试等同于真实业务可用性。第三方许可边界见 `THIRD-PARTY-NOTICES.md`。
+本版本提供本地安装、1 或 2 个频道容器启动、托盘查看器、诊断和源码重建。它不安装 Docker、不替用户接受第三方许可、不登录业务账号，也不把工程测试等同于真实业务可用性。第三方许可边界见 `THIRD-PARTY-NOTICES.md`。
 
 ## AI 客户端接入（Lite）
 
 宿主另需 Python 3.10+。查看器和浏览器本身不依赖宿主 Python；只有 MCP 适配器需要它。启程不附带模型或订阅。
 
-已安装 Codex CLI 和 Python 时，在 PowerShell 注册两个独立服务：
+已安装 Codex CLI 和 Python 时，在 PowerShell 注册已启用频道的独立服务；选 1 个频道时只运行第一条：
 
 ```powershell
 $python = (Get-Command python.exe -ErrorAction Stop).Source

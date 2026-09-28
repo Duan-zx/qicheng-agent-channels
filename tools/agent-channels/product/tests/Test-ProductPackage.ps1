@@ -180,9 +180,10 @@ static class HostReturnProtocol {
     $installerSource=Get-Content -LiteralPath $installer -Raw
     Assert-True ($installerSource -match '\$legacyRemoved' -and $installerSource -match 'legacyBackup.*legacyLink') 'installer rollback does not restore removed legacy startup shortcut'
     Assert-True ($installerSource -match '\$shortcutSnapshot' -and $installerSource -match 'shortcutSnapshotRoot' -and $installerSource -match '\$managedShortcutPaths' -and $installerSource -match 'shortcut.Exists') 'installer rollback does not restore managed shortcuts'
-    $common=@{PackageRoot=$build.windows.directory;InstallRoot=$install;DataRoot=$data;StartMenuRoot=$startMenu;DesktopRoot=$desktop;StartupRoot=$startup;LegacyStartupRoot=$legacyStartup;ImportTokenPath=$tokenPath;ImportBrokerTokenPath=$brokerTokenPath;DisableLegacyWindowsChannelsStartup=$true;Confirm=$false}
+    $common=@{PackageRoot=$build.windows.directory;InstallRoot=$install;DataRoot=$data;StartMenuRoot=$startMenu;DesktopRoot=$desktop;StartupRoot=$startup;LegacyStartupRoot=$legacyStartup;ImportTokenPath=$tokenPath;ImportBrokerTokenPath=$brokerTokenPath;ChannelCount=2;DisableLegacyWindowsChannelsStartup=$true;Confirm=$false}
     $plan=(& $installer @common|Out-String|ConvertFrom-Json)
     Assert-True ($plan.status -eq 'not-installed' -and -not $plan.hostChangesMade) 'installer plan mutated host state'
+    Assert-True ($plan.channelCount -eq 2 -and @($plan.ports).Count -eq 2) 'explicit two-channel plan failed'
     Assert-True (Test-Path -LiteralPath (Join-Path $legacyStartup '启程 Windows 频道.lnk')) 'plan removed legacy shortcut'
     $installText=(& $installer @common -Apply|Out-String)
     Assert-True ($installText -notmatch [regex]::Escape($token) -and $installText -notmatch [regex]::Escape($brokerToken)) 'installer output exposed token'
@@ -223,14 +224,33 @@ static class HostReturnProtocol {
     }
     Assert-True (-not @(Get-ChildItem -LiteralPath $startMenu,$desktop,$startup -Filter '.qicheng-shortcut-*.lnk' -File -ErrorAction SilentlyContinue).Count) 'ASCII temporary shortcut was not cleaned up'
 
-    $upgradeCommon=$common.Clone();$upgradeCommon.Remove('ImportTokenPath');$upgradeCommon.Remove('ImportBrokerTokenPath');$upgradeCommon.Remove('DataRoot')
+    $legacyCountRecord=Read-Json (Join-Path $install '.qicheng-lite-install.json')
+    $legacyCountRecord.PSObject.Properties.Remove('channelCount')
+    $legacyCountRecord|ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $install '.qicheng-lite-install.json') -Encoding UTF8
+    $upgradeCommon=$common.Clone();$upgradeCommon.Remove('ImportTokenPath');$upgradeCommon.Remove('ImportBrokerTokenPath');$upgradeCommon.Remove('DataRoot');$upgradeCommon.Remove('ChannelCount')
     $upgrade=(& $installer @upgradeCommon -Apply|Out-String|ConvertFrom-Json)
     Assert-True ($upgrade.status -eq 'installed') 'upgrade failed'
+    Assert-True ($upgrade.channelCount -eq 2 -and (Read-Json (Join-Path $install '.qicheng-lite-install.json')).channelCount -eq 2) 'upgrade did not preserve two-channel selection'
     Assert-True ([string]$upgrade.dataRoot -eq [IO.Path]::GetFullPath($data)) 'upgrade did not inherit custom DataRoot'
     Assert-True ([string](Read-Json (Join-Path $install '.qicheng-lite-install.json')).dataRoot -eq [IO.Path]::GetFullPath($data)) 'upgrade record drifted from custom DataRoot'
     Assert-True ((Get-Content -LiteralPath (Join-Path $install '.local\channel.token') -Raw) -ceq $token) 'upgrade did not preserve token'
     Assert-True ((Get-Content -LiteralPath (Join-Path $install '.local\broker.token') -Raw) -ceq $brokerToken) 'upgrade did not preserve broker token'
     Assert-True ((Get-Content -LiteralPath (Join-Path $install '.local\viewer.token') -Raw).Trim() -ceq $viewerToken) 'upgrade did not preserve viewer token'
+    $singleInstall=Join-Path $testRoot 'single-install'
+    $singleOptions=@{PackageRoot=$build.windows.directory;InstallRoot=$singleInstall;DataRoot=(Join-Path $testRoot 'single-data');StartMenuRoot=(Join-Path $testRoot 'single-menu');DesktopRoot=(Join-Path $testRoot 'single-desktop');StartupRoot=(Join-Path $testRoot 'single-startup');LegacyStartupRoot=(Join-Path $testRoot 'single-legacy');Confirm=$false}
+    $singlePlan=(& $installer @singleOptions|Out-String|ConvertFrom-Json)
+    Assert-True ($singlePlan.channelCount -eq 1 -and @($singlePlan.ports).Count -eq 1) 'fresh installation did not default to one channel'
+    $singleResult=(& $installer @singleOptions -Apply|Out-String|ConvertFrom-Json)
+    Assert-True ($singleResult.channelCount -eq 1 -and (Read-Json (Join-Path $singleInstall '.qicheng-lite-install.json')).channelCount -eq 1) 'one-channel install record failed'
+    Assert-True (-not(Test-Path -LiteralPath (Join-Path $singleOptions.StartMenuRoot '取回频道二下载文件.lnk'))) 'disabled channel download shortcut was created'
+    $singleUpgrade=(& $installer @singleOptions -Apply|Out-String|ConvertFrom-Json)
+    Assert-True ($singleUpgrade.channelCount -eq 1) 'one-channel upgrade did not preserve selection'
+    $twoPlan=(& $installer @singleOptions -ChannelCount 2|Out-String|ConvertFrom-Json)
+    Assert-True ($twoPlan.channelCount -eq 2 -and @($twoPlan.ports).Count -eq 2) 'two-channel expansion plan failed'
+    $twoResult=(& $installer @singleOptions -ChannelCount 2 -Apply|Out-String|ConvertFrom-Json)
+    Assert-True ($twoResult.channelCount -eq 2 -and (Test-Path -LiteralPath (Join-Path $singleOptions.StartMenuRoot '取回频道二下载文件.lnk'))) 'two-channel expansion failed'
+    $singleAgain=(& $installer @singleOptions -ChannelCount 1 -Apply|Out-String|ConvertFrom-Json)
+    Assert-True ($singleAgain.channelCount -eq 1 -and -not(Test-Path -LiteralPath (Join-Path $singleOptions.StartMenuRoot '取回频道二下载文件.lnk'))) 'two-to-one selection or shortcut removal failed'
     $restore=(& (Join-Path $install 'Restore-LegacyWindowsChannelsStartup.ps1') -InstallRoot $install -LegacyStartupRoot $legacyStartup -Apply -Confirm:$false|Out-String|ConvertFrom-Json)
     Assert-True ($restore.status -eq 'restored' -and $restore.backupPreserved) 'legacy shortcut restore failed'
     Assert-True (Test-Path -LiteralPath (Join-Path $legacyStartup 'unrelated.lnk')) 'restore changed unrelated shortcut'
@@ -254,6 +274,9 @@ static class FakeDocker {
             Console.WriteLine(mode=="windows" ? "windows" : "linux"); return 0;
         }
         if (args.Length>0 && args[0]=="version") { Console.WriteLine("1.0"); return 0; }
+        string oldDirectory=Environment.GetEnvironmentVariable("QICHENG_LITE_FAKE_OLD_CHANNEL2_DIR");
+        if (!String.IsNullOrEmpty(oldDirectory) && args.Length>0 && args[0]=="compose" && Array.IndexOf(args,"ps")>=0 && Array.IndexOf(args,"channel2")>=0) { Console.WriteLine("old-channel2-id"); return 0; }
+        if (!String.IsNullOrEmpty(oldDirectory) && args.Length>0 && args[0]=="inspect") { Console.WriteLine(oldDirectory); return 0; }
         return 0;
     }
 }
@@ -276,7 +299,21 @@ exit /b %ERRORLEVEL%
     Assert-True (Test-Path -LiteralPath (Join-Path $cmdInstall '.qicheng-lite-install.json')) 'startup failure did not retain installation'
     if($RecoveryOnly){
         $env:QICHENG_TEST_INPUT_AUTH='direct-v1'
-        function Invoke-RestMethod { param([string]$Uri,[hashtable]$Headers,[int]$TimeoutSec) [pscustomobject]@{input_target='private-linux-display';input_auth=$env:QICHENG_TEST_INPUT_AUTH;channel_id=if($Uri -match ':18761/'){'1'}else{'2'};width=1600;height=900} }
+        $global:mockStateUris=New-Object 'System.Collections.Generic.List[string]'
+        function Invoke-RestMethod { param([string]$Uri,[hashtable]$Headers,[int]$TimeoutSec) $global:mockStateUris.Add($Uri); [pscustomobject]@{input_target='private-linux-display';input_auth=$env:QICHENG_TEST_INPUT_AUTH;channel_id=if($Uri -match ':18761/'){'1'}else{'2'};width=1600;height=900} }
+        $singleStarted=(& (Join-Path $singleInstall 'Start-Qicheng-Lite.ps1') -InstallRoot $singleInstall -NoWindowsChannels -DockerPath $fakeDocker -HealthAttempts 1|Out-String|ConvertFrom-Json)
+        Assert-True ($singleStarted.status -eq 'started' -and $singleStarted.channelCount -eq 1 -and @($singleStarted.services).Count -eq 1 -and @($singleStarted.ports).Count -eq 1) 'single-channel start contract failed'
+        $singleDiagnosis=(& (Join-Path $singleInstall 'Diagnose-Qicheng-Lite.ps1') -InstallRoot $singleInstall -DockerPath $fakeDocker -StartupRoot $singleOptions.StartupRoot -LegacyStartupRoot $singleOptions.LegacyStartupRoot|Out-String|ConvertFrom-Json)
+        Assert-True ($singleDiagnosis.channelCount -eq 1 -and @($singleDiagnosis.ports).Count -eq 1 -and -not @($singleDiagnosis.checks|Where-Object{$_.name -match '18762'}).Count) 'single-channel diagnosis incorrectly checked port 18762'
+        Assert-True (-not @($global:mockStateUris|Where-Object{$_ -match ':18762/'}).Count) 'single-channel start or diagnosis contacted port 18762'
+        $env:QICHENG_LITE_FAKE_OLD_CHANNEL2_DIR=$singleInstall
+        $singleStartedAgain=(& (Join-Path $singleInstall 'Start-Qicheng-Lite.ps1') -InstallRoot $singleInstall -NoWindowsChannels -DockerPath $fakeDocker -HealthAttempts 1|Out-String|ConvertFrom-Json)
+        Assert-True ($singleStartedAgain.status -eq 'started' -and (Get-Content -LiteralPath $dockerLog -Raw) -match 'stop channel2') 'owned old channel2 was not stopped after selecting one channel'
+        $env:QICHENG_LITE_FAKE_OLD_CHANNEL2_DIR=(Join-Path $testRoot 'foreign-install')
+        $foreignError=''
+        try{& (Join-Path $singleInstall 'Start-Qicheng-Lite.ps1') -InstallRoot $singleInstall -NoWindowsChannels -DockerPath $fakeDocker -HealthAttempts 1 -ErrorAction Stop|Out-Null}catch{$foreignError=$_.Exception.Message}
+        Assert-True ($foreignError -match '目录不匹配') 'foreign channel2 container was not protected'
+        Remove-Item Env:QICHENG_LITE_FAKE_OLD_CHANNEL2_DIR
     }else{
     $requestLog=Join-Path $testRoot 'requests.log';$readyFile=Join-Path $testRoot 'server.ready';$serverScript=Join-Path $testRoot 'fake-state-server.py'
     $authModeFile=Join-Path $testRoot 'input-auth.txt'
@@ -309,6 +346,8 @@ while True: time.sleep(1)
     $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     & $compiler /nologo /target:winexe /optimize+ "/out:$install\dist\AgentChannels.exe" $fakeViewerSource
     Assert-True ($LASTEXITCODE -eq 0) 'fake viewer compilation failed'
+    & $compiler /nologo /target:winexe /optimize+ "/out:$singleInstall\dist\AgentChannels.exe" $fakeViewerSource
+    Assert-True ($LASTEXITCODE -eq 0) 'single-channel fake viewer compilation failed'
     $probeOutput=Join-Path $testRoot 'fake-context.out';$probeError=Join-Path $testRoot 'fake-context.err'
     $probeProcess=Start-Process -FilePath $fakeDocker -ArgumentList @('context','inspect','--format','{{.Endpoints.docker.Host}}') -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $probeOutput -RedirectStandardError $probeError
     Assert-True ($probeProcess.ExitCode -eq 0 -and (Get-Content -LiteralPath $probeOutput -Raw).Trim() -eq 'npipe:////./pipe/dockerDesktopLinuxEngine') ("fake Docker context fixture failed: "+(Get-Content -LiteralPath $probeOutput -Raw))
@@ -369,6 +408,35 @@ while True: time.sleep(1)
     foreach($n in 1..20){if(-not @(Get-TestOwnedProcesses -Root $testRoot).Count){break};Start-Sleep -Milliseconds 50}
     Assert-True (@(Get-TestOwnedProcesses -Root $testRoot).Count -eq 0) 'fake viewer did not exit after isolated start'
     if($RecoveryOnly){
+        $exportMock=Join-Path $testRoot 'export-ownership-mock.ps1'
+        $exportLog=Join-Path $testRoot 'export-ownership.log'
+        $env:QICHENG_LITE_EXPORT_DOCKER_LOG=$exportLog
+        @'
+param([Parameter(ValueFromRemainingArguments=$true)][string[]]$DockerArgs)
+Add-Content -LiteralPath $env:QICHENG_LITE_EXPORT_DOCKER_LOG -Value ($DockerArgs -join ' ')
+if($DockerArgs[0] -eq 'version'){'1.0';return}
+if($DockerArgs[0] -eq 'compose' -and $DockerArgs -contains '-q'){'qicheng-test-channel1';return}
+if($DockerArgs[0] -eq 'inspect'){
+    if($DockerArgs[2] -match 'compose.project.working_dir'){$env:QICHENG_LITE_EXPORT_WORKING_DIR}
+    elseif($DockerArgs[2] -match 'compose.project'){'qicheng-agent-channels'}
+    else{'channel1'}
+    return
+}
+if($DockerArgs[0] -eq 'cp'){
+    New-Item -ItemType Directory -Path $DockerArgs[-1] -Force|Out-Null
+    Set-Content -LiteralPath (Join-Path $DockerArgs[-1] 'sample.txt') -Value 'owned-download' -NoNewline
+    return
+}
+throw 'Unexpected fake Docker arguments'
+'@|Set-Content -LiteralPath $exportMock -Encoding UTF8
+        $env:QICHENG_LITE_EXPORT_WORKING_DIR=$singleInstall
+        $ownedExport=(& (Join-Path $singleInstall 'Export-Downloads.ps1') -Channel 1 -InstallRoot $singleInstall -DockerPath $exportMock|Out-String|ConvertFrom-Json)
+        Assert-True ($ownedExport.status -eq 'exported' -and $ownedExport.ownContainerVerified -and (Test-Path -LiteralPath (Join-Path $ownedExport.destination 'sample.txt'))) 'owned installation download export failed'
+        $env:QICHENG_LITE_EXPORT_WORKING_DIR=(Join-Path $testRoot 'foreign-install')
+        Remove-Item -LiteralPath $exportLog -Force
+        $foreignExportError=''
+        try{& (Join-Path $singleInstall 'Export-Downloads.ps1') -Channel 1 -InstallRoot $singleInstall -DockerPath $exportMock -ErrorAction Stop|Out-Null}catch{$foreignExportError=$_.Exception.Message}
+        Assert-True ($foreignExportError -match '容器归属验证失败' -and (Get-Content -LiteralPath $exportLog -Raw) -notmatch '(^|\s)cp(\s|$)') 'foreign installation download was not rejected before copy'
         [ordered]@{schemaVersion=1;status='passed';loginRecovery=$true;manualFastFailure=$true;desktopSingleInstance=$true;boundedTimeout=$true;hangingProbeBounded=$true;remoteContextRejected=$true;unknownContextRejected=$true;missingDockerCliRejected=$true;windowsEngineRejected=$true;realDockerTouched=$false;realDesktopTouched=$false;realStartupTouched=$false}|ConvertTo-Json -Depth 4
         return
     }
@@ -395,7 +463,9 @@ Add-Content -LiteralPath $env:QICHENG_LITE_EXPORT_DOCKER_LOG -Value ($DockerArgs
 if($DockerArgs[0] -eq 'version'){'1.0';return}
 if($DockerArgs[0] -eq 'compose' -and $DockerArgs -contains '-q'){'qicheng-test-channel1';return}
 if($DockerArgs[0] -eq 'inspect'){
-    if($DockerArgs[2] -match 'compose.project'){'qicheng-agent-channels'}else{'channel1'}
+    if($DockerArgs[2] -match 'compose.project.working_dir'){$env:QICHENG_LITE_EXPORT_WORKING_DIR}
+    elseif($DockerArgs[2] -match 'compose.project'){'qicheng-agent-channels'}
+    else{'channel1'}
     return
 }
 if($DockerArgs[0] -eq 'cp'){
@@ -406,6 +476,7 @@ if($DockerArgs[0] -eq 'cp'){
 }
 throw 'Unexpected fake Docker arguments'
 '@|Set-Content -LiteralPath $exportDocker -Encoding UTF8
+    $env:QICHENG_LITE_EXPORT_WORKING_DIR=$install
     $downloadText=(& (Join-Path $install 'Export-Downloads.ps1') -Channel 1 -InstallRoot $install -DataRoot $data -DockerPath $exportDocker|Out-String)
     Assert-True ($downloadText -notmatch [regex]::Escape($token)) 'download export exposed token'
     $download=$downloadText|ConvertFrom-Json
@@ -413,6 +484,12 @@ throw 'Unexpected fake Docker arguments'
     Assert-True ((Get-Content -LiteralPath (Join-Path $download.destination 'sample.txt') -Raw) -eq 'guest-download') 'download snapshot file missing'
     $exportCalls=Get-Content -LiteralPath $exportDockerLog -Raw
     Assert-True ($exportCalls -match 'qicheng-test-channel1:/home/channel/Downloads/\.' -and $exportCalls -notmatch '(^|\s)rm(\s|$)|(^|\s)down(\s|$)|(^|\s)-v(\s|$)') 'download export Docker contract failed'
+    $env:QICHENG_LITE_EXPORT_WORKING_DIR=(Join-Path $testRoot 'foreign-install')
+    Remove-Item -LiteralPath $exportDockerLog -Force
+    $foreignExportError=''
+    try{& (Join-Path $install 'Export-Downloads.ps1') -Channel 1 -InstallRoot $install -DataRoot $data -DockerPath $exportDocker -ErrorAction Stop|Out-Null}catch{$foreignExportError=$_.Exception.Message}
+    Assert-True ($foreignExportError -match '容器归属验证失败' -and (Get-Content -LiteralPath $exportDockerLog -Raw) -notmatch '(^|\s)cp(\s|$)') 'foreign installation download was not rejected before copy'
+    $env:QICHENG_LITE_EXPORT_WORKING_DIR=$install
 
     $ps5Install=Join-Path $testRoot 'installed-ps5';$ps5Data=Join-Path $testRoot 'data-ps5';$ps5Script=Join-Path $testRoot 'ps5-install.ps1'
     $ps5Command='& '+(Quote-Ps $installer)+' -PackageRoot '+(Quote-Ps $build.windows.directory)+' -InstallRoot '+(Quote-Ps $ps5Install)+' -DataRoot '+(Quote-Ps $ps5Data)+' -StartMenuRoot '+(Quote-Ps (Join-Path $testRoot 'ps5-menu'))+' -DesktopRoot '+(Quote-Ps (Join-Path $testRoot 'ps5-desktop'))+' -StartupRoot '+(Quote-Ps (Join-Path $testRoot 'ps5-startup'))+' -LegacyStartupRoot '+(Quote-Ps (Join-Path $testRoot 'ps5-legacy'))+' -ImportTokenPath '+(Quote-Ps $tokenPath)+' -Apply -Confirm:$false'
@@ -443,6 +520,9 @@ throw 'Unexpected fake Docker arguments'
     Remove-Item Env:QICHENG_LITE_FAKE_DESKTOP_MARKER -ErrorAction SilentlyContinue
     Remove-Item Env:QICHENG_LITE_FAKE_DESKTOP_LOG -ErrorAction SilentlyContinue
     Remove-Item Env:QICHENG_LITE_EXPORT_DOCKER_LOG -ErrorAction SilentlyContinue
+    Remove-Item Env:QICHENG_LITE_EXPORT_WORKING_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:QICHENG_TEST_INPUT_AUTH -ErrorAction SilentlyContinue
+    Remove-Item Env:QICHENG_LITE_FAKE_OLD_CHANNEL2_DIR -ErrorAction SilentlyContinue
+    Remove-Variable -Name mockStateUris -Scope Global -ErrorAction SilentlyContinue
     if(Test-Path -LiteralPath $testRoot){Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue}
 }
