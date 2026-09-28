@@ -84,7 +84,7 @@ try{
     $selfTestProcess=Start-Process -FilePath (Join-Path $build.windows.directory 'dist\AgentChannels.exe') -ArgumentList @('--self-test',$selfTest) -Wait -PassThru -WindowStyle Hidden
     Assert-True ($selfTestProcess.ExitCode -eq 0) 'viewer self-test failed'
     $viewerResult=Read-Json $selfTest
-    Assert-True ($viewerResult.coordinate_mapping -and $viewerResult.jpeg_route -and $viewerResult.default_hidden -and $viewerResult.single_instance) 'viewer contract failed'
+    Assert-True ($viewerResult.coordinate_mapping -and $viewerResult.jpeg_route -and $viewerResult.default_hidden -and $viewerResult.single_instance -and $viewerResult.viewer_token_routing) 'viewer contract failed'
 
     # Exercise the packaged Lite binary's actual pipe client against an isolated same-session server.
     # This does not start either viewer, read a token, or touch the desktop/VM.
@@ -174,19 +174,25 @@ static class HostReturnProtocol {
     Set-Content -LiteralPath (Join-Path $legacyStartup 'unrelated.lnk') -Value 'unrelated' -NoNewline
     $tokenPath=Join-Path $testRoot 'import.token';$token=-join ('ab'*32)
     [IO.File]::WriteAllText($tokenPath,$token,[Text.UTF8Encoding]::new($false))
+    $brokerTokenPath=Join-Path $testRoot 'broker-import.token';$brokerToken=-join ('cd'*32)
+    [IO.File]::WriteAllText($brokerTokenPath,$brokerToken,[Text.UTF8Encoding]::new($false))
     $installer=Join-Path $build.windows.directory 'Install-Qicheng-Lite.ps1'
     $installerSource=Get-Content -LiteralPath $installer -Raw
     Assert-True ($installerSource -match '\$legacyRemoved' -and $installerSource -match 'legacyBackup.*legacyLink') 'installer rollback does not restore removed legacy startup shortcut'
     Assert-True ($installerSource -match '\$shortcutSnapshot' -and $installerSource -match 'shortcutSnapshotRoot' -and $installerSource -match '\$managedShortcutPaths' -and $installerSource -match 'shortcut.Exists') 'installer rollback does not restore managed shortcuts'
-    $common=@{PackageRoot=$build.windows.directory;InstallRoot=$install;DataRoot=$data;StartMenuRoot=$startMenu;DesktopRoot=$desktop;StartupRoot=$startup;LegacyStartupRoot=$legacyStartup;ImportTokenPath=$tokenPath;DisableLegacyWindowsChannelsStartup=$true;Confirm=$false}
+    $common=@{PackageRoot=$build.windows.directory;InstallRoot=$install;DataRoot=$data;StartMenuRoot=$startMenu;DesktopRoot=$desktop;StartupRoot=$startup;LegacyStartupRoot=$legacyStartup;ImportTokenPath=$tokenPath;ImportBrokerTokenPath=$brokerTokenPath;DisableLegacyWindowsChannelsStartup=$true;Confirm=$false}
     $plan=(& $installer @common|Out-String|ConvertFrom-Json)
     Assert-True ($plan.status -eq 'not-installed' -and -not $plan.hostChangesMade) 'installer plan mutated host state'
     Assert-True (Test-Path -LiteralPath (Join-Path $legacyStartup '启程 Windows 频道.lnk')) 'plan removed legacy shortcut'
     $installText=(& $installer @common -Apply|Out-String)
-    Assert-True ($installText -notmatch [regex]::Escape($token)) 'installer output exposed token'
+    Assert-True ($installText -notmatch [regex]::Escape($token) -and $installText -notmatch [regex]::Escape($brokerToken)) 'installer output exposed token'
     $installedResult=$installText|ConvertFrom-Json
     Assert-True ($installedResult.status -eq 'installed' -and $installedResult.legacyStartupDisabled) 'temporary install failed'
     Assert-True ((Get-Content -LiteralPath (Join-Path $install '.local\channel.token') -Raw) -ceq $token) 'imported token mismatch'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $install '.local\broker.token') -Raw) -ceq $brokerToken) 'imported broker token mismatch'
+    $viewerToken=(Get-Content -LiteralPath (Join-Path $install '.local\viewer.token') -Raw).Trim()
+    Assert-True ($viewerToken -match '^[a-f0-9]{64}$' -and $viewerToken -cne $token -and $viewerToken -cne $brokerToken) 'separate viewer token missing or duplicated'
+    Assert-True ($installText -notmatch [regex]::Escape($viewerToken)) 'installer output exposed viewer token'
     Assert-True (-not(Test-Path -LiteralPath (Join-Path $legacyStartup '启程 Windows 频道.lnk'))) 'legacy shortcut was not disabled'
     Assert-True (Test-Path -LiteralPath (Join-Path $legacyStartup 'unrelated.lnk')) 'unrelated shortcut changed'
     Assert-True (Test-Path -LiteralPath (Join-Path $data 'compatibility-backup\启程 Windows 频道.lnk')) 'legacy backup missing'
@@ -217,12 +223,14 @@ static class HostReturnProtocol {
     }
     Assert-True (-not @(Get-ChildItem -LiteralPath $startMenu,$desktop,$startup -Filter '.qicheng-shortcut-*.lnk' -File -ErrorAction SilentlyContinue).Count) 'ASCII temporary shortcut was not cleaned up'
 
-    $upgradeCommon=$common.Clone();$upgradeCommon.Remove('ImportTokenPath');$upgradeCommon.Remove('DataRoot')
+    $upgradeCommon=$common.Clone();$upgradeCommon.Remove('ImportTokenPath');$upgradeCommon.Remove('ImportBrokerTokenPath');$upgradeCommon.Remove('DataRoot')
     $upgrade=(& $installer @upgradeCommon -Apply|Out-String|ConvertFrom-Json)
     Assert-True ($upgrade.status -eq 'installed') 'upgrade failed'
     Assert-True ([string]$upgrade.dataRoot -eq [IO.Path]::GetFullPath($data)) 'upgrade did not inherit custom DataRoot'
     Assert-True ([string](Read-Json (Join-Path $install '.qicheng-lite-install.json')).dataRoot -eq [IO.Path]::GetFullPath($data)) 'upgrade record drifted from custom DataRoot'
     Assert-True ((Get-Content -LiteralPath (Join-Path $install '.local\channel.token') -Raw) -ceq $token) 'upgrade did not preserve token'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $install '.local\broker.token') -Raw) -ceq $brokerToken) 'upgrade did not preserve broker token'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $install '.local\viewer.token') -Raw).Trim() -ceq $viewerToken) 'upgrade did not preserve viewer token'
     $restore=(& (Join-Path $install 'Restore-LegacyWindowsChannelsStartup.ps1') -InstallRoot $install -LegacyStartupRoot $legacyStartup -Apply -Confirm:$false|Out-String|ConvertFrom-Json)
     Assert-True ($restore.status -eq 'restored' -and $restore.backupPreserved) 'legacy shortcut restore failed'
     Assert-True (Test-Path -LiteralPath (Join-Path $legacyStartup 'unrelated.lnk')) 'restore changed unrelated shortcut'
@@ -267,18 +275,21 @@ exit /b %ERRORLEVEL%
     Assert-True ($cmdOutput -notmatch 'installation finished') 'double-click installer printed false success after startup failure'
     Assert-True (Test-Path -LiteralPath (Join-Path $cmdInstall '.qicheng-lite-install.json')) 'startup failure did not retain installation'
     if($RecoveryOnly){
-        function Invoke-RestMethod { param([string]$Uri,[hashtable]$Headers,[int]$TimeoutSec) [pscustomobject]@{input_target='private-linux-display';width=1600;height=900} }
+        $env:QICHENG_TEST_INPUT_AUTH='direct-v1'
+        function Invoke-RestMethod { param([string]$Uri,[hashtable]$Headers,[int]$TimeoutSec) [pscustomobject]@{input_target='private-linux-display';input_auth=$env:QICHENG_TEST_INPUT_AUTH;channel_id=if($Uri -match ':18761/'){'1'}else{'2'};width=1600;height=900} }
     }else{
     $requestLog=Join-Path $testRoot 'requests.log';$readyFile=Join-Path $testRoot 'server.ready';$serverScript=Join-Path $testRoot 'fake-state-server.py'
+    $authModeFile=Join-Path $testRoot 'input-auth.txt'
+    Set-Content -LiteralPath $authModeFile -Value 'direct-v1' -NoNewline
     @'
 import http.server,json,sys,threading,time
-token,ready,log=sys.argv[1:4]; ports=[int(x) for x in sys.argv[4:]]
+token,ready,log,auth_file=sys.argv[1:5]; ports=[int(x) for x in sys.argv[5:]]
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self,*args): pass
     def do_GET(self):
         if self.path=='/health': body={'service':'agent-channels'}
         elif self.path=='/api/state' and self.headers.get('Authorization')=='Bearer '+token:
-            body={'input_target':'private-linux-display','width':1600,'height':900,'mode':'paused'}
+            body={'input_target':'private-linux-display','input_auth':open(auth_file,encoding='utf-8').read().strip(),'channel_id':str(self.server.server_port-18760),'width':1600,'height':900,'mode':'paused'}
             with open(log,'a',encoding='utf-8') as f: f.write('authorized-state\n')
         else: self.send_response(401); self.end_headers(); return
         data=json.dumps(body).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
@@ -289,7 +300,7 @@ while True: time.sleep(1)
 '@|Set-Content -LiteralPath $serverScript -Encoding UTF8
     $python=(Get-Command python.exe -ErrorAction Stop).Source
     $serverError=Join-Path $testRoot 'fake-state-server.err'
-    $serverProcess=Start-Process -FilePath $python -ArgumentList @($serverScript,$token,$readyFile,$requestLog,$port1,$port2) -WindowStyle Hidden -PassThru -RedirectStandardError $serverError
+    $serverProcess=Start-Process -FilePath $python -ArgumentList @($serverScript,$token,$readyFile,$requestLog,$authModeFile,$port1,$port2) -WindowStyle Hidden -PassThru -RedirectStandardError $serverError
     foreach($n in 1..100){if((Test-Path -LiteralPath $readyFile) -or $serverProcess.HasExited){break};Start-Sleep -Milliseconds 100}
     Assert-True (Test-Path -LiteralPath $readyFile) ("fake state server did not start: "+$(if(Test-Path -LiteralPath $serverError){Get-Content -LiteralPath $serverError -Raw}else{'no stderr'}))
     }
@@ -301,6 +312,13 @@ while True: time.sleep(1)
     $probeOutput=Join-Path $testRoot 'fake-context.out';$probeError=Join-Path $testRoot 'fake-context.err'
     $probeProcess=Start-Process -FilePath $fakeDocker -ArgumentList @('context','inspect','--format','{{.Endpoints.docker.Host}}') -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $probeOutput -RedirectStandardError $probeError
     Assert-True ($probeProcess.ExitCode -eq 0 -and (Get-Content -LiteralPath $probeOutput -Raw).Trim() -eq 'npipe:////./pipe/dockerDesktopLinuxEngine') ("fake Docker context fixture failed: "+(Get-Content -LiteralPath $probeOutput -Raw))
+    $staleImageError=''
+    try{& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -Background -NoWindowsChannels -DockerPath $fakeDocker -HealthAttempts 1 -ErrorAction Stop|Out-Null}catch{$staleImageError=$_.Exception.Message}
+    Assert-True ($staleImageError -match 'input_auth=broker-v2' -and $staleImageError -match '未启动查看器') 'old direct-input image was accepted in broker mode'
+    Assert-True ((Get-Content -LiteralPath $dockerLog -Raw) -match 'stop channel1 channel2') 'stale broker backend was not stopped'
+    if($RecoveryOnly){$env:QICHENG_TEST_INPUT_AUTH='broker-v2'}else{
+        Set-Content -LiteralPath $authModeFile -Value 'broker-v2' -NoNewline
+    }
     try{$started=(& (Join-Path $install 'Start-Qicheng-Lite.ps1') -InstallRoot $install -Background -BuildBackend -NoWindowsChannels -DockerPath $fakeDocker -HealthAttempts 3|Out-String|ConvertFrom-Json)}catch{throw ("isolated start failed; Docker calls: "+$(if(Test-Path -LiteralPath $dockerLog){Get-Content -LiteralPath $dockerLog -Raw}else{'none'})+"; error: "+$_.Exception.Message)}
     Assert-True ($started.status -eq 'started' -and $started.viewerMode -eq 'background') 'isolated start failed'
     $recoveryMarker=Join-Path $testRoot 'desktop-ready.marker'
@@ -357,7 +375,7 @@ while True: time.sleep(1)
     $requests=@(Get-Content -LiteralPath $requestLog)
     Assert-True ($requests.Count -ge 2) 'authenticated state was not checked for both channels'
     $dockerCalls=Get-Content -LiteralPath $dockerLog -Raw
-    Assert-True ($dockerCalls -match '--project-name qicheng-agent-channels' -and $dockerCalls -match '--profile second' -and $dockerCalls -match 'channel1 channel2' -and $dockerCalls -match '--build') 'compose start contract failed'
+    Assert-True ($dockerCalls -match '--project-name qicheng-agent-channels' -and $dockerCalls -match '--profile second' -and $dockerCalls -match 'channel1 channel2' -and $dockerCalls -match '--build' -and $dockerCalls -match 'compose\.broker\.yaml') 'broker compose start contract failed'
     Assert-True ($dockerCalls -notmatch '(^|\s)down(\s|$)|(^|\s)-v(\s|$)') 'start attempted destructive Docker action'
 
     Remove-Item -LiteralPath $dockerLog -Force
@@ -425,5 +443,6 @@ throw 'Unexpected fake Docker arguments'
     Remove-Item Env:QICHENG_LITE_FAKE_DESKTOP_MARKER -ErrorAction SilentlyContinue
     Remove-Item Env:QICHENG_LITE_FAKE_DESKTOP_LOG -ErrorAction SilentlyContinue
     Remove-Item Env:QICHENG_LITE_EXPORT_DOCKER_LOG -ErrorAction SilentlyContinue
+    Remove-Item Env:QICHENG_TEST_INPUT_AUTH -ErrorAction SilentlyContinue
     if(Test-Path -LiteralPath $testRoot){Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue}
 }

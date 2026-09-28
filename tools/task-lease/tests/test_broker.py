@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import secrets
 import shutil
 import socket
@@ -11,6 +12,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -19,6 +21,8 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from broker import Broker, BrokerHTTPServer  # noqa: E402
+from lite_client import LiteClient  # noqa: E402
+from lease import ChannelBusy  # noqa: E402
 from bounded_action import ActionResult  # noqa: E402
 from reconcile_action_dirty import reconcile  # noqa: E402
 
@@ -1205,6 +1209,139 @@ class GuestInputTests(unittest.TestCase):
                    credential_path=self.root / "broker.token",
                    db_path=self.root / "leases.db",
                    guest_client_factory=self.broker.guest_client_factory)
+
+
+class BrokerLiteTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.credential = self.root / "local.token"
+        self.credential.write_text(secrets.token_hex(32), encoding="ascii")
+        channels = []
+        for number in (1, 2):
+            project = self.root / f"project-{number}"
+            project.mkdir()
+            broker_token = self.root / f"lite-broker-{number}.token"
+            channel_token = self.root / f"lite-channel-{number}.token"
+            broker_token.write_text(secrets.token_hex(32), encoding="ascii")
+            channel_token.write_text(secrets.token_hex(32), encoding="ascii")
+            channels.append({"channel_id": f"lite-{number}", "endpoint_id": f"lite-{number}",
+                             "tool_id": "lite", "project_id": f"project-{number}",
+                             "project_path": str(project), "lite": {
+                                 "port": 18760 + number, "channel_number": number,
+                                 "broker_token_file": str(broker_token),
+                                 "channel_token_file": str(channel_token)}})
+        self.config = self.root / "config.json"
+        self.config.write_text(json.dumps({"channels": channels}), encoding="utf-8")
+        self.events = []
+        outer = self
+        class FakeLite:
+            def __init__(self, binding, channel_id):
+                self.number = binding["channel_number"]
+                self.channel_id = channel_id
+            def state(self):
+                outer.events.append((self.number, "state"))
+                return {"channel_id": self.channel_id, "mode": "agent"}
+            def claim(self, owner, generation, nonce, ttl):
+                outer.events.append((self.number, "claim", owner, generation, nonce, ttl))
+            def input(self, action, **fields):
+                outer.events.append((self.number, "input", action, fields))
+                if outer.fail_input:
+                    raise TimeoutError("uncertain")
+            def release(self):
+                outer.events.append((self.number, "release"))
+        self.fail_input = False
+        self.broker = Broker(config_path=self.config, credential_path=self.credential,
+                             db_path=self.root / "leases.db", lite_client_factory=FakeLite)
+
+    def acquire(self, number, request):
+        return self.broker.acquire({"channel_id": f"lite-{number}",
+                                    "request_id": request, "task_id": request})
+
+    def test_same_channel_contention_and_two_channel_parallelism(self):
+        first = self.acquire(1, "owner-1")
+        self.assertEqual(first["lite_identity"], {
+            "channel_id": "lite-1", "channel_number": 1, "port": 18761})
+        with self.assertRaises(ChannelBusy):
+            self.acquire(1, "contender")
+        second = self.acquire(2, "owner-2")
+        self.assertNotEqual(first["endpoint_id"], second["endpoint_id"])
+        self.assertEqual(second["lite_identity"], self.broker.renew({
+            "channel_id": "lite-2", "token": second["token"]})["lite_identity"])
+
+    def test_input_claim_ack_dirty_and_fingerprint(self):
+        first = self.acquire(1, "owner-1")
+        body = {"channel_id": "lite-1", "token": first["token"],
+                "action_id": "action-1", "action": "key", "key": "Return"}
+        self.assertEqual({"ok": True, "action": "key"}, self.broker.input(body))
+        self.assertEqual(["state", "claim", "input", "release"],
+                         [event[1] for event in self.events])
+        self.assertEqual("owner-1", self.events[1][2])
+        self.assertEqual(first["generation"], self.events[1][3])
+        self.assertEqual(32, len(self.events[1][4]))
+        self.assertEqual({"ok": False, "error": "ack_required"},
+                         self.broker.input({**body, "action_id": "action-2"}))
+        self.assertEqual({"ok": True, "action_id": "action-1"}, self.broker.ack({
+            "channel_id": "lite-1", "token": first["token"], "action_id": "action-1"}))
+        self.broker.release({"channel_id": "lite-1", "token": first["token"]})
+        self.assertIsNone(self.broker._dirty_owner("lite-1"))
+        self.assertIn("token", self.acquire(1, "next"))
+
+    def test_uncertain_input_blocks_successor_and_token_drift(self):
+        first = self.acquire(1, "owner-1")
+        self.fail_input = True
+        body = {"channel_id": "lite-1", "token": first["token"],
+                "action_id": "action-1", "action": "key", "key": "Return"}
+        self.assertEqual({"ok": False, "error": "input_failed"}, self.broker.input(body))
+        self.broker.release({"channel_id": "lite-1", "token": first["token"]})
+        self.assertEqual({"ok": False, "error": "guest_dirty"}, self.acquire(1, "next"))
+        token = self.root / "lite-channel-2.token"
+        token.write_text(secrets.token_hex(32), encoding="ascii")
+        self.assertEqual({"ok": False, "error": "lite_binding_unavailable"},
+                         self.acquire(2, "owner-2"))
+        with self.assertRaisesRegex(RuntimeError, "registered guest binding changed"):
+            Broker(config_path=self.config, credential_path=self.credential,
+                   db_path=self.root / "leases.db", lite_client_factory=self.broker.lite_client_factory)
+
+    def test_invalid_lite_binding_rejected(self):
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["channels"][0]["lite"]["port"] = 18762
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "port must match"):
+            Broker(config_path=self.config, credential_path=self.credential,
+                   db_path=self.root / "other.db", lite_client_factory=self.broker.lite_client_factory)
+
+    def test_lite_client_matches_backend_status_contract(self):
+        server_path = Path(__file__).resolve().parents[2] / "agent-channels" / "backend" / "server.py"
+        if not server_path.is_file():
+            self.skipTest("Lite backend is a separate optional package")
+        spec = importlib.util.spec_from_file_location("lite_backend_contract", server_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        class Display:
+            def input(self, _args, _stdin):
+                pass
+        channel = module.Channel(Display(), broker_enabled=True, channel_id="1")
+        channel.control("agent")
+        binding = self.broker.channels["lite-1"].lite
+        server = ThreadingHTTPServer(("127.0.0.1", 0), module.handler_for(
+            channel, binding["channel_token_file"].read_text(encoding="ascii"),
+            binding["broker_token_file"].read_text(encoding="ascii"),
+            secrets.token_hex(32)))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        client = LiteClient(binding, "lite-1")
+        client.base = f"http://127.0.0.1:{server.server_port}"
+        self.assertEqual("agent", client.state()["mode"])
+        client.claim("owner", 1, secrets.token_hex(16), 30)
+        client.input("key", key="Return")
+        client.release()
+        self.assertEqual(1, channel.status()["actions"])
+        self.assertIsNone(channel.status()["lease"])
 
 
 if __name__ == "__main__":

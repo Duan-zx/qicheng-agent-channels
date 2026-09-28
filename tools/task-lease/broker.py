@@ -80,19 +80,21 @@ class Channel:
     actions: dict
     exclusive_ports: tuple[int, ...]
     guest: dict | None
+    lite: dict | None
     workspace: dict | None
 
 
 class Broker:
     def __init__(self, *, config_path: str | Path, credential_path: str | Path,
-                 db_path: str | Path, clock=None, guest_client_factory=None):
+                 db_path: str | Path, clock=None, guest_client_factory=None,
+                 lite_client_factory=None):
         config = json.loads(Path(config_path).read_text(encoding="utf-8"))
         if not isinstance(config, dict) or not isinstance(config.get("channels"), list):
             raise ValueError("config requires a channels list")
         self.channels = {}
         for entry in config["channels"]:
             required = {"channel_id", "endpoint_id", "tool_id", "project_id", "project_path"}
-            if not isinstance(entry, dict) or not required <= set(entry) or set(entry) - required - {"actions", "exclusive_ports", "guest", "workspace"}:
+            if not isinstance(entry, dict) or not required <= set(entry) or set(entry) - required - {"actions", "exclusive_ports", "guest", "lite", "workspace"}:
                 raise ValueError("each channel needs binding fields and optional actions")
             for key in ("channel_id", "endpoint_id", "tool_id", "project_id"):
                 LeaseStore._id(entry[key], key)
@@ -105,7 +107,10 @@ class Broker:
             actions = entry.get("actions", {})
             ports = entry.get("exclusive_ports", [])
             guest = entry.get("guest")
+            lite = entry.get("lite")
             workspace = entry.get("workspace")
+            if sum(item is not None for item in (guest, lite, workspace)) > 1:
+                raise ValueError("guest, lite and workspace are mutually exclusive")
             if workspace is not None:
                 if guest is not None:
                     raise ValueError("guest and workspace cannot share a channel")
@@ -150,6 +155,25 @@ class Broker:
                     raise ValueError("guest broker and channel token files must differ")
                 guest = {"binding": binding, "broker_token_file": broker_token,
                          "host_config_path": host_config, "project": project}
+            if lite is not None:
+                if not isinstance(lite, dict) or set(lite) != {
+                        "port", "channel_number", "broker_token_file", "channel_token_file"}:
+                    raise ValueError("lite requires fixed port, channel number and token files")
+                number = lite["channel_number"]
+                port = lite["port"]
+                if type(number) is not int or number not in (1, 2) or type(port) is not int or port != 18760 + number:
+                    raise ValueError("lite port must match channel number")
+                paths = []
+                for name in ("broker_token_file", "channel_token_file"):
+                    value = lite[name]
+                    if not isinstance(value, str) or not Path(value).is_absolute():
+                        raise ValueError("lite token paths must be absolute")
+                    paths.append(Path(value).resolve())
+                paths.append(Path(credential_path).resolve())
+                if len({str(path).casefold() for path in paths}) != len(paths):
+                    raise ValueError("lite token files must differ")
+                lite = {**lite, "broker_token_file": paths[0],
+                        "channel_token_file": paths[1]}
             if (not isinstance(ports, list) or
                     any(type(port) is not int or not 1 <= port <= 65535 for port in ports) or
                     len(set(ports)) != len(ports)):
@@ -179,7 +203,7 @@ class Broker:
                             raise ValueError("CLI port must be an exclusive_port")
             channel = Channel(**{**entry, "project_path": str(project_path),
                                  "actions": actions, "exclusive_ports": tuple(ports),
-                                 "guest": guest, "workspace": workspace})
+                                 "guest": guest, "lite": lite, "workspace": workspace})
             if channel.channel_id in self.channels:
                 raise ValueError("duplicate channel_id")
             for existing in self.channels.values():
@@ -199,6 +223,11 @@ class Broker:
                         and any(guest["binding"][name] == existing.guest["binding"][name]
                                 for name in ("vm_id", "bios_uuid", "token_file"))):
                     raise ValueError("shared guest requires the same endpoint_id")
+                if lite is not None and existing.lite is not None:
+                    if lite["port"] == existing.lite["port"] or lite["channel_number"] == existing.lite["channel_number"]:
+                        raise ValueError("lite channels must use distinct ports")
+                    if channel.endpoint_id == existing.endpoint_id:
+                        raise ValueError("distinct lite channels need distinct endpoints")
             self.channels[channel.channel_id] = channel
         for channel in self.channels.values():
             if channel.workspace is not None:
@@ -238,7 +267,15 @@ class Broker:
         self.guest_client_factory = (
             guest_client_factory or _windows_host()[1]
             if any(channel.guest is not None for channel in self.channels.values()) else None)
+        if any(channel.lite is not None for channel in self.channels.values()):
+            from lite_client import LiteClient
+            self.lite_client_factory = lite_client_factory or LiteClient
+        else:
+            self.lite_client_factory = None
         self.store = LeaseStore(db_path, **({"clock": clock} if clock is not None else {}))
+        for channel in self.channels.values():
+            if channel.lite is not None:
+                self._lite_fingerprint(channel)
         self._reconcile_guest_bindings()
         self._init_action_dirty()
 
@@ -273,10 +310,38 @@ class Broker:
             "broker_token_file": str(guest["broker_token_file"]),
             "broker_token": broker_token})
 
+    def _lite_fingerprint(self, channel: Channel) -> str:
+        lite = channel.lite
+        tokens = []
+        try:
+            for name in ("broker_token_file", "channel_token_file"):
+                tokens.append(lite[name].read_text(encoding="ascii").strip())
+        except Exception:
+            raise RuntimeError("lite binding credentials are unavailable") from None
+        if any(len(token) != 64 or any(char not in "0123456789abcdef" for char in token)
+               for token in tokens):
+            raise RuntimeError("lite binding credentials are invalid")
+        if len(set(tokens + [self.credential])) != 3:
+            raise RuntimeError("lite credentials must differ")
+        return self._digest({
+            "channel_id": channel.channel_id, "endpoint_id": channel.endpoint_id,
+            "tool_id": channel.tool_id, "project_id": channel.project_id,
+            "project_path": channel.project_path, "port": lite["port"],
+            "channel_number": lite["channel_number"],
+            "broker_token_file": str(lite["broker_token_file"]),
+            "channel_token_file": str(lite["channel_token_file"]),
+            "broker_token": tokens[0], "channel_token": tokens[1]})
+
+    def _input_fingerprint(self, channel: Channel) -> str:
+        if channel.guest is not None:
+            return self._guest_fingerprint(channel)
+        return self._lite_fingerprint(channel)
+
     def _reconcile_guest_bindings(self):
         """Pin guest identity in the lease DB; changing it needs an explicit migration."""
-        expected = {channel.channel_id: self._guest_fingerprint(channel)
-                    for channel in self.channels.values() if channel.guest is not None}
+        expected = {channel.channel_id: self._input_fingerprint(channel)
+                    for channel in self.channels.values()
+                    if channel.guest is not None or channel.lite is not None}
         with self.store._transaction() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS guest_bindings (
                 channel_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL)""")
@@ -329,7 +394,7 @@ class Broker:
                                (channel_id, fingerprint))
 
     def _assert_guest_binding(self, channel: Channel):
-        fingerprint = self._guest_fingerprint(channel)
+        fingerprint = self._input_fingerprint(channel)
         with self.store._transaction() as db:
             row = db.execute("SELECT fingerprint FROM guest_bindings WHERE channel_id=?",
                              (channel.channel_id,)).fetchone()
@@ -386,12 +451,16 @@ class Broker:
                 raise RuntimeError("action dirty binding changed; reconcile offline")
 
     def _attempt_fingerprint(self, channel: Channel, active, action, fields):
-        return self._digest({
+        details = {
             "channel_id": channel.channel_id, "request_id": active.request_id,
             "generation": active.generation, "endpoint_id": active.endpoint_id,
             "project_id": active.project_id, "project_path": active.project_path,
-            "tool_id": active.tool_id, "guest": self._guest_fingerprint(channel),
-            "action": action, "fields": fields})
+            "tool_id": active.tool_id, "action": action, "fields": fields}
+        if channel.guest is not None:
+            details["guest"] = self._guest_fingerprint(channel)
+        else:
+            details["lite"] = self._lite_fingerprint(channel)
+        return self._digest(details)
 
     def _begin_input_attempt(self, channel_id, endpoint_id, request_id, action_id,
                              fingerprint, *, record=True):
@@ -444,6 +513,16 @@ class Broker:
         return {"vm_id": binding["vm_id"], "bios_uuid": binding["bios_uuid"],
                 "project": channel.guest["project"]}
 
+    @staticmethod
+    def _lite_identity(channel: Channel) -> dict:
+        return {"channel_id": channel.channel_id,
+                "channel_number": channel.lite["channel_number"],
+                "port": channel.lite["port"]}
+
+    @staticmethod
+    def _binding_error(channel: Channel) -> str:
+        return "lite_binding_unavailable" if channel.lite is not None else "guest_binding_unavailable"
+
     def authorize(self, authorization: str | None) -> bool:
         if not authorization or not authorization.startswith("Bearer "):
             return False
@@ -459,14 +538,14 @@ class Broker:
         if set(payload) - allowed or not {"request_id", "task_id", "channel_id"} <= set(payload):
             raise ValueError("acquire accepts only request_id, task_id, channel_id, ttl_seconds, wait_seconds")
         channel = self._channel(payload["channel_id"])
-        if channel.guest is not None and (not isinstance(payload["request_id"], str)
+        if (channel.guest is not None or channel.lite is not None) and (not isinstance(payload["request_id"], str)
                                           or not _GUEST_OWNER.fullmatch(payload["request_id"])):
-            raise ValueError("guest request_id must be 1..64 safe characters")
-        if channel.guest is not None:
+            raise ValueError("input request_id must be 1..64 safe characters")
+        if channel.guest is not None or channel.lite is not None:
             try:
                 self._assert_guest_binding(channel)
             except Exception:
-                return {"ok": False, "error": "guest_binding_unavailable"}
+                return {"ok": False, "error": self._binding_error(channel)}
         ttl = LeaseStore._ttl(payload.get("ttl_seconds", self.default_ttl))
         if ttl > self.max_ttl:
             raise ValueError("ttl_seconds exceeds configured maximum")
@@ -482,11 +561,11 @@ class Broker:
             nonlocal abort_reason
             if disconnected is not None and disconnected():
                 abort_reason = "client_disconnected"
-            elif channel.guest is not None:
+            elif channel.guest is not None or channel.lite is not None:
                 try:
                     self._assert_guest_binding(channel)
                 except Exception:
-                    abort_reason = "guest_binding_unavailable"
+                    abort_reason = self._binding_error(channel)
             if abort_reason is None and self._dirty_owner(channel.endpoint_id) not in (None, owner):
                 abort_reason = "guest_dirty"
             if abort_reason is None and self._action_dirty(channel.endpoint_id):
@@ -510,15 +589,17 @@ class Broker:
         if self._action_dirty(channel.endpoint_id):
             self.store.release(channel.channel_id, result.token)
             return {"ok": False, "error": "action_dirty"}
-        if channel.guest is not None:
+        if channel.guest is not None or channel.lite is not None:
             try:
                 self._assert_guest_binding(channel)
             except Exception:
                 self.store.release(channel.channel_id, result.token)
-                return {"ok": False, "error": "guest_binding_unavailable"}
+                return {"ok": False, "error": self._binding_error(channel)}
         response = {**result.public(), "token": result.token}
         if channel.guest is not None:
             response["guest_identity"] = self._guest_identity(channel)
+        if channel.lite is not None:
+            response["lite_identity"] = self._lite_identity(channel)
         return response
 
     def renew(self, payload: dict) -> dict:
@@ -526,11 +607,11 @@ class Broker:
         if set(payload) - allowed or not {"channel_id", "token"} <= set(payload):
             raise ValueError("renew accepts only channel_id, token, ttl_seconds")
         channel = self._channel(payload["channel_id"])
-        if channel.guest is not None:
+        if channel.guest is not None or channel.lite is not None:
             try:
                 self._assert_guest_binding(channel)
             except Exception:
-                return {"ok": False, "error": "guest_binding_unavailable"}
+                return {"ok": False, "error": self._binding_error(channel)}
         ttl = LeaseStore._ttl(payload.get("ttl_seconds", self.default_ttl))
         if ttl > self.max_ttl:
             raise ValueError("ttl_seconds exceeds configured maximum")
@@ -538,6 +619,8 @@ class Broker:
         response = {**result.public(), "token": result.token}
         if channel.guest is not None:
             response["guest_identity"] = self._guest_identity(channel)
+        if channel.lite is not None:
+            response["lite_identity"] = self._lite_identity(channel)
         return response
 
     def release(self, payload: dict) -> dict:
@@ -545,7 +628,7 @@ class Broker:
             raise ValueError("release requires channel_id and token")
         channel = self._channel(payload["channel_id"])
         released = self.store.release(channel.channel_id, payload["token"])
-        if channel.guest is not None:
+        if channel.guest is not None or channel.lite is not None:
             with self.store._transaction() as db:
                 db.execute("BEGIN IMMEDIATE")
                 owner = db.execute("""SELECT channel_id, request_id FROM guest_dirty
@@ -566,8 +649,8 @@ class Broker:
         if set(payload) != {"channel_id", "token", "action_id"}:
             raise ValueError("ack requires channel_id, token and action_id")
         channel = self._channel(payload["channel_id"])
-        if channel.guest is None:
-            raise ValueError("guest input is not configured for this channel")
+        if channel.guest is None and channel.lite is None:
+            raise ValueError("input is not configured for this channel")
         action_id = payload["action_id"]
         if not isinstance(action_id, str) or not _ACTION_ID.fullmatch(action_id):
             raise ValueError("action_id must be 1..64 safe characters")
@@ -592,7 +675,7 @@ class Broker:
             result = {"channel_id": channel.channel_id,
                       "lease": active.public() if active else None,
                       "action_dirty": self._action_dirty(channel.endpoint_id)}
-            if channel.guest is not None:
+            if channel.guest is not None or channel.lite is not None:
                 result["guest_dirty"] = self._dirty_owner(channel.endpoint_id) is not None
             return result
         return {"channels": [entry(channel) for channel in channels]}
@@ -604,6 +687,8 @@ class Broker:
         channel = self._channel(payload["channel_id"])
         if channel.guest is not None:
             return {"ok": False, "error": "guest_execute_disabled"}
+        if channel.lite is not None:
+            return {"ok": False, "error": "lite_execute_disabled"}
         action_name = payload["action"]
         if not isinstance(action_name, str) or action_name not in channel.actions:
             raise ValueError("action is not registered for this channel")
@@ -683,8 +768,8 @@ class Broker:
         if not isinstance(action_id, str) or not _ACTION_ID.fullmatch(action_id):
             raise ValueError("action_id must be 1..64 safe characters")
         channel = self._channel(payload["channel_id"])
-        if channel.guest is None:
-            raise ValueError("guest input is not configured for this channel")
+        if channel.guest is None and channel.lite is None:
+            raise ValueError("input is not configured for this channel")
         action, fields = _input_fields(payload)
 
         def run(active):
@@ -713,15 +798,23 @@ class Broker:
                 return {"ok": False, "error": "already_attempted"}
             client = None
             claimed = False
-            outcome = {"ok": False, "error": "guest_unavailable"}
+            outcome = {"ok": False, "error": (
+                "lite_unavailable" if channel.lite is not None else "guest_unavailable")}
             try:
-                client = self.guest_client_factory(
-                    channel.guest["binding"], channel.guest["broker_token_file"])
+                if channel.lite is not None:
+                    client = self.lite_client_factory(channel.lite, channel.channel_id)
+                else:
+                    client = self.guest_client_factory(
+                        channel.guest["binding"], channel.guest["broker_token_file"])
                 # Still under the endpoint fence. A paused or unreachable guest
                 # cannot have received this action, so leave no dirty attempt.
                 if client.state().get("mode") != "agent":
                     return outcome
-                client.claim(active.request_id, _GUEST_TTL_SECONDS)
+                if channel.lite is not None:
+                    client.claim(active.request_id, active.generation,
+                                 secrets.token_hex(16), _GUEST_TTL_SECONDS)
+                else:
+                    client.claim(active.request_id, _GUEST_TTL_SECONDS)
                 claimed = True
                 # Guest preflight may consume the entire local TTL. The endpoint
                 # fence excludes a successor, but expiry still revokes input.
@@ -742,14 +835,17 @@ class Broker:
                 outcome = {"ok": False, "error": "lease_expired"}
             except Exception:
                 # The input outcome can be uncertain. Never send it again here.
-                outcome = {"ok": False, "error": "input_failed" if claimed else "guest_unavailable"}
+                outcome = {"ok": False, "error": "input_failed" if claimed else (
+                    "lite_unavailable" if channel.lite is not None else "guest_unavailable")}
             finally:
                 if claimed:
                     try:
                         client.release()
                     except Exception:
                         # Guest expiry is the only safe successor fence now.
-                        outcome = {"ok": False, "error": "guest_release_uncertain"}
+                        outcome = {"ok": False, "error": (
+                            "lite_release_uncertain" if channel.lite is not None
+                            else "guest_release_uncertain")}
             if outcome["ok"]:
                 try:
                     self._complete_input_attempt(
@@ -826,13 +922,15 @@ class BrokerHandler(BaseHTTPRequestHandler):
             code = {"timeout": 504, "workspace_unavailable": 503,
                     "action_dirty": 503, "action_uncertain": 503,
                     "action_unavailable": 503, "guest_unavailable": 503,
-                     "input_failed": 502, "guest_release_uncertain": 503,
+                     "lite_unavailable": 503, "input_failed": 502,
+                     "guest_release_uncertain": 503, "lite_release_uncertain": 503,
                      "attempt_unavailable": 503, "already_attempted": 409,
                      "action_conflict": 409, "ack_unavailable": 409,
                      "ack_required": 409, "guest_dirty": 409,
                      "lease_expired": 410, "client_disconnected": 499,
-                     "guest_execute_disabled": 403,
-                    "guest_binding_unavailable": 503}.get(
+                     "guest_execute_disabled": 403, "lite_execute_disabled": 403,
+                    "guest_binding_unavailable": 503,
+                    "lite_binding_unavailable": 503}.get(
                         result.get("error"), 200)
             self._send(code, result)
 

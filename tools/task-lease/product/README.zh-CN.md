@@ -95,6 +95,28 @@ python -B $tool --db $db --endpoint-id <实际端点ID> --apply --broker-stopped
 
 包内含固定的 Windows Channels host 客户端模块，安装时逐文件核对 SHA-256。host 配置及各通道、broker 凭据由目标机单独准备，不随包分发。普通不含 `guest` 的配置仍可使用。此包的离线测试只验证配置绑定与客户端构造；真实 guest 输入还需要目标 Windows/Hyper-V 环境单独验收。
 
+### 可选：Lite Linux 桌面频道
+
+已安装启程 Lite 时，可给两个独立频道分别加入固定的 `lite` 绑定。示例中的路径必须替换为该机实际安装路径，`project_path` 必须是分别存在、互不重叠的本地目录；`endpoint_id` 也必须各不相同。
+
+```json
+{
+  "channel_id": "lite-1",
+  "endpoint_id": "lite-desktop-1",
+  "tool_id": "lite-mcp",
+  "project_id": "lite-1",
+  "project_path": "C:/Users/USER/AppData/Local/Qicheng/Lite/project-1",
+  "lite": {
+    "channel_number": 1,
+    "port": 18761,
+    "channel_token_file": "C:/Users/USER/AppData/Local/Programs/QichengLite/.local/channel.token",
+    "broker_token_file": "C:/Users/USER/AppData/Local/Programs/QichengLite/.local/broker.token"
+  }
+}
+```
+
+第二频道用 `channel_number: 2`、`port: 18762`、另一组频道与端点 ID、另一项目目录。两个 Lite 频道可共享这两份私有 token 文件，三类凭据（Lite channel、Lite broker、Task Lease 本地 bearer）之间必须不同。Lite 安装器通过 `-ImportBrokerTokenPath` 导入独立 token 后，后端才启用 Broker 门禁。旧 MCP 直连输入不再可用；AI 客户端改用 Lite `bridge.py` 的三项 `--broker-*` 参数并在 `channel_input` 内使用 `begin → 动作 → finish`。Broker 保留每次动作的 `action_id → ack` 回执及丢回执脏状态，人工接管立即撤销后端短租约。真实安装仍需验证 Docker 两频道、Broker 进程和 MCP 的联动，配置文本或单测不能代替验收。
+
 ### 将频道令牌迁入私有 DataRoot
 
 若 Limited 计划任务无法读取原 `channels.json` 引用的频道 `token_file`，先**停止 broker**，确认没有其他程序会同时写其 `leases.db`，再对含此脚本的新安装包运行离线迁移。旧安装包需按前述卸载流程保留 DataRoot，安装新包后再执行；不要直接覆盖安装文件破坏包校验。源 host 配置和频道 token 必须由当前用户可读；此脚本不提高计划任务权限，也不输出 token 值。默认只预览：

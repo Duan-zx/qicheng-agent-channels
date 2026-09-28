@@ -144,6 +144,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.call('/api/state',token=False)[0],401)
         self.assertEqual(self.call('/api/state',origin='https://example.org')[0],401)
         self.assertEqual(self.call('/health',token=False)[0],200)
+        self.assertEqual(json.loads(self.call('/api/state')[1])['input_auth'], 'direct-v1')
     def test_input_requires_matching_controller(self):
         self.assertEqual(self.call('/api/control',dict(mode='paused'))[0],200)
         self.assertEqual(self.call('/api/input',dict(actor='agent',action='key',key='Return'))[0],409)
@@ -187,5 +188,153 @@ class HttpTests(unittest.TestCase):
         finally:
             self.channel.display.failure = None
             self.channel.control('paused')
+
+class BrokerLeaseTests(unittest.TestCase):
+    channel_token = 'a'*64
+    broker_token = 'b'*64
+    viewer_token = 'c'*64
+    lease = dict(owner='worker-1', generation=1, nonce='private-nonce', ttl_seconds=30)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.display = Display()
+        cls.channel = server.Channel(cls.display, broker_enabled=True, channel_id='lite-1')
+        cls.http = ThreadingHTTPServer(('127.0.0.1', 0),
+                server.handler_for(cls.channel, cls.channel_token, cls.broker_token, cls.viewer_token))
+        cls.thread = threading.Thread(target=cls.http.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = 'http://127.0.0.1:' + str(cls.http.server_port)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.http.shutdown(); cls.http.server_close(); cls.thread.join()
+
+    def setUp(self):
+        with self.channel.lock:
+            self.channel.mode = 'agent'
+            self.channel.lease = None
+            self.channel.last_generation = 0
+            self.channel.action_count = 0
+            self.display.calls.clear()
+
+    def call(self, path, body=None, auth='broker', origin=None):
+        headers = {'Content-Type': 'application/json'}
+        if auth:
+            value = {'broker': self.broker_token, 'viewer': self.viewer_token,
+                     'channel': self.channel_token}[auth]
+            headers['Authorization'] = 'Bearer ' + value
+        if origin: headers['Origin'] = origin
+        request = urllib.request.Request(self.base + path,
+                data=None if body is None else json.dumps(body).encode(), headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                raw = response.read()
+                return response.status, json.loads(raw) if response.headers.get_content_type() == 'application/json' else raw
+        except urllib.error.HTTPError as response:
+            return response.code, json.loads(response.read())
+
+    def action(self, lease=None):
+        return dict(actor='agent', action='key', key='Return',
+                    lease=lease if lease is not None else {
+                        k: self.lease[k] for k in ('owner', 'generation', 'nonce')})
+
+    def test_broker_auth_state_redaction_and_old_token_bypass(self):
+        self.assertEqual(self.call('/api/lease/claim', self.lease, auth='channel')[0], 401)
+        self.assertEqual(self.call('/api/lease/claim', self.lease, auth='viewer')[0], 401)
+        self.assertEqual(self.call('/api/lease/claim', self.lease, origin='https://x')[0], 401)
+        self.assertEqual(self.call('/api/control', {'mode': 'paused'}, auth='channel')[0], 401)
+        self.assertEqual(self.call('/api/control', {'mode': 'paused'}, auth='broker')[0], 401)
+        self.assertEqual(self.call('/api/control', {'mode': 'paused'}, auth='viewer')[0], 200)
+        self.assertEqual(self.call('/api/lease/claim', self.lease)[0], 409)
+        self.assertEqual(self.call('/api/control', {'mode': 'agent'}, auth='viewer')[0], 200)
+        status, claimed = self.call('/api/lease/claim', self.lease)
+        self.assertEqual(status, 200)
+        self.assertEqual(claimed['input_auth'], 'broker-v2')
+        self.assertEqual((claimed['channel_id'], claimed['mode']), ('lite-1', 'agent'))
+        self.assertEqual(claimed['lease']['owner'], 'worker-1')
+        self.assertEqual(self.call('/api/input', self.action(), auth='channel')[0], 401)
+        self.assertEqual(self.call('/api/input', self.action())[0], 200)
+        self.assertEqual(self.call('/api/input', self.action(lease={}), auth='broker')[0], 400)
+        self.assertEqual(len(self.display.calls), 1)
+        self.assertEqual(self.call('/api/lease/inspect', auth='channel')[0], 401)
+        self.assertEqual(self.call('/api/lease/inspect', auth='viewer')[0], 401)
+        for state in (self.call('/api/state', auth='channel')[1],
+                      self.call('/api/state', auth='viewer')[1],
+                      self.call('/api/lease/inspect')[1]):
+            public = json.dumps(state)
+            for secret in (self.broker_token, self.channel_token, self.viewer_token, self.lease['nonce']):
+                self.assertNotIn(secret, public)
+
+    def test_channel_token_cannot_take_human_control_or_input(self):
+        human = dict(actor='human', action='key', key='Return')
+        self.assertEqual(self.call('/api/control', {'mode': 'human'}, auth='channel')[0], 401)
+        self.assertEqual(self.call('/api/input', human, auth='channel')[0], 401)
+        self.assertEqual(self.call('/api/input', human, auth='broker')[0], 401)
+        self.assertEqual(self.channel.status()['mode'], 'agent')
+        self.assertEqual(self.display.calls, [])
+        self.assertEqual(self.call('/api/control', {'mode': 'human'}, auth='viewer')[0], 200)
+        self.assertEqual(self.call('/api/input', human, auth='viewer')[0], 200)
+        self.assertEqual(len(self.display.calls), 1)
+
+    def test_read_roles_and_distinct_credentials(self):
+        for auth in ('channel', 'viewer'):
+            self.assertEqual(self.call('/api/state', auth=auth)[0], 200)
+            self.assertTrue(self.call('/api/screenshot', auth=auth)[1].startswith(b'\x89PNG'))
+            self.assertTrue(self.call('/api/frame.jpg', auth=auth)[1].startswith(b'\xff\xd8\xff'))
+        self.assertEqual(self.call('/api/state', auth='broker')[0], 401)
+        self.assertEqual(self.call('/api/screenshot', auth='broker')[0], 401)
+        self.assertEqual(self.call('/api/frame.jpg', auth='broker')[0], 401)
+        for viewer in (None, self.channel_token, self.broker_token, 'short'):
+            with self.subTest(viewer=viewer), self.assertRaises(ValueError):
+                server.handler_for(server.Channel(Display()), self.channel_token,
+                                   self.broker_token, viewer)
+
+    def test_renew_release_and_generation_fence(self):
+        self.assertEqual(self.call('/api/lease/claim', self.lease)[0], 200)
+        self.assertEqual(self.call('/api/lease/renew', dict(self.lease, nonce='wrong'))[0], 409)
+        self.assertEqual(self.call('/api/lease/claim', dict(self.lease, owner='other'))[0], 409)
+        self.assertEqual(self.call('/api/lease/renew', self.lease)[0], 200)
+        self.assertEqual(self.call('/api/lease/release', self.lease)[0], 200)
+        self.assertEqual(self.channel.status()['mode'], 'agent')
+        self.assertEqual(self.call('/api/input', self.action())[0], 409)
+        self.assertEqual(self.call('/api/lease/claim', self.lease)[0], 409)
+        next_lease = dict(self.lease, generation=2, nonce='next-private-nonce')
+        self.assertEqual(self.call('/api/lease/claim', next_lease)[0], 200)
+        self.assertEqual(self.call('/api/input', self.action())[0], 409)
+        self.assertEqual(self.call('/api/input', self.action({
+            k: next_lease[k] for k in ('owner', 'generation', 'nonce')}))[0], 200)
+
+    def test_expiry_takeover_and_pause_revoke(self):
+        self.assertEqual(self.call('/api/lease/claim', self.lease)[0], 200)
+        with self.channel.lock: self.channel.lease['deadline'] = 0
+        status, state = self.call('/api/state', auth='channel')
+        self.assertEqual((status, state['mode'], state['lease']), (200, 'agent', None))
+        self.assertEqual(self.call('/api/input', self.action())[0], 409)
+        self.assertEqual(self.call('/api/lease/renew', self.lease)[0], 409)
+        second = dict(self.lease, generation=2, nonce='second-nonce')
+        self.assertEqual(self.call('/api/lease/claim', second)[0], 200)
+        self.assertEqual(self.call('/api/control', {'mode': 'human'}, auth='viewer')[0], 200)
+        self.assertEqual(self.call('/api/input', self.action({
+            k: second[k] for k in ('owner', 'generation', 'nonce')}))[0], 409)
+        self.assertEqual(self.call('/api/lease/renew', second)[0], 409)
+        self.assertEqual(self.call('/api/lease/claim', dict(second, generation=3))[0], 409)
+        self.assertEqual(self.call('/api/input', dict(actor='human', action='key', key='Return'),
+                                   auth='viewer')[0], 200)
+        self.assertEqual(self.call('/api/control', {'mode': 'paused'}, auth='viewer')[0], 200)
+        self.assertEqual(self.call('/api/control', {'mode': 'agent'}, auth='viewer')[0], 200)
+        self.assertEqual(self.call('/api/lease/claim', dict(second, generation=3))[0], 200)
+        self.assertEqual(self.call('/api/control', {'mode': 'paused'}, auth='viewer')[0], 200)
+        self.assertEqual(self.call('/api/input', self.action({
+            'owner': second['owner'], 'generation': 3, 'nonce': second['nonce']}))[0], 409)
+
+    def test_concurrent_claims_have_one_winner(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda generation: self.call('/api/lease/claim',
+                    dict(self.lease, owner='worker-'+str(generation),
+                         generation=generation, nonce='nonce-'+str(generation)))[0], range(1, 9)))
+        self.assertEqual(results.count(200), 1)
+        self.assertEqual(results.count(409), 7)
+        self.assertEqual(self.channel.status()['mode'], 'agent')
 
 if __name__=='__main__': unittest.main(verbosity=2)

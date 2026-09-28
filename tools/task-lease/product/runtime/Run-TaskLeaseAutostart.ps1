@@ -11,10 +11,10 @@ if (-not (Test-Path -LiteralPath $dataRoot -PathType Container)) { throw 'Task L
 $log=Join-Path $dataRoot 'broker-autostart.log'
 $start=Join-Path $InstallRoot 'product\runtime\Start-TaskLease.ps1'
 # Keep one private log per attempt even when Task Scheduler has no operational log.
-Set-Content -LiteralPath $log -Value ('Task Lease autostart at ' + [DateTime]::UtcNow.ToString('o') + ' UTC') -Encoding Unicode
+Set-Content -LiteralPath $log -Value ('Task Lease autostart at ' + [DateTime]::UtcNow.ToString('o') + ' UTC') -Encoding UTF8
 try {
     & $start -InstallRoot $InstallRoot -Port $Port -Autostart
 } catch {
-    Add-Content -LiteralPath $log -Value ('Startup failed: ' + $_.Exception.ToString()) -Encoding Unicode
+    Add-Content -LiteralPath $log -Value ('Startup failed: ' + $_.Exception.ToString()) -Encoding UTF8
     throw
 }

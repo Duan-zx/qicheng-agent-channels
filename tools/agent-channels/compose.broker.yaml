@@ -1,0 +1,22 @@
+services:
+  channel1:
+    environment:
+      BROKER_TOKEN_FILE: /run/secrets/broker_token
+      VIEWER_TOKEN_FILE: /run/secrets/viewer_token
+    secrets:
+      - channel_token
+      - broker_token
+      - viewer_token
+  channel2:
+    environment:
+      BROKER_TOKEN_FILE: /run/secrets/broker_token
+      VIEWER_TOKEN_FILE: /run/secrets/viewer_token
+    secrets:
+      - channel_token
+      - broker_token
+      - viewer_token
+secrets:
+  broker_token:
+    file: .local/broker.token
+  viewer_token:
+    file: .local/viewer.token

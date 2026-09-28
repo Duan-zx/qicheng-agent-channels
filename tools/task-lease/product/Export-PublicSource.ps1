@@ -25,7 +25,7 @@ while ($pathPart) {
 if (@(Get-ChildItem -LiteralPath $output -Force).Count -ne 0) { throw 'OutputDirectory must be empty.' }
 
 $taskFiles = @(
-    'LICENSE', 'README.md', 'broker.py', 'lease.py', 'attempt_workspace.py', 'bounded_action.py', 'reconcile_action_dirty.py', 'guest_bridge.py',
+    'LICENSE', 'README.md', 'broker.py', 'lease.py', 'attempt_workspace.py', 'bounded_action.py', 'reconcile_action_dirty.py', 'guest_bridge.py', 'lite_client.py',
     'tests/test_lease.py', 'tests/test_broker.py', 'tests/test_attempt_workspace.py', 'tests/test_bounded_action.py',
     'product/README.zh-CN.md', 'product/Build-Package.ps1', 'product/Export-PublicSource.ps1',
     'product/runtime/Common.ps1', 'product/runtime/Install-TaskLease.ps1',

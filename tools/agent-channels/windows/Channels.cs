@@ -88,8 +88,9 @@ sealed class Channels : Form {
                 && KeyName(Keys.L, true, false) == "ctrl+l" && KeyName(Keys.Tab, false, false) == "Tab"
                 && InputAllowed("human", true, true) && !InputAllowed("human", false, true) && !InputAllowed("agent", true, true)
                 && MatchesInputRoute(1, 4, 1, 4) && !MatchesInputRoute(1, 4, 2, 4) && !MatchesInputRoute(1, 4, 1, 5);
-            File.WriteAllText(args[1], JsonResult(mapping, contract));
-            Environment.Exit(mapping && contract ? 0 : 1); return;
+            bool credentialRouting = TestCredentialRouting();
+            File.WriteAllText(args[1], JsonResult(mapping, contract, credentialRouting));
+            Environment.Exit(mapping && contract && credentialRouting ? 0 : 1); return;
         }
         bool show = Array.IndexOf(args, "--show") >= 0;
         bool created;
@@ -101,8 +102,7 @@ sealed class Channels : Form {
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             try {
                 string root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
-                string token = File.ReadAllText(Path.Combine(root, ".local", "channel.token")).Trim();
-                if (!System.Text.RegularExpressions.Regex.IsMatch(token, "\\A[a-f0-9]{64}\\z")) throw new Exception("本地频道凭据无效，请重新启动后端。");
+                string token = ReadViewerToken(root);
                 using (Channels viewer = new Channels(token)) {
                     ApplicationContext app = new ApplicationContext(); viewer.Start(app, show); Application.Run(app);
                 }
@@ -110,9 +110,50 @@ sealed class Channels : Form {
         }
     }
 
-    static string JsonResult(bool mapping, bool contract) {
+    static string ReadViewerToken(string root) {
+        string local = Path.Combine(root, ".local");
+        string channelToken = File.ReadAllText(Path.Combine(local, "channel.token")).Trim();
+        if (!ValidToken(channelToken)) throw new Exception("本地频道凭据无效，请重新启动后端。");
+        string viewerPath = Path.Combine(local, "viewer.token");
+        if (!File.Exists(viewerPath)) {
+            if (File.Exists(Path.Combine(local, "broker.token")))
+                throw new Exception("Broker 模式缺少查看器凭据，请重新安装。");
+            return channelToken;
+        }
+        string viewerToken = File.ReadAllText(viewerPath).Trim();
+        if (!ValidToken(viewerToken) || String.Equals(viewerToken, channelToken, StringComparison.Ordinal))
+            throw new Exception("查看器凭据无效或与频道凭据相同，请重新安装。");
+        return viewerToken;
+    }
+
+    static bool ValidToken(string token) {
+        return System.Text.RegularExpressions.Regex.IsMatch(token, "\\A[a-f0-9]{64}\\z");
+    }
+
+    static bool TestCredentialRouting() {
+        string root = Path.Combine(Path.GetTempPath(), "QichengViewerTokenTest-" + Guid.NewGuid().ToString("N"));
+        string local = Path.Combine(root, ".local");
+        try {
+            Directory.CreateDirectory(local);
+            string channel = new string('a', 64), viewer = new string('b', 64);
+            File.WriteAllText(Path.Combine(local, "channel.token"), channel);
+            if (ReadViewerToken(root) != channel) return false;
+            File.WriteAllText(Path.Combine(local, "broker.token"), new string('c', 64));
+            try { ReadViewerToken(root); return false; } catch (Exception) { }
+            File.WriteAllText(Path.Combine(local, "viewer.token"), viewer);
+            if (ReadViewerToken(root) != viewer) return false;
+            File.WriteAllText(Path.Combine(local, "viewer.token"), channel);
+            try { ReadViewerToken(root); return false; } catch (Exception) { }
+            File.WriteAllText(Path.Combine(local, "viewer.token"), "invalid");
+            try { ReadViewerToken(root); return false; } catch (Exception) { }
+            return true;
+        } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    static string JsonResult(bool mapping, bool contract, bool credentialRouting) {
         return "{\"coordinate_mapping\":" + mapping.ToString().ToLowerInvariant()
             + ",\"jpeg_route\":" + contract.ToString().ToLowerInvariant()
+            + ",\"viewer_token_routing\":" + credentialRouting.ToString().ToLowerInvariant()
             + ",\"default_hidden\":true,\"single_instance\":true,\"human_refresh_ms\":250,\"other_refresh_ms\":700"
             + ",\"input_queue_generation_guard\":true,\"gui_tested\":false}";
     }

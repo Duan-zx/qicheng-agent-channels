@@ -8,7 +8,7 @@ $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $output) { throw 'OutputDirectory already exists.' }
 if ($output.StartsWith($sourceRoot + '\',[StringComparison]::OrdinalIgnoreCase)) { throw 'OutputDirectory cannot be inside task-lease source.' }
 $files = @(
-    'LICENSE','README.md','broker.py','lease.py','attempt_workspace.py','bounded_action.py','reconcile_action_dirty.py','guest_bridge.py',
+    'LICENSE','README.md','broker.py','lease.py','attempt_workspace.py','bounded_action.py','reconcile_action_dirty.py','guest_bridge.py','lite_client.py',
     'windows-channels\host\__init__.py',
     'windows-channels\host\client.py',
     'windows-channels\host\lease_client.py',

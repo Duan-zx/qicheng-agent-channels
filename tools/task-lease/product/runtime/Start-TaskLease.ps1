@@ -18,7 +18,7 @@ if ($Autostart) {
     # error under Stop. Capture the complete Python traceback before checking
     # its exit code, without changing foreground behavior.
     $ErrorActionPreference='Continue'
-    & $record.python -B (Join-Path $InstallRoot 'broker.py') --config $config --credential-file $credential --db (Join-Path $dataRoot 'leases.db') --port $Port *>> (Join-Path $dataRoot 'broker-autostart.log')
+    & $record.python -B (Join-Path $InstallRoot 'broker.py') --config $config --credential-file $credential --db (Join-Path $dataRoot 'leases.db') --port $Port 2>&1 | Out-File -LiteralPath (Join-Path $dataRoot 'broker-autostart.log') -Append -Encoding UTF8
 } else {
     & $record.python -B (Join-Path $InstallRoot 'broker.py') --config $config --credential-file $credential --db (Join-Path $dataRoot 'leases.db') --port $Port
 }

@@ -8,6 +8,7 @@ import re
 import subprocess
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -19,6 +20,21 @@ KEYS = {"Return", "BackSpace", "Tab", "Escape", "Delete", "Left", "Right",
 
 class Invalid(ValueError): pass
 class Conflict(RuntimeError): pass
+
+def _lease_request(data, *, ttl):
+    owner, generation, nonce = data.get("owner"), data.get("generation"), data.get("nonce")
+    if not isinstance(owner, str) or not owner or len(owner) > 128:
+        raise Invalid("Invalid lease owner")
+    if type(generation) is not int or generation < 1:
+        raise Invalid("Invalid lease generation")
+    if not isinstance(nonce, str) or not nonce or len(nonce) > 256:
+        raise Invalid("Invalid lease nonce")
+    if ttl:
+        seconds = data.get("ttl_seconds")
+        if type(seconds) is not int or not 1 <= seconds <= 300:
+            raise Invalid("Invalid lease TTL")
+        return owner, generation, nonce, seconds
+    return owner, generation, nonce
 
 class InputFailure(RuntimeError):
     """An input failure whose public details contain no user-controlled text."""
@@ -123,32 +139,88 @@ class XDisplay:
         return self._capture("jpeg", b"\xff\xd8\xff")
 
 class Channel:
-    def __init__(self, display, width=1600, height=900):
+    def __init__(self, display, width=1600, height=900, *, broker_enabled=False, channel_id=None):
         self.display, self.width, self.height = display, width, height
         self.lock = threading.Lock()
         self.mode = "paused"
+        self.broker_enabled = broker_enabled
+        self.channel_id = channel_id or uuid.uuid4().hex
+        self.lease = None
+        self.last_generation = 0
         self.action_count = 0
         self.last_action_at = None
         self.last_input_error = None
     def status(self):
         with self.lock:
-            return {"mode": self.mode, "width": self.width, "height": self.height,
-                    "actions": self.action_count, "last_action_at": self.last_action_at,
-                    "last_input_error": self.last_input_error,
-                    "input_target": "private-linux-display", "host_input_supported": False}
+            self._expire_locked()
+            return self._status_locked()
+    def _status_locked(self):
+        lease = self.lease
+        return {"channel_id": self.channel_id,
+                "input_auth": "broker-v2" if self.broker_enabled else "direct-v1",
+                "lease": None if lease is None else {
+                    "owner": lease["owner"], "generation": lease["generation"],
+                    "expires_at": lease["expires_at"]},
+                "mode": self.mode, "width": self.width, "height": self.height,
+                "actions": self.action_count, "last_action_at": self.last_action_at,
+                "last_input_error": self.last_input_error,
+                "input_target": "private-linux-display", "host_input_supported": False}
+    def _expire_locked(self):
+        if self.lease is not None and time.monotonic() >= self.lease["deadline"]:
+            self.lease = None
+    def _matches_locked(self, identity):
+        return self.lease is not None and identity == tuple(self.lease[k] for k in ("owner", "generation", "nonce"))
+    def claim(self, data):
+        owner, generation, nonce, ttl = _lease_request(data, ttl=True)
+        with self.lock:
+            self._expire_locked()
+            identity = owner, generation, nonce
+            if self.mode != "agent": raise Conflict("Agent mode is not enabled")
+            if self.lease is not None and not self._matches_locked(identity):
+                raise Conflict("Lease already held")
+            if self.lease is None and generation <= self.last_generation:
+                raise Conflict("Stale lease generation")
+            self.last_generation = generation
+            self.lease = {"owner": owner, "generation": generation, "nonce": nonce,
+                          "deadline": time.monotonic() + ttl, "expires_at": time.time() + ttl}
+            return self._status_locked()
+    def renew(self, data):
+        owner, generation, nonce, ttl = _lease_request(data, ttl=True)
+        with self.lock:
+            self._expire_locked()
+            if self.mode != "agent" or not self._matches_locked((owner, generation, nonce)):
+                raise Conflict("Lease unavailable")
+            self.lease["deadline"] = time.monotonic() + ttl
+            self.lease["expires_at"] = time.time() + ttl
+            return self._status_locked()
+    def release(self, data):
+        identity = _lease_request(data, ttl=False)
+        with self.lock:
+            self._expire_locked()
+            if not self._matches_locked(identity): raise Conflict("Lease unavailable")
+            self.lease = None
+            return self._status_locked()
     def control(self, mode):
         if mode not in ("paused", "human", "agent"): raise Invalid("Unknown mode")
         # Serialize takeover with input; already delivered input cannot be undone.
-        with self.lock: self.mode = mode
+        with self.lock:
+            self.mode = mode
+            if mode in ("human", "paused"): self.lease = None
     def act(self, data):
         actor, args, stdin = validate_action(data, self.width, self.height)
         with self.lock:
+            self._expire_locked()
             if self.mode != actor: raise Conflict("Input disabled for this actor")
+            if self.broker_enabled and actor == "agent":
+                lease = data.get("lease")
+                if not isinstance(lease, dict) or not self._matches_locked(_lease_request(lease, ttl=False)):
+                    raise Conflict("Broker lease required")
             started = time.monotonic()
             try:
                 self.display.input(args, stdin)
             except Exception as exc:
                 self.mode = "paused"
+                self.lease = None
                 stage = {'click': 'pointer_click', 'move': 'pointer_move',
                          'type': 'text_type', 'key': 'key'}.get(data.get('action'), 'input')
                 self.last_input_error = _input_diagnostic(exc, stage, started)
@@ -161,7 +233,15 @@ class Channel:
     def frame_jpeg(self):
         with self.lock: return self.display.frame_jpeg()
 
-def handler_for(channel, token):
+def handler_for(channel, token, broker_token=None, viewer_token=None):
+    if broker_token is not None:
+        if not re.fullmatch(r"[a-f0-9]{64}", broker_token) or hmac.compare_digest(token, broker_token):
+            raise ValueError("Invalid separate broker token")
+        if (viewer_token is None or not re.fullmatch(r"[a-f0-9]{64}", viewer_token)
+                or hmac.compare_digest(token, viewer_token)
+                or hmac.compare_digest(broker_token, viewer_token)):
+            raise ValueError("Invalid separate viewer token")
+        channel.broker_enabled = True
     class Handler(BaseHTTPRequestHandler):
         server_version = "AgentChannels/0.1"
         def log_message(self, *_): pass
@@ -174,13 +254,20 @@ def handler_for(channel, token):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(data)
-        def authorized(self):
+        def authorized(self, expected=token):
             supplied = self.headers.get("Authorization", "")
             return not self.headers.get("Origin") and hmac.compare_digest(
-                supplied.encode(), ("Bearer " + token).encode())
+                supplied.encode(), ("Bearer " + expected).encode())
         def do_GET(self):
             if self.path == "/health": return self.send(200, {"service": "agent-channels", "version": "0.1"})
-            if not self.authorized(): return self.send(401, {"error": "Authentication required"})
+            if self.path == "/api/lease/inspect":
+                if broker_token is None or not self.authorized(broker_token):
+                    return self.send(401, {"error": "Authentication required"})
+                return self.send(200, channel.status())
+            if broker_token is not None:
+                if not (self.authorized(token) or self.authorized(viewer_token)):
+                    return self.send(401, {"error": "Authentication required"})
+            elif not self.authorized(): return self.send(401, {"error": "Authentication required"})
             try:
                 if self.path == "/api/state": return self.send(200, channel.status())
                 if self.path == "/api/screenshot": return self.send(200, channel.screenshot(), "image/png")
@@ -188,7 +275,17 @@ def handler_for(channel, token):
                 self.send(404, {"error": "Not found"})
             except Exception: self.send(503, {"error": "Private desktop unavailable"})
         def do_POST(self):
-            if not self.authorized(): return self.send(401, {"error": "Authentication required"})
+            lease_path = self.path in ("/api/lease/claim", "/api/lease/renew", "/api/lease/release")
+            if lease_path:
+                if broker_token is None or not self.authorized(broker_token):
+                    return self.send(401, {"error": "Authentication required"})
+            elif self.path == "/api/input" and broker_token is not None:
+                if not (self.authorized(viewer_token) or self.authorized(broker_token)):
+                    return self.send(401, {"error": "Authentication required"})
+            elif self.path == "/api/control" and broker_token is not None:
+                if not self.authorized(viewer_token):
+                    return self.send(401, {"error": "Authentication required"})
+            elif not self.authorized(): return self.send(401, {"error": "Authentication required"})
             try:
                 if self.headers.get("Content-Type", "").split(";")[0] != "application/json": raise Invalid("JSON required")
                 length = int(self.headers.get("Content-Length", "0"))
@@ -196,7 +293,15 @@ def handler_for(channel, token):
                 data = json.loads(self.rfile.read(length))
                 if not isinstance(data, dict): raise Invalid("Expected an object")
                 if self.path == "/api/control": channel.control(data.get("mode"))
-                elif self.path == "/api/input": channel.act(data)
+                elif self.path == "/api/input":
+                    if broker_token is not None:
+                        expected = broker_token if data.get("actor") == "agent" else viewer_token
+                        if not self.authorized(expected):
+                            return self.send(401, {"error": "Authentication required"})
+                    channel.act(data)
+                elif self.path == "/api/lease/claim": return self.send(200, channel.claim(data))
+                elif self.path == "/api/lease/renew": return self.send(200, channel.renew(data))
+                elif self.path == "/api/lease/release": return self.send(200, channel.release(data))
                 else: return self.send(404, {"error": "Not found"})
                 self.send(200, channel.status())
             except Conflict as exc: self.send(409, {"error": str(exc)})
@@ -210,5 +315,17 @@ def handler_for(channel, token):
 if __name__ == "__main__":
     token = Path("/run/secrets/channel_token").read_text().strip()
     if not re.fullmatch(r"[a-f0-9]{64}", token): raise RuntimeError("Invalid generated token")
-    channel = Channel(XDisplay(), int(os.environ.get("SCREEN_WIDTH", "1600")), int(os.environ.get("SCREEN_HEIGHT", "900")))
-    ThreadingHTTPServer(("0.0.0.0", 8080), handler_for(channel, token)).serve_forever()
+    broker_value, broker_file = os.environ.get("BROKER_TOKEN"), os.environ.get("BROKER_TOKEN_FILE")
+    if broker_value is not None and broker_file is not None:
+        raise RuntimeError("Configure only one broker token source")
+    broker_token = Path(broker_file).read_text().strip() if broker_file else broker_value
+    viewer_value, viewer_file = os.environ.get("VIEWER_TOKEN"), os.environ.get("VIEWER_TOKEN_FILE")
+    if viewer_value is not None and viewer_file is not None:
+        raise RuntimeError("Configure only one viewer token source")
+    viewer_token = Path(viewer_file).read_text().strip() if viewer_file else viewer_value
+    channel = Channel(XDisplay(), int(os.environ.get("SCREEN_WIDTH", "1600")),
+                      int(os.environ.get("SCREEN_HEIGHT", "900")),
+                      broker_enabled=broker_token is not None,
+                      channel_id=os.environ.get("CHANNEL_ID"))
+    ThreadingHTTPServer(("0.0.0.0", 8080),
+            handler_for(channel, token, broker_token, viewer_token)).serve_forever()

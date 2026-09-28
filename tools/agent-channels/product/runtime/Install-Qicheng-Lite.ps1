@@ -4,6 +4,7 @@ param(
     [string]$InstallRoot,
     [string]$DataRoot,
     [string]$ImportTokenPath,
+    [string]$ImportBrokerTokenPath,
     [string]$StartMenuRoot,
     [string]$DesktopRoot,
     [string]$StartupRoot,
@@ -69,6 +70,22 @@ if(-not[string]::IsNullOrWhiteSpace($ImportTokenPath)){
     $tokenValue=(Get-Content -LiteralPath (Join-Path $installRoot '.local\channel.token') -Raw).Trim()
 }
 if($tokenValue -and -not(Test-QichengLiteTokenValue -Value $tokenValue)){throw 'token 必须是 64 位小写十六进制；未进行安装。'}
+$brokerTokenValue=$null
+if(-not[string]::IsNullOrWhiteSpace($ImportBrokerTokenPath)){
+    $sourceBrokerToken=Resolve-QichengLitePath -Path $ImportBrokerTokenPath -Label 'ImportBrokerTokenPath'
+    if(-not(Test-Path -LiteralPath $sourceBrokerToken -PathType Leaf)){throw 'Broker token 文件不存在。'}
+    $brokerTokenValue=(Get-Content -LiteralPath $sourceBrokerToken -Raw).Trim()
+} elseif($existingRecord -and (Test-Path -LiteralPath (Join-Path $installRoot '.local\broker.token') -PathType Leaf)){
+    $brokerTokenValue=(Get-Content -LiteralPath (Join-Path $installRoot '.local\broker.token') -Raw).Trim()
+}
+if($brokerTokenValue -and -not(Test-QichengLiteTokenValue -Value $brokerTokenValue)){throw 'Broker token 必须是 64 位小写十六进制；未进行安装。'}
+if($brokerTokenValue -and $tokenValue -and $brokerTokenValue -ceq $tokenValue){throw 'Broker token 必须与频道 token 不同。'}
+$viewerTokenValue=$null
+if($brokerTokenValue -and $existingRecord -and (Test-Path -LiteralPath (Join-Path $installRoot '.local\viewer.token') -PathType Leaf)){
+    $viewerTokenValue=(Get-Content -LiteralPath (Join-Path $installRoot '.local\viewer.token') -Raw).Trim()
+    if(-not(Test-QichengLiteTokenValue -Value $viewerTokenValue)){throw '查看器 token 格式无效；未进行安装。'}
+    if($viewerTokenValue -ceq $brokerTokenValue -or ($tokenValue -and $viewerTokenValue -ceq $tokenValue)){throw '查看器 token 必须与其他凭据不同。'}
+}
 
 $legacyLink=Join-Path $legacyStartupRoot '启程 Windows 频道.lnk'
 $legacyBackup=Join-Path $dataRoot 'compatibility-backup\启程 Windows 频道.lnk'
@@ -106,6 +123,18 @@ try{
         try{$rng.GetBytes($bytes);$tokenValue=[BitConverter]::ToString($bytes).Replace('-','').ToLowerInvariant()}finally{$rng.Dispose();[Array]::Clear($bytes,0,$bytes.Length)}
     }
     [IO.File]::WriteAllText((Join-Path $tokenDirectory 'channel.token'),$tokenValue,[Text.UTF8Encoding]::new($false))
+    if($brokerTokenValue){
+        if($brokerTokenValue -ceq $tokenValue){throw 'Broker token 必须与频道 token 不同。'}
+        [IO.File]::WriteAllText((Join-Path $tokenDirectory 'broker.token'),$brokerTokenValue,[Text.UTF8Encoding]::new($false))
+        if(-not $viewerTokenValue){
+            do {
+                $bytes=New-Object byte[] 32
+                $rng=[Security.Cryptography.RandomNumberGenerator]::Create()
+                try{$rng.GetBytes($bytes);$viewerTokenValue=[BitConverter]::ToString($bytes).Replace('-','').ToLowerInvariant()}finally{$rng.Dispose();[Array]::Clear($bytes,0,$bytes.Length)}
+            } while($viewerTokenValue -ceq $tokenValue -or $viewerTokenValue -ceq $brokerTokenValue)
+        }
+        [IO.File]::WriteAllText((Join-Path $tokenDirectory 'viewer.token'),$viewerTokenValue,[Text.UTF8Encoding]::new($false))
+    }
     $record=[ordered]@{schemaVersion=1;product='Qicheng Lite';version=[string]$manifest.version;installedAt=(Get-Date).ToUniversalTime().ToString('o');dataRoot=$dataRoot;composeProject='qicheng-agent-channels';tokenPath='.local/channel.token';startupLink=(Join-Path $startupRoot '启程轻量工作台.lnk');startMenuRoot=$startMenuRoot;desktopLink=(Join-Path $desktopRoot '启程轻量工作台.lnk')}
     $record|ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $stage '.qicheng-lite-install.json') -Encoding UTF8
     if(Test-Path -LiteralPath $installRoot){$backup=Join-Path $parent ('.QichengLite.backup.'+[guid]::NewGuid().ToString('N'));Move-Item -LiteralPath $installRoot -Destination $backup}
@@ -115,6 +144,8 @@ try{
     Set-QichengLitePrivateAcl -Path $dataRoot
     Set-QichengLitePrivateAcl -Path (Join-Path $installRoot '.local')
     Set-QichengLitePrivateAcl -Path (Join-Path $installRoot '.local\channel.token') -File
+    if($brokerTokenValue){Set-QichengLitePrivateAcl -Path (Join-Path $installRoot '.local\broker.token') -File}
+    if($brokerTokenValue){Set-QichengLitePrivateAcl -Path (Join-Path $installRoot '.local\viewer.token') -File}
     New-Item -ItemType Directory -Path $startMenuRoot,$desktopRoot,$startupRoot -Force|Out-Null
     New-Item -ItemType Directory -Path $shortcutSnapshotRoot -Force|Out-Null
     $managedShortcutPaths=@(

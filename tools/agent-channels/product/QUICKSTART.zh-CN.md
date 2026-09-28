@@ -16,6 +16,8 @@
 - 用户数据：`%LOCALAPPDATA%\Qicheng\Lite`
 - 私有 token：程序根 `.local\channel.token`（后端和查看器的现有接口要求此位置）
 
+需要多个 AI 任务操作同一频道时，可另外接入 Task Lease。该模式使用独立的 `.local\broker.token`；两个 token 不能相同。仅安装轻量版不会自动创建 Task Lease 租约。
+
 双击安装会创建两个频道，使用固定 Compose 项目 `qicheng-agent-channels`，端口仅绑定 `127.0.0.1:18761` 和 `127.0.0.1:18762`。它不会执行 `docker compose down -v`，不会删除 volume，也不会停止无关进程。
 
 要复用已有 token，请从 PowerShell 显式运行：
@@ -65,3 +67,17 @@ codex mcp add qicheng_lite_2 -- $python $bridge --channel 2
 重新加载 AI 客户端，按客户端要求批准工具。在频道点击“交给 AI”，再要求 AI 先读取 `channel_state` 和 `channel_screenshot`，确认频道后调用 `channel_input`。人工接管或暂停后，AI 输入会被拒绝；不要改用宿主桌面绕过拒绝。
 
 已验证适配器 stdio 协议、实际频道输入和暂停边界。不同 AI 客户端的加载、权限和端到端执行需要分别验证；注册成功不代表客户端已经可用。两个频道互相独立，工具不会退回宿主桌面。
+
+### 多任务接入 Task Lease
+
+先安装并配置启程 Task Lease，再在安装轻量版时传入一份单独生成的 64 位小写十六进制 broker token 文件：
+
+```powershell
+.\Install-Qicheng-Lite.ps1 -ImportBrokerTokenPath 'C:\private\lite-broker.token' -Apply
+```
+
+升级时若已有 `.local\broker.token`，安装器会保留它，并为查看器生成独立的 `.local\viewer.token`（后续升级保留）。启动器检测到 broker token 后使用 `compose.broker.yaml`，要求频道读取、查看器人工操作和 Broker AI 输入使用三类不同凭据。旧直连 MCP 只能读取，不能更改接管状态或输入；查看器中的“交给 AI”仍须由人操作，人工接管或暂停会立即撤销后端短租约。不要只打开后端门禁却继续使用上面的直连 MCP 注册命令。
+
+Task Lease 每个频道需配置固定的 `lite` 绑定，端口分别为 18761/18762，频道编号分别为 1/2；`broker_token_file` 指向安装后的 `.local\broker.token`，`channel_token_file` 指向 `.local\channel.token`。对应的 `endpoint_id` 和 `project_path` 各自独立。完整示例见 Task Lease 随包说明。AI 客户端通过同一 `bridge.py` 增加 `--broker-url http://127.0.0.1:18770 --broker-token-file <Task Lease 的 broker.token> --broker-channel-id <频道 ID>`。三项参数必须同时提供；`channel_input` 先用 `begin`，再执行动作，最后 `finish`。每个动作由 Broker 记录并确认；响应不确定时停止该会话，先核对实际桌面，不能自动重试。
+
+此接法是可选的多任务隔离模式，首次接入需逐项核对真实配置和本机输入。默认直连模式没有任务级互斥；只有两端都启用新模式并完成验收，才能声称同频道多任务不会串台。

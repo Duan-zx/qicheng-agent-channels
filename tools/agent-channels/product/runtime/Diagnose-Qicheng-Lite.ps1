@@ -61,6 +61,20 @@ $tokenPath=Join-Path $installRoot '.local\channel.token'
 $tokenValid=$false
 if(Test-Path -LiteralPath $tokenPath -PathType Leaf){try{$tokenValid=Test-QichengLiteTokenValue -Value ((Get-Content -LiteralPath $tokenPath -Raw).Trim())}catch{}}
 Add-Check 'private-token' $tokenValid $(if($tokenValid){'存在且格式有效；值未显示'}else{'缺失或格式无效'})
+$brokerTokenPath=Join-Path $installRoot '.local\broker.token'
+$brokerEnabled=Test-Path -LiteralPath $brokerTokenPath -PathType Leaf
+if($brokerEnabled){
+    $brokerCredentialsValid=$false
+    try{
+        $channelTokenValue=(Get-Content -LiteralPath $tokenPath -Raw).Trim()
+        $brokerTokenValue=(Get-Content -LiteralPath $brokerTokenPath -Raw).Trim()
+        $viewerTokenValue=(Get-Content -LiteralPath (Join-Path $installRoot '.local\viewer.token') -Raw).Trim()
+        $brokerCredentialsValid=(Test-QichengLiteTokenValue -Value $brokerTokenValue) -and (Test-QichengLiteTokenValue -Value $viewerTokenValue) -and
+            $channelTokenValue -cne $brokerTokenValue -and $channelTokenValue -cne $viewerTokenValue -and $brokerTokenValue -cne $viewerTokenValue -and
+            (Test-Path -LiteralPath (Join-Path $installRoot 'compose.broker.yaml') -PathType Leaf)
+    }catch{}
+    Add-Check 'broker-credentials' $brokerCredentialsValid $(if($brokerCredentialsValid){'三类凭据分离且格式有效；值未显示'}else{'Broker 模式三类凭据不完整或重复'})
+}
 $dockerAvailable=$false
 try{& $DockerPath version --format '{{.Server.Version}}' 2>$null|Out-Null;$dockerAvailable=($LASTEXITCODE -eq 0)}catch{}
 Add-Check 'docker-linux-engine' $dockerAvailable $(if($dockerAvailable){'可用'}else{'不可用；本产品不捆绑 Docker Desktop'})
@@ -76,10 +90,11 @@ foreach($port in @($port1,$port2)){
     if($tokenValid){
         try{
             $state=Invoke-RestMethod -Uri ("http://127.0.0.1:$port/api/state") -Headers @{Authorization=('Bearer '+((Get-Content -LiteralPath $tokenPath -Raw).Trim()))} -TimeoutSec 2
-            $ready=($state.input_target -eq 'private-linux-display' -and [int]$state.width -gt 0 -and [int]$state.height -gt 0)
+            $ready=($state.input_target -eq 'private-linux-display' -and [int]$state.width -gt 0 -and [int]$state.height -gt 0 -and
+                (-not $brokerEnabled -or ($state.input_auth -eq 'broker-v2' -and [string]$state.channel_id -eq [string]($port-18760))))
         }catch{}
     }
-    Add-Check ("channel-$port-authenticated-state") $ready $(if($ready){"私有 Linux 显示已认证并报告有效尺寸"}else{"127.0.0.1:$port 未通过认证状态检查"})
+    Add-Check ("channel-$port-authenticated-state") $ready $(if($ready){"私有 Linux 显示已认证，协议与尺寸有效"}else{"127.0.0.1:$port 状态、Broker 鉴权协议或频道身份未通过检查"})
 }
 if([string]::IsNullOrWhiteSpace($StartupRoot)){$StartupRoot=[Environment]::GetFolderPath('Startup')}
 if([string]::IsNullOrWhiteSpace($LegacyStartupRoot)){$LegacyStartupRoot=[Environment]::GetFolderPath('Startup')}

@@ -7,10 +7,22 @@ if([string]::IsNullOrWhiteSpace($InstallRoot)){$InstallRoot=$PSScriptRoot}
 $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
 $token=Join-Path $installRoot '.local\channel.token'
 $compose=Join-Path $installRoot 'compose.yaml'
+$brokerToken=Join-Path $installRoot '.local\broker.token'
+$viewerToken=Join-Path $installRoot '.local\viewer.token'
+$brokerCompose=Join-Path $installRoot 'compose.broker.yaml'
 $viewer=Join-Path $installRoot 'dist\AgentChannels.exe'
 foreach($required in @($token,$compose,$viewer)){if(-not(Test-Path -LiteralPath $required -PathType Leaf)){throw "运行文件缺失：$required。请重新安装或导入 token。"}}
 $tokenValue=(Get-Content -LiteralPath $token -Raw).Trim()
 if(-not(Test-QichengLiteTokenValue -Value $tokenValue)){throw '本地 token 格式无效；未启动容器或查看器。'}
+$brokerEnabled=Test-Path -LiteralPath $brokerToken -PathType Leaf
+if($brokerEnabled){
+    if(-not(Test-Path -LiteralPath $brokerCompose -PathType Leaf)){throw 'Broker Compose 配置缺失；未启动容器。'}
+    if(-not(Test-Path -LiteralPath $viewerToken -PathType Leaf)){throw 'Broker 模式缺少查看器 token；未启动容器。请重新安装。'}
+    $brokerTokenValue=(Get-Content -LiteralPath $brokerToken -Raw).Trim()
+    if(-not(Test-QichengLiteTokenValue -Value $brokerTokenValue) -or $brokerTokenValue -ceq $tokenValue){throw 'Broker token 无效或与频道 token 相同；未启动容器。'}
+    $viewerTokenValue=(Get-Content -LiteralPath $viewerToken -Raw).Trim()
+    if(-not(Test-QichengLiteTokenValue -Value $viewerTokenValue) -or $viewerTokenValue -ceq $tokenValue -or $viewerTokenValue -ceq $brokerTokenValue){throw '查看器 token 无效或与其他凭据相同；未启动容器。'}
+}
 function Invoke-BoundedDockerProbe([string[]]$Arguments,[Diagnostics.Stopwatch]$Timer,[int]$BudgetMilliseconds){
     $remaining=$BudgetMilliseconds-[int]$Timer.ElapsedMilliseconds
     if($remaining -le 0){return $null}
@@ -87,11 +99,19 @@ if(-not $dockerReady){
     if($LoginRecovery){throw "Docker Linux engine 不可用（登录恢复等待上限 $DockerReadyTimeoutSeconds 秒）。未启动后端或查看器；请检查 Docker Desktop。"}
     throw 'Docker Linux engine 不可用。轻量版不捆绑 Docker Desktop；请先启动已获准的 Docker Linux 环境。'
 }
-$dockerArguments=@('compose','--project-name','qicheng-agent-channels','--project-directory',$installRoot,'-f',$compose,'--profile','second','up','-d')
+$dockerComposeArguments=@('compose','--project-name','qicheng-agent-channels','--project-directory',$installRoot,'-f',$compose)
+if($brokerEnabled){$dockerComposeArguments+=@('-f',$brokerCompose)}
+$dockerArguments=@($dockerComposeArguments)+@('--profile','second','up','-d')
 if($BuildBackend){$dockerArguments+='--build'}else{$dockerArguments+='--no-build'}
 $dockerArguments+=@('channel1','channel2')
 & $DockerPath @dockerArguments
-if($LASTEXITCODE -ne 0){throw '两频道后端启动失败。未删除容器或 volume；请运行诊断。'}
+if($LASTEXITCODE -ne 0){
+    if($brokerEnabled){
+        & $DockerPath @dockerComposeArguments stop channel1 channel2|Out-Null
+        if($LASTEXITCODE -ne 0){throw 'Broker 模式启动失败，且无法停止两频道容器。请立即手动停止这两个容器；未启动查看器。'}
+    }
+    throw '两频道后端启动失败。Broker 模式下已停止两频道；未删除容器或 volume；请运行诊断。'
+}
 $port1=18761
 $port2=18762
 $ready=@{}
@@ -103,14 +123,20 @@ foreach($attempt in 1..$HealthAttempts){
         if(-not $ready[$port]){
             try{
                 $state=Invoke-RestMethod -Uri ("http://127.0.0.1:$port/api/state") -Headers $headers -TimeoutSec 2
-                $ready[$port]=($state.input_target -eq 'private-linux-display' -and [int]$state.width -gt 0 -and [int]$state.height -gt 0)
+                $ready[$port]=($state.input_target -eq 'private-linux-display' -and [int]$state.width -gt 0 -and [int]$state.height -gt 0 -and (-not $brokerEnabled -or ($state.input_auth -ceq 'broker-v2' -and [string]$state.channel_id -eq [string]($port-18760))))
             }catch{}
         }
     }
     if($ready[$port1] -and $ready[$port2]){break}
     Start-Sleep -Milliseconds 500
 }
-if(-not($ready[$port1] -and $ready[$port2])){throw "容器已请求启动，但 $port1/$port2 健康检查未全部通过。未删除容器或 volume。"}
+if(-not($ready[$port1] -and $ready[$port2])){
+    if($brokerEnabled){
+        & $DockerPath @dockerComposeArguments stop channel1 channel2|Out-Null
+        if($LASTEXITCODE -ne 0){throw "Broker 模式健康检查失败，且无法停止 $port1/$port2 容器。请立即手动停止这两个容器；未启动查看器。"}
+    }
+    throw "容器已请求启动，但 $port1/$port2 健康检查未全部通过（Broker 模式要求 input_auth=broker-v2，旧镜像需用 -BuildBackend 重建）。Broker 模式下已停止两频道；未启动查看器，未删除 volume。"
+}
 $windowsViewerStartRequested=$false
 $windowsHotkeysConfirmed=$false
 $windowsViewerStatus=if($NoWindowsChannels){'disabled'}else{'not-installed'}
