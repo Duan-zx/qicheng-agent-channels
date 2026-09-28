@@ -93,7 +93,7 @@ All writes use JSON and `Content-Type: application/json`:
 
 | Method/path | Body | Result |
 | --- | --- | --- |
-| `POST /v1/acquire` | `{"request_id":"attempt-1","task_id":"task-1","channel_id":"channel-2","ttl_seconds":60}` | Lease and bearer `token`; guest channels also return `guest_identity` |
+| `POST /v1/acquire` | `{"request_id":"attempt-1","task_id":"task-1","channel_id":"channel-2","ttl_seconds":60,"wait_seconds":120}` | Lease and bearer `token`; guest channels also return `guest_identity` |
 | `POST /v1/renew` | `{"channel_id":"channel-2","token":"<LEASE_TOKEN>","ttl_seconds":60}` | Updated lease; guest channels also return `guest_identity` |
 | `POST /v1/release` | `{"channel_id":"channel-2","token":"<LEASE_TOKEN>"}` | Released lease |
 | `POST /v1/ack` | `{"channel_id":"channel-2","token":"<LEASE_TOKEN>","action_id":"action-1"}` | Idempotent guest success acknowledgement: `{"ok":true,"action_id":"action-1"}` |
@@ -111,6 +111,21 @@ caller crashes for ordinary channels. Guest input has a persistent dirty gate
 described below. Configured project roots must be absolute, existing, and
 non-overlapping across channels; task-specific worktree creation still belongs
 to the launcher.
+
+`wait_seconds` is optional. Omit it or set it to `0` for the original immediate
+`409 busy` behavior. A positive value up to 300 seconds waits in a durable FIFO
+queue for the configured endpoint (at most 64 waiters per endpoint). The lease
+TTL begins when the waiter reaches the front and receives its lease. Retrying
+the same binding and `request_id` while queued keeps its place; retries do not
+extend the original queue deadline. HTTP 408 `wait_timeout` and 429
+`wait_queue_full` mean no lease was issued. A timed-out or cancelled request ID
+is terminal, so a new attempt needs a new ID. The broker cancels an HTTP waiter
+when its connection closes; orphaned rows after a broker crash are pruned after
+five seconds without a heartbeat or at their stored deadline. The queue is
+shared by broker processes using the same SQLite database. Set the HTTP
+client's request timeout longer than `wait_seconds` and release the preceding
+lease when its workflow finishes. Guest dirty state and binding checks still
+block new lease delivery.
 
 Codex and n8n can call the same loopback HTTP endpoints: acquire, execute a
 registered action, renew before expiry, and release in a final step. The

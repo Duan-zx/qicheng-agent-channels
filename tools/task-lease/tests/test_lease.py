@@ -43,6 +43,19 @@ def execute_worker(path, channel, token, started, finish, queue):
         queue.put((type(error).__name__, str(error)))
 
 
+def wait_worker(path, request, queue):
+    try:
+        store = lease.LeaseStore(path)
+        result = store.acquire(request_id=request, channel_id="channel-B",
+                               task_id=request, project_id="project",
+                               project_path=str(Path(path).parent),
+                               endpoint_id="endpoint", tool_id="browser",
+                               wait_seconds=8)
+        queue.put(("ok", result.request_id, result.token))
+    except Exception as error:
+        queue.put((type(error).__name__, str(error)))
+
+
 class LeaseTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -266,6 +279,212 @@ class LeaseTests(unittest.TestCase):
             job.join(15)
             self.assertEqual(0, job.exitcode)
         self.assertCountEqual(["ok", "EndpointBusy"], outcomes)
+
+    def test_waiters_are_fifo_and_retry_does_not_duplicate(self):
+        real = lease.LeaseStore(self.path)
+        first = real.acquire(request_id="owner", channel_id="channel-A",
+                             task_id="owner", project_id="project-A",
+                             project_path=self.temp.name, endpoint_id="wechat-A",
+                             tool_id="browser")
+        # Use a real clock for bounded waits; the original owner is released explicitly.
+        def waiting(request, channel):
+            return real.acquire(request_id=request, channel_id=channel,
+                                task_id=request, project_id="project-A",
+                                project_path=self.temp.name, endpoint_id="wechat-A",
+                                tool_id="browser", wait_seconds=3)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            ahead = pool.submit(waiting, "ahead", "channel-B")
+            self._await_waiters(1)
+            retry = pool.submit(waiting, "ahead", "channel-B")
+            behind = pool.submit(waiting, "behind", "channel-C")
+            self._await_waiters(2)
+            with closing(sqlite3.connect(self.path)) as db:
+                self.assertEqual(2, db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0])
+            real.release("channel-A", first.token)
+            awarded = ahead.result(timeout=4)
+            self.assertEqual(awarded, retry.result(timeout=4))
+            self.assertFalse(behind.done())
+            real.release("channel-B", awarded.token)
+            second = behind.result(timeout=4)
+            self.assertGreater(second.generation, awarded.generation)
+            real.release("channel-C", second.token)
+
+    def _await_waiters(self, count):
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            with closing(sqlite3.connect(self.path)) as db:
+                if db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0] == count:
+                    return
+            time.sleep(0.02)
+        self.fail(f"expected {count} waiters")
+
+    def test_wait_timeout_and_cancel_are_terminal_and_release_queue(self):
+        first = self.acquire("owner", "channel-A")
+        with self.assertRaises(lease.WaitTimedOut):
+            self.acquire("timed", "channel-B", wait_seconds=0.15)
+        with self.assertRaises(lease.LeaseGone):
+            self.acquire("timed", "channel-B", wait_seconds=1)
+        cancelled = threading.Event()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(self.acquire, "cancelled", "channel-B",
+                                  wait_seconds=2, cancelled=cancelled.is_set)
+            self._await_waiters(1)
+            cancelled.set()
+            with self.assertRaises(lease.WaitCancelled):
+                waiting.result(timeout=2)
+        self._await_waiters(0)
+        self.store.release("channel-A", first.token)
+        successor = self.acquire("successor", "channel-C")
+        self.assertEqual("successor", successor.request_id)
+
+    def test_wait_queue_capacity_rejects_without_consuming_request_id(self):
+        self.store.MAX_WAITERS_PER_ENDPOINT = 1
+        owner = self.acquire("owner", "channel-A")
+        cancelled = threading.Event()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(self.acquire, "first-waiter", "channel-B",
+                                  wait_seconds=2, cancelled=cancelled.is_set)
+            self._await_waiters(1)
+            with self.assertRaises(lease.WaitQueueFull):
+                self.acquire("second-waiter", "channel-C", wait_seconds=1)
+            with closing(sqlite3.connect(self.path)) as db:
+                self.assertIsNone(db.execute("SELECT 1 FROM requests WHERE request_id=?",
+                                             ("second-waiter",)).fetchone())
+            cancelled.set()
+            with self.assertRaises(lease.WaitCancelled):
+                waiting.result(timeout=2)
+        self.store.release("channel-A", owner.token)
+        self.assertEqual("second-waiter", self.acquire("second-waiter", "channel-C").request_id)
+
+    def test_disconnect_of_one_retry_preserves_shared_queue_position(self):
+        owner = self.acquire("owner", "channel-A")
+        first_cancel = threading.Event()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(self.acquire, "shared", "channel-B", wait_seconds=2,
+                                cancelled=first_cancel.is_set)
+            self._await_waiters(1)
+            second = pool.submit(self.acquire, "shared", "channel-B", wait_seconds=2)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                with closing(sqlite3.connect(self.path)) as db:
+                    if db.execute("SELECT COUNT(*) FROM waiter_clients").fetchone()[0] == 2:
+                        break
+                time.sleep(0.02)
+            else:
+                self.fail("second retry did not attach")
+            first_cancel.set()
+            with self.assertRaises(lease.WaitCancelled):
+                first.result(timeout=2)
+            self._await_waiters(1)
+            self.store.release("channel-A", owner.token)
+            self.assertEqual("shared", second.result(timeout=3).request_id)
+
+    def test_short_retry_timeout_preserves_original_waiter(self):
+        owner = self.acquire("owner", "channel-A")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            original = pool.submit(self.acquire, "shared", "channel-B", wait_seconds=2)
+            self._await_waiters(1)
+            short = pool.submit(self.acquire, "shared", "channel-B", wait_seconds=0.2)
+            with self.assertRaises(lease.WaitTimedOut):
+                short.result(timeout=1)
+            with closing(sqlite3.connect(self.path)) as db:
+                self.assertEqual(1, db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0])
+                self.assertEqual(1, db.execute("SELECT COUNT(*) FROM waiter_clients").fetchone()[0])
+            self.store.release("channel-A", owner.token)
+            self.assertEqual("shared", original.result(timeout=3).request_id)
+
+    def test_long_action_lock_keeps_fifo_waiters_alive_past_ten_seconds(self):
+        real = lease.LeaseStore(self.path)
+        def acquire(request, channel, wait=0):
+            return real.acquire(request_id=request, channel_id=channel,
+                                task_id=request, project_id="project",
+                                project_path=self.temp.name, endpoint_id="endpoint",
+                                tool_id="browser", wait_seconds=wait, ttl_seconds=30)
+        owner = acquire("owner", "channel-A")
+        started = threading.Event()
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            def long_action(_active):
+                started.set()
+                time.sleep(10.6)
+            action = pool.submit(real.execute_owned, "channel-A", owner.token, long_action)
+            self.assertTrue(started.wait(2))
+            head = pool.submit(acquire, "head", "channel-A", 20)
+            self._await_waiters(1)
+            behind = pool.submit(acquire, "behind", "channel-B", 20)
+            self._await_waiters(2)
+            with closing(sqlite3.connect(self.path)) as db:
+                queued = db.execute("""SELECT r.request_id FROM waiters w
+                    JOIN requests r ON r.generation=w.generation
+                    ORDER BY w.generation""").fetchall()
+                self.assertEqual([("head",), ("behind",)], queued)
+            time.sleep(6)
+            with closing(sqlite3.connect(self.path)) as db:
+                self.assertEqual(2, db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0])
+                heartbeat = db.execute("SELECT MIN(heartbeat) FROM waiter_clients").fetchone()[0]
+                self.assertLess(time.time() - heartbeat, 2)
+            action.result(timeout=8)
+            real.release("channel-A", owner.token)
+            awarded = head.result(timeout=5)
+            self.assertEqual("head", awarded.request_id)
+            self.assertFalse(behind.done())
+            real.release("channel-A", awarded.token)
+            self.assertEqual("behind", behind.result(timeout=5).request_id)
+
+    def test_cross_process_waiter_survives_store_restart(self):
+        real = lease.LeaseStore(self.path)
+        first = real.acquire(request_id="owner", channel_id="channel-A",
+                             task_id="owner", project_id="project",
+                             project_path=self.temp.name, endpoint_id="endpoint",
+                             tool_id="browser")
+        context = multiprocessing.get_context("spawn")
+        queue = context.Queue()
+        worker = context.Process(target=wait_worker, args=(str(self.path), "queued", queue))
+        worker.start()
+        try:
+            self._await_waiters(1)
+            restarted = lease.LeaseStore(self.path)
+            restarted.release("channel-A", first.token)
+            outcome = queue.get(timeout=10)
+            self.assertEqual(("ok", "queued"), outcome[:2])
+            self.assertEqual("queued", restarted.current("channel-B").request_id)
+            restarted.release("channel-B", outcome[2])
+        finally:
+            worker.join(5)
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(5)
+        self.assertEqual(0, worker.exitcode)
+
+    def test_dead_process_waiter_is_pruned_after_heartbeat_lapse(self):
+        real = lease.LeaseStore(self.path)
+        owner = real.acquire(request_id="owner", channel_id="channel-A",
+                             task_id="owner", project_id="project",
+                             project_path=self.temp.name, endpoint_id="endpoint",
+                             tool_id="browser")
+        context = multiprocessing.get_context("spawn")
+        queue = context.Queue()
+        worker = context.Process(target=wait_worker, args=(str(self.path), "orphan", queue))
+        worker.start()
+        try:
+            self._await_waiters(1)
+        finally:
+            worker.terminate()
+            worker.join(5)
+        self.assertFalse(worker.is_alive())
+        # Simulate five seconds elapsed without a process heartbeating.
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute("UPDATE waiter_clients SET heartbeat=?", (time.time() - 10,))
+            db.commit()
+        restarted = lease.LeaseStore(self.path)
+        restarted.release("channel-A", owner.token)
+        successor = restarted.acquire(request_id="successor", channel_id="channel-C",
+            task_id="successor", project_id="project", project_path=self.temp.name,
+            endpoint_id="endpoint", tool_id="browser")
+        self.assertEqual("successor", successor.request_id)
+        with self.assertRaises(lease.LeaseGone):
+            restarted.acquire(request_id="orphan", channel_id="channel-B",
+                task_id="orphan", project_id="project", project_path=self.temp.name,
+                endpoint_id="endpoint", tool_id="browser", wait_seconds=1)
 
 
 if __name__ == "__main__":

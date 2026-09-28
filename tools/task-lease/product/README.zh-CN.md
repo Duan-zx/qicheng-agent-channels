@@ -1,6 +1,6 @@
 # 启程 Task Lease（可选组件）
 
-此组件在单台 Windows 主机上提供本地任务租约和固定 CLI 动作代理。它只保护经 `/v1/execute` 进入 broker 的动作；已有 MCP、微信 CLI、Computer Use 和 n8n 工作流不会被自动拦截。需要 Python 3.10+ 与 Windows PowerShell 5.1 或 PowerShell 7，不需要管理员权限或第三方 Python 包。
+此组件在单台 Windows 主机上提供本地任务租约和固定 CLI 动作代理。租约只协调主动接入 broker 的 `/v1/execute`、`/v1/input` 等动作；已有 MCP、微信 CLI、Computer Use 和 n8n 工作流不会被自动拦截。需要 Python 3.10+ 与 Windows PowerShell 5.1 或 PowerShell 7，不需要管理员权限或第三方 Python 包。
 源码和安装包按随附 `LICENSE` 的 Apache-2.0 条款提供。
 
 ## 独立公开源码候选
@@ -103,11 +103,11 @@ Guest 输入采用 `acquire → input → ack → release`。每次 `/v1/input` 
 
 n8n 若在 Windows 宿主运行，HTTP Request 节点使用 `http://127.0.0.1:18770`；若在本机 Docker Desktop 容器中，01 已实测可经 `http://host.docker.internal:18770` 访问宿主 broker，容器内的 `127.0.0.1` 则指向容器自己。其他主机或容器网络需独立验证；broker 只绑定宿主回环，不提供通用远程服务。把 `broker.token` 存为 n8n 私有 Bearer 凭据，避免写入工作流导出、日志或节点正文；设置 `Content-Type: application/json`：
 
-1. `POST /v1/acquire`，正文如 `{"request_id":"run-123-attempt-1","task_id":"run-123","channel_id":"channel-2","ttl_seconds":60}`。每次新执行用新的 `request_id`，同次重试沿用原值。
+1. `POST /v1/acquire`，正文如 `{"request_id":"run-123-attempt-1","task_id":"run-123","channel_id":"channel-2","ttl_seconds":60,"wait_seconds":120}`。每次新执行用新的 `request_id`，同次重试沿用原值。`wait_seconds` 可省略；省略或设为 `0` 时保持立即返回 `409 busy`，设为 `1..300` 时按端点先进先出等待。n8n HTTP Request 节点的超时需长于等待时长。
 2. 只把响应的租约 `token` 传给可信的后续节点；`POST /v1/execute`，正文如 `{"channel_id":"channel-2","token":"<lease token>","action":"check-login"}`。节点不可传入任意命令、路径或端口。
 3. 若任务继续，过期前 `POST /v1/renew`，正文如 `{"channel_id":"channel-2","token":"<lease token>","ttl_seconds":60}`。无论成功、失败或取消，都在收尾分支 `POST /v1/release`，正文如 `{"channel_id":"channel-2","token":"<lease token>"}`。
 
-`GET /v1/status` 返回不含租约令牌的状态，仍要求 broker Bearer 凭据。409 `busy` 应排队或稍后重试；410 `lease_gone` 必须新建执行尝试；401 表示 broker 凭据错误。租约 TTL 应大于最长动作和排队时间。长期或异步动作需要目标侧另建执行门与心跳，不能只靠此 broker。
+`GET /v1/status` 返回不含租约令牌的状态，仍要求 broker Bearer 凭据。409 `busy` 表示未启用等待且端点正忙；408 `wait_timeout` 表示等待到期，429 `wait_queue_full` 表示队列已满；410 `lease_gone` 表示该请求已结束，必须新建执行尝试；401 表示 broker 凭据错误。租约 TTL 从成功取得频道时起算，应大于实际动作和收尾时间；等待时长另由 `wait_seconds` 控制。长期或异步动作需要目标侧另建执行门与心跳，不能只靠此 broker。
 
 ## 诊断与卸载
 

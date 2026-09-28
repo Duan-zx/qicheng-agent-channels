@@ -39,6 +39,22 @@ class EndpointBusy(LeaseError):
     pass
 
 
+class WaitTimedOut(LeaseError):
+    pass
+
+
+class WaitCancelled(LeaseError):
+    pass
+
+
+class WaitQueueFull(LeaseError):
+    pass
+
+
+class LockUnavailable(LeaseError):
+    pass
+
+
 class RequestConflict(LeaseError):
     pass
 
@@ -78,6 +94,11 @@ class LeaseStore:
     RequestConflict. A lost key file is fatal for an existing database.
     """
 
+    MAX_WAIT_SECONDS = 300
+    MAX_WAITERS_PER_ENDPOINT = 64
+    WAIT_POLL_SECONDS = 0.05
+    WAITER_STALE_SECONDS = 5
+
     def __init__(self, db_path: str | Path, *, clock=time.time):
         self.path = Path(db_path).resolve()
         self.key_path = self.path.with_name(self.path.name + ".key")
@@ -103,6 +124,20 @@ class LeaseStore:
                     generation INTEGER NOT NULL UNIQUE REFERENCES requests(generation),
                     expires_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS waiters (
+                    generation INTEGER PRIMARY KEY REFERENCES requests(generation),
+                    endpoint_id TEXT NOT NULL,
+                    deadline REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS waiters_endpoint_order
+                    ON waiters(endpoint_id, generation);
+                CREATE TABLE IF NOT EXISTS waiter_clients (
+                    client_id TEXT PRIMARY KEY,
+                    generation INTEGER NOT NULL REFERENCES requests(generation),
+                    heartbeat REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS waiter_clients_generation
+                    ON waiter_clients(generation);
             """)
 
     def _load_key(self) -> bytes:
@@ -159,7 +194,7 @@ class LeaseStore:
             db.close()
 
     @contextmanager
-    def _lock(self, kind: str, identifier: str):
+    def _lock(self, kind: str, identifier: str, *, timeout_seconds: float = 10):
         """Cross-process lock; the OS releases it if its owner dies."""
         digest = hashlib.sha256(identifier.encode("utf-8")).hexdigest()
         path = self.lock_dir / f"{kind}-{digest}.lock"
@@ -167,7 +202,7 @@ class LeaseStore:
         try:
             if os.fstat(fd).st_size == 0:
                 os.write(fd, b"\0")
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + timeout_seconds
             while True:
                 try:
                     if os.name == "nt":
@@ -177,8 +212,10 @@ class LeaseStore:
                         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except OSError as error:
-                    if error.errno not in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK) or time.monotonic() >= deadline:
-                        raise LeaseError(f"timed out or failed to lock {kind}") from error
+                    if error.errno not in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+                        raise LeaseError(f"failed to lock {kind}") from error
+                    if time.monotonic() >= deadline:
+                        raise LockUnavailable(f"timed out locking {kind}") from error
                     time.sleep(0.02)
             try:
                 yield
@@ -203,6 +240,13 @@ class LeaseStore:
             raise ValueError("ttl_seconds must be between 1 and 86400")
         return float(value)
 
+    @classmethod
+    def _wait(cls, value: float) -> float:
+        if (type(value) not in (int, float) or not 0 <= value <= cls.MAX_WAIT_SECONDS
+                or value != value):
+            raise ValueError(f"wait_seconds must be between 0 and {cls.MAX_WAIT_SECONDS}")
+        return float(value)
+
     def _token(self, request_id: str, generation: int) -> str:
         payload = f"{generation}:{request_id}".encode("utf-8")
         return hmac.new(self._key, payload, hashlib.sha256).hexdigest()
@@ -221,9 +265,96 @@ class LeaseStore:
             JOIN leases l ON l.generation = r.generation
             WHERE """ + where, (value,)).fetchone()
 
+    def _heartbeat_waiter(self, client_id: str):
+        # Queue bookkeeping uses SQLite's write lock, not action locks. A live
+        # waiter can therefore stay visible while an action holds its channel.
+        with self._transaction() as db:
+            db.execute("UPDATE waiter_clients SET heartbeat=? WHERE client_id=?",
+                       (self.clock(), client_id))
+
+    def _prune_waiters(self, db: sqlite3.Connection, endpoint_id: str,
+                       request_id: str, now: float):
+        db.execute("""DELETE FROM waiter_clients WHERE heartbeat<?
+            AND generation IN (SELECT generation FROM waiters
+                               WHERE endpoint_id=?)""",
+                   (now - self.WAITER_STALE_SECONDS, endpoint_id))
+        db.execute("""DELETE FROM waiters WHERE endpoint_id=? AND
+            (deadline<=? OR NOT EXISTS
+                (SELECT 1 FROM waiter_clients c
+                 WHERE c.generation=waiters.generation)) AND generation NOT IN
+            (SELECT generation FROM requests WHERE request_id=?)""",
+                   (endpoint_id, now, request_id))
+
+    def _join_waiter(self, binding: tuple[str, ...], wait: float,
+                     client_id: str) -> Lease | None:
+        request_id, channel_id, _task_id, _project_id, _project_path, endpoint_id, _tool_id = binding
+        with self._transaction() as db:
+            db.execute("BEGIN IMMEDIATE")
+            now = self.clock()
+            self._prune_waiters(db, endpoint_id, request_id, now)
+            previous = db.execute("SELECT * FROM requests WHERE request_id=?",
+                                  (request_id,)).fetchone()
+            if previous is not None:
+                if tuple(previous[key] for key in (
+                        "request_id", "channel_id", "task_id", "project_id",
+                        "project_path", "endpoint_id", "tool_id")) != binding:
+                    raise RequestConflict("request_id already belongs to a different binding")
+                active = self._select(db, "r.generation=?", previous["generation"])
+                if active and active["expires_at"] > now:
+                    return self._lease(active, self._token(request_id, active["generation"]))
+                waiter = db.execute("SELECT * FROM waiters WHERE generation=?",
+                                    (previous["generation"],)).fetchone()
+                if waiter is None:
+                    raise LeaseGone("request_id is already terminal")
+                if waiter["deadline"] <= now:
+                    db.execute("DELETE FROM waiter_clients WHERE generation=?",
+                               (previous["generation"],))
+                    db.execute("DELETE FROM waiters WHERE generation=?",
+                               (previous["generation"],))
+                    db.commit()
+                    raise WaitTimedOut(request_id)
+                generation = previous["generation"]
+            else:
+                if db.execute("SELECT COUNT(*) FROM waiters WHERE endpoint_id=?",
+                              (endpoint_id,)).fetchone()[0] >= self.MAX_WAITERS_PER_ENDPOINT:
+                    raise WaitQueueFull(endpoint_id)
+                cursor = db.execute("""INSERT INTO requests
+                    (request_id,channel_id,task_id,project_id,project_path,endpoint_id,tool_id)
+                    VALUES(?,?,?,?,?,?,?)""", binding)
+                generation = cursor.lastrowid
+                db.execute("""INSERT INTO waiters(generation,endpoint_id,deadline)
+                    VALUES(?,?,?)""", (generation, endpoint_id, now + wait))
+            db.execute("""INSERT INTO waiter_clients(client_id,generation,heartbeat)
+                VALUES(?,?,?)""", (client_id, generation, now))
+        return None
+
+    @contextmanager
+    def _acquire_locks(self, channel_id: str, endpoint_id: str, wait: float,
+                       local_deadline: float, request_id: str, client_id: str | None,
+                       cancelled):
+        if wait == 0:
+            with self._lock("channel", channel_id), self._lock("endpoint", endpoint_id):
+                yield
+            return
+        while True:
+            if cancelled is not None and cancelled():
+                self._remove_waiter(request_id, channel_id, endpoint_id, client_id)
+                raise WaitCancelled(request_id)
+            if time.monotonic() >= local_deadline:
+                self._remove_waiter(request_id, channel_id, endpoint_id, client_id)
+                raise WaitTimedOut(request_id)
+            try:
+                with self._lock("channel", channel_id, timeout_seconds=0.25), \
+                        self._lock("endpoint", endpoint_id, timeout_seconds=0.25):
+                    yield
+                return
+            except LockUnavailable:
+                self._heartbeat_waiter(client_id)
+
     def acquire(self, *, request_id: str, channel_id: str, task_id: str,
                 project_id: str, project_path: str, endpoint_id: str,
-                tool_id: str, ttl_seconds: float = 60) -> Lease:
+                tool_id: str, ttl_seconds: float = 60, wait_seconds: float = 0,
+                cancelled=None) -> Lease:
         fields = ("request_id", "channel_id", "task_id", "project_id", "endpoint_id", "tool_id")
         values = (request_id, channel_id, task_id, project_id, endpoint_id, tool_id)
         for name, value in zip(fields, values):
@@ -236,41 +367,123 @@ class LeaseStore:
             raise ValueError("project_path must be an existing directory")
         project_path = str(project)
         ttl = self._ttl(ttl_seconds)
+        wait = self._wait(wait_seconds)
         binding = (request_id, channel_id, task_id, project_id, project_path, endpoint_id, tool_id)
-        # Always take channel before endpoint. The same order is used by
-        # execute_owned, preventing deadlocks between transitions and actions.
-        with self._lock("channel", channel_id), self._lock("endpoint", endpoint_id):
-            with self._transaction() as db:
-                db.execute("BEGIN IMMEDIATE")
-                now = self.clock()
-                previous = db.execute("SELECT * FROM requests WHERE request_id=?", (request_id,)).fetchone()
-                if previous:
-                    if tuple(previous[key] for key in ("request_id", "channel_id", "task_id", "project_id", "project_path", "endpoint_id", "tool_id")) != binding:
-                        raise RequestConflict("request_id already belongs to a different binding")
-                    active = self._select(db, "r.generation=?", previous["generation"])
-                    if not active or active["expires_at"] <= now:
-                        raise LeaseGone("request_id is already terminal")
-                    return self._lease(active, self._token(request_id, active["generation"]))
-                # Only prune rows protected by these locks. Deleting every
-                # expired row could evict an unrelated action still running.
-                db.execute("""DELETE FROM leases WHERE expires_at <= ? AND
-                    (channel_id=? OR generation IN
-                        (SELECT generation FROM requests WHERE endpoint_id=?))""",
-                           (now, channel_id, endpoint_id))
-                if self._select(db, "l.channel_id=?", channel_id):
-                    raise ChannelBusy(channel_id)
-                if self._select(db, "r.endpoint_id=?", endpoint_id):
-                    raise EndpointBusy(endpoint_id)
-                cursor = db.execute("""
-                    INSERT INTO requests(request_id,channel_id,task_id,project_id,project_path,endpoint_id,tool_id)
-                    VALUES(?,?,?,?,?,?,?)
-                """, binding)
-                generation = cursor.lastrowid
-                expires_at = now + ttl
-                db.execute("INSERT INTO leases(channel_id,generation,expires_at) VALUES(?,?,?)",
-                           (channel_id, generation, expires_at))
-                row = self._select(db, "r.generation=?", generation)
-                return self._lease(row, self._token(request_id, generation))
+        client_id = secrets.token_hex(16) if wait else None
+        if wait:
+            active = self._join_waiter(binding, wait, client_id)
+            if active is not None:
+                return active
+        # Wall-clock deadline survives broker restart. Monotonic time also
+        # bounds a live call if a local wall clock moves backwards.
+        local_deadline = time.monotonic() + wait
+        while True:
+            if cancelled is not None and cancelled():
+                self._remove_waiter(request_id, channel_id, endpoint_id, client_id)
+                raise WaitCancelled(request_id)
+            # Action locks can outlive a waiting call. Short lock attempts
+            # refresh the caller heartbeat and respect its own deadline.
+            with self._acquire_locks(channel_id, endpoint_id, wait, local_deadline,
+                                     request_id, client_id, cancelled):
+                with self._transaction() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    now = self.clock()
+                    self._prune_waiters(db, endpoint_id, request_id, now)
+                    previous = db.execute("SELECT * FROM requests WHERE request_id=?",
+                                          (request_id,)).fetchone()
+                    waiter = None
+                    if previous:
+                        if tuple(previous[key] for key in ("request_id", "channel_id", "task_id", "project_id", "project_path", "endpoint_id", "tool_id")) != binding:
+                            raise RequestConflict("request_id already belongs to a different binding")
+                        active = self._select(db, "r.generation=?", previous["generation"])
+                        if active and active["expires_at"] > now:
+                            return self._lease(active, self._token(request_id, active["generation"]))
+                        waiter = db.execute("SELECT * FROM waiters WHERE generation=?",
+                                            (previous["generation"],)).fetchone()
+                        if waiter is None:
+                            raise LeaseGone("request_id is already terminal")
+                    # Only prune leases protected by these locks. An unrelated
+                    # expired lease may still have an action in progress.
+                    db.execute("""DELETE FROM leases WHERE expires_at <= ? AND
+                        (channel_id=? OR generation IN
+                            (SELECT generation FROM requests WHERE endpoint_id=?))""",
+                               (now, channel_id, endpoint_id))
+                    if waiter is not None:
+                        if wait == 0:
+                            raise EndpointBusy(endpoint_id)
+                        if waiter["deadline"] <= now:
+                            db.execute("DELETE FROM waiter_clients WHERE generation=?",
+                                       (previous["generation"],))
+                            db.execute("DELETE FROM waiters WHERE generation=?",
+                                       (previous["generation"],))
+                            # Commit the tombstone before reporting timeout;
+                            # the transaction context rolls back exceptions.
+                            db.commit()
+                            raise WaitTimedOut(request_id)
+                        if time.monotonic() >= local_deadline:
+                            db.execute("DELETE FROM waiter_clients WHERE client_id=?",
+                                       (client_id,))
+                            db.execute("""DELETE FROM waiters WHERE generation=? AND
+                                NOT EXISTS (SELECT 1 FROM waiter_clients c
+                                            WHERE c.generation=?)""",
+                                       (previous["generation"], previous["generation"]))
+                            db.commit()
+                            raise WaitTimedOut(request_id)
+                        db.execute("""INSERT OR REPLACE INTO waiter_clients
+                            (client_id,generation,heartbeat) VALUES(?,?,?)""",
+                                   (client_id, previous["generation"], now))
+                    head = db.execute("""SELECT generation FROM waiters
+                        WHERE endpoint_id=? ORDER BY generation LIMIT 1""",
+                                      (endpoint_id,)).fetchone()
+                    channel_busy = self._select(db, "l.channel_id=?", channel_id)
+                    endpoint_busy = self._select(db, "r.endpoint_id=?", endpoint_id)
+                    at_head = head is None or (waiter is not None and
+                                                head["generation"] == previous["generation"])
+                    if not channel_busy and not endpoint_busy and at_head:
+                        if previous is None:
+                            cursor = db.execute("""INSERT INTO requests
+                                (request_id,channel_id,task_id,project_id,project_path,endpoint_id,tool_id)
+                                VALUES(?,?,?,?,?,?,?)""", binding)
+                            generation = cursor.lastrowid
+                        else:
+                            generation = previous["generation"]
+                            db.execute("DELETE FROM waiter_clients WHERE generation=?", (generation,))
+                            db.execute("DELETE FROM waiters WHERE generation=?", (generation,))
+                        expires_at = now + ttl
+                        db.execute("INSERT INTO leases(channel_id,generation,expires_at) VALUES(?,?,?)",
+                                   (channel_id, generation, expires_at))
+                        row = self._select(db, "r.generation=?", generation)
+                        return self._lease(row, self._token(request_id, generation))
+                    if wait == 0 and waiter is None:
+                        if channel_busy:
+                            raise ChannelBusy(channel_id)
+                        raise EndpointBusy(endpoint_id)
+                    if previous is None:
+                        if db.execute("SELECT COUNT(*) FROM waiters WHERE endpoint_id=?",
+                                      (endpoint_id,)).fetchone()[0] >= self.MAX_WAITERS_PER_ENDPOINT:
+                            raise WaitQueueFull(endpoint_id)
+                        cursor = db.execute("""INSERT INTO requests
+                            (request_id,channel_id,task_id,project_id,project_path,endpoint_id,tool_id)
+                            VALUES(?,?,?,?,?,?,?)""", binding)
+                        generation = cursor.lastrowid
+                        db.execute("""INSERT INTO waiters(generation,endpoint_id,deadline)
+                            VALUES(?,?,?)""", (generation, endpoint_id, now + wait))
+                        db.execute("""INSERT INTO waiter_clients(client_id,generation,heartbeat)
+                            VALUES(?,?,?)""", (client_id, generation, now))
+            time.sleep(min(self.WAIT_POLL_SECONDS,
+                           max(0, local_deadline - time.monotonic())))
+
+    def _remove_waiter(self, request_id: str, channel_id: str, endpoint_id: str,
+                       client_id: str | None):
+        with self._transaction() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM waiter_clients WHERE client_id=?", (client_id,))
+            db.execute("""DELETE FROM waiters WHERE generation IN
+                (SELECT generation FROM requests WHERE request_id=? AND channel_id=?
+                 AND endpoint_id=?) AND NOT EXISTS
+                (SELECT 1 FROM waiter_clients c
+                 WHERE c.generation=waiters.generation)""",
+                       (request_id, channel_id, endpoint_id))
 
     def _authenticated(self, db: sqlite3.Connection, channel_id: str, token: str) -> sqlite3.Row:
         row = self._select(db, "l.channel_id=?", channel_id)

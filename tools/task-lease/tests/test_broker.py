@@ -1,6 +1,7 @@
 import json
 import secrets
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -80,6 +81,58 @@ class BrokerHTTPTests(unittest.TestCase):
     def acquire(self, request_id, channel_id, **extra):
         return self.call("/v1/acquire", {"request_id": request_id, "task_id": request_id,
                                          "channel_id": channel_id, **extra})
+
+    def wait_for_queue(self, count):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            with closing(sqlite3.connect(Path(self.temp.name) / "leases.db")) as db:
+                if db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0] == count:
+                    return
+            time.sleep(0.02)
+        self.fail(f"expected {count} waiters")
+
+    def test_http_bounded_wait_and_disconnect_cleanup(self):
+        status, owner = self.acquire("owner", "channel-A")
+        self.assertEqual(200, status)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(self.acquire, "next", "channel-B", wait_seconds=2)
+            self.wait_for_queue(1)
+            self.assertEqual(409, self.acquire("immediate", "channel-B")[0])
+            self.assertEqual(200, self.call("/v1/release", {
+                "channel_id": "channel-A", "token": owner["token"]})[0])
+            status, successor = waiting.result(timeout=4)
+        self.assertEqual(200, status)
+        self.assertEqual("next", successor["request_id"])
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-B", "token": successor["token"]})[0])
+
+        status, owner = self.acquire("owner-2", "channel-A")
+        self.assertEqual(200, status)
+        body = json.dumps({"channel_id": "channel-B", "task_id": "abandoned",
+                           "request_id": "abandoned", "wait_seconds": 2}).encode()
+        request = (b"POST /v1/acquire HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                   + f"Authorization: Bearer {self.credential}\r\n".encode()
+                   + b"Content-Type: application/json\r\n"
+                   + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+        connection = socket.create_connection(("127.0.0.1", self.server.server_port))
+        try:
+            connection.sendall(request)
+            self.wait_for_queue(1)
+        finally:
+            connection.close()
+        self.wait_for_queue(0)
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": owner["token"]})[0])
+        self.assertEqual(200, self.acquire("after-disconnect", "channel-B")[0])
+
+    def test_wait_parameters_and_timeout(self):
+        status, _ = self.acquire("owner", "channel-A")
+        self.assertEqual(200, status)
+        for value in (-1, 301, True, "1"):
+            self.assertEqual(400, self.acquire(f"invalid-{value}", "channel-B",
+                                               wait_seconds=value)[0])
+        self.assertEqual(408, self.acquire("timed", "channel-B", wait_seconds=0.15)[0])
+        self.assertEqual(410, self.acquire("timed", "channel-B", wait_seconds=1)[0])
 
     def test_unauthorized_and_binding_override_rejected(self):
         self.assertEqual(401, self.call("/v1/status", credential=False)[0])
@@ -348,6 +401,42 @@ class GuestInputTests(unittest.TestCase):
     def acquire(self, letter, request_id):
         return self.call("/v1/acquire", {"channel_id": f"channel-{letter}",
                                          "task_id": request_id, "request_id": request_id})
+
+    def test_waiter_aborts_on_guest_dirty_or_binding_change(self):
+        status, owner = self.acquire("A", "owner")
+        self.assertEqual(200, status)
+        def wait_for(request_id):
+            return self.call("/v1/acquire", {"channel_id": "channel-A",
+                "task_id": request_id, "request_id": request_id,
+                "wait_seconds": 2})
+        def queued():
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                with closing(sqlite3.connect(self.root / "leases.db")) as db:
+                    if db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0] == 1:
+                        return
+                time.sleep(0.02)
+            self.fail("guest waiter was not queued")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            dirty_waiter = pool.submit(wait_for, "dirty-next")
+            queued()
+            with closing(sqlite3.connect(self.root / "leases.db")) as db:
+                db.execute("INSERT INTO guest_dirty VALUES (?, ?, ?)",
+                           ("guest-A", "channel-A", "owner"))
+                db.commit()
+            self.assertEqual((409, {"ok": False, "error": "guest_dirty"}),
+                             dirty_waiter.result(timeout=3))
+            with closing(sqlite3.connect(self.root / "leases.db")) as db:
+                self.assertEqual(0, db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0])
+                db.execute("DELETE FROM guest_dirty")
+                db.commit()
+            binding_waiter = pool.submit(wait_for, "binding-next")
+            queued()
+            (self.root / "channel-A.token").write_text(secrets.token_hex(32), encoding="ascii")
+            self.assertEqual((503, {"ok": False, "error": "guest_binding_unavailable"}),
+                             binding_waiter.result(timeout=3))
+            with closing(sqlite3.connect(self.root / "leases.db")) as db:
+                self.assertEqual(0, db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0])
 
     def payload(self, letter, token, **fields):
         if fields.get("action") in {"click", "move", "key", "type"}:

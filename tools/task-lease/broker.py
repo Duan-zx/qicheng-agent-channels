@@ -12,6 +12,8 @@ import hmac
 import json
 import re
 import secrets
+import select
+import socket
 import subprocess
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,7 +21,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from lease import (ChannelBusy, EndpointBusy, InvalidToken, LeaseGone,
-                   LeaseStore, RequestConflict)
+                   LeaseStore, RequestConflict, WaitCancelled, WaitQueueFull,
+                   WaitTimedOut)
 
 _GUEST_TTL_SECONDS = 30
 _GUEST_OWNER = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
@@ -354,10 +357,10 @@ class Broker:
             raise ValueError("channel_id is not registered")
         return self.channels[channel_id]
 
-    def acquire(self, payload: dict) -> dict:
-        allowed = {"request_id", "task_id", "channel_id", "ttl_seconds"}
+    def acquire(self, payload: dict, *, disconnected=None) -> dict:
+        allowed = {"request_id", "task_id", "channel_id", "ttl_seconds", "wait_seconds"}
         if set(payload) - allowed or not {"request_id", "task_id", "channel_id"} <= set(payload):
-            raise ValueError("acquire accepts only request_id, task_id, channel_id, ttl_seconds")
+            raise ValueError("acquire accepts only request_id, task_id, channel_id, ttl_seconds, wait_seconds")
         channel = self._channel(payload["channel_id"])
         if channel.guest is not None and (not isinstance(payload["request_id"], str)
                                           or not _GUEST_OWNER.fullmatch(payload["request_id"])):
@@ -370,21 +373,45 @@ class Broker:
         ttl = LeaseStore._ttl(payload.get("ttl_seconds", self.default_ttl))
         if ttl > self.max_ttl:
             raise ValueError("ttl_seconds exceeds configured maximum")
+        wait = LeaseStore._wait(payload.get("wait_seconds", 0))
         owner = (channel.channel_id, payload["request_id"])
         dirty = self._dirty_owner(channel.endpoint_id)
         if dirty is not None and dirty != owner:
             return {"ok": False, "error": "guest_dirty"}
-        result = self.store.acquire(
-            request_id=payload["request_id"], task_id=payload["task_id"],
-            channel_id=channel.channel_id, project_id=channel.project_id,
-            project_path=channel.project_path, endpoint_id=channel.endpoint_id,
-            tool_id=channel.tool_id, ttl_seconds=ttl)
+        abort_reason = None
+        def cancelled():
+            nonlocal abort_reason
+            if disconnected is not None and disconnected():
+                abort_reason = "client_disconnected"
+            elif channel.guest is not None:
+                try:
+                    self._assert_guest_binding(channel)
+                except Exception:
+                    abort_reason = "guest_binding_unavailable"
+            if abort_reason is None and self._dirty_owner(channel.endpoint_id) not in (None, owner):
+                abort_reason = "guest_dirty"
+            return abort_reason is not None
+        try:
+            result = self.store.acquire(
+                request_id=payload["request_id"], task_id=payload["task_id"],
+                channel_id=channel.channel_id, project_id=channel.project_id,
+                project_path=channel.project_path, endpoint_id=channel.endpoint_id,
+                tool_id=channel.tool_id, ttl_seconds=ttl, wait_seconds=wait,
+                cancelled=cancelled if wait else None)
+        except WaitCancelled:
+            return {"ok": False, "error": abort_reason or "client_disconnected"}
         # A previous expired action may have marked the endpoint dirty while
         # acquire waited for its endpoint lock. Close that race after allocation.
         dirty = self._dirty_owner(channel.endpoint_id)
         if dirty is not None and dirty != owner:
             self.store.release(channel.channel_id, result.token)
             return {"ok": False, "error": "guest_dirty"}
+        if channel.guest is not None:
+            try:
+                self._assert_guest_binding(channel)
+            except Exception:
+                self.store.release(channel.channel_id, result.token)
+                return {"ok": False, "error": "guest_binding_unavailable"}
         response = {**result.public(), "token": result.token}
         if channel.guest is not None:
             response["guest_identity"] = self._guest_identity(channel)
@@ -632,17 +659,23 @@ class BrokerHandler(BaseHTTPRequestHandler):
             self._send(409, {"error": "request_conflict"})
         except LeaseGone:
             self._send(410, {"error": "lease_gone"})
+        except WaitTimedOut:
+            self._send(408, {"error": "wait_timeout"})
+        except WaitQueueFull:
+            self._send(429, {"error": "wait_queue_full"})
         except InvalidToken:
             self._send(403, {"error": "invalid_token"})
         except (ValueError, TypeError, json.JSONDecodeError) as error:
             self._send(400, {"error": "invalid_request", "detail": str(error)})
         else:
+            if result.get("error") == "client_disconnected":
+                return
             code = {"timeout": 504, "guest_unavailable": 503,
                      "input_failed": 502, "guest_release_uncertain": 503,
                      "attempt_unavailable": 503, "already_attempted": 409,
                      "action_conflict": 409, "ack_unavailable": 409,
                      "ack_required": 409, "guest_dirty": 409,
-                     "lease_expired": 410,
+                     "lease_expired": 410, "client_disconnected": 499,
                      "guest_execute_disabled": 403,
                     "guest_binding_unavailable": 503}.get(
                         result.get("error"), 200)
@@ -660,7 +693,19 @@ class BrokerHandler(BaseHTTPRequestHandler):
         if self.path not in routes:
             self._send(404, {"error": "not_found"})
             return
-        self._dispatch(lambda: routes[self.path](self._read_json()))
+        if self.path == "/v1/acquire":
+            def disconnected():
+                try:
+                    readable, _, _ = select.select([self.connection], [], [], 0)
+                    if not readable:
+                        return False
+                    return not self.connection.recv(1, socket.MSG_PEEK)
+                except (ConnectionError, OSError, ValueError):
+                    return True
+            self._dispatch(lambda: self.server.broker.acquire(
+                self._read_json(), disconnected=disconnected))
+        else:
+            self._dispatch(lambda: routes[self.path](self._read_json()))
 
     def do_GET(self):
         if not self._authorized():
