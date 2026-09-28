@@ -4,7 +4,7 @@
 
 alpha.22 的隔离 n8n 2.39.6 CLI 试验发现：工作流被 REST stop 标为 `canceled` 后，排队中的 HTTP Request 仍可能保持连接，频道释放后才执行固定动作。alpha.23 为显式传入 n8n execution/workflow ID 的单动作 `/v1/run` 增加本机公开 API 状态监督：只在相同执行仍为 `running` 时开工，已取消或状态不可读时撤队；`/v1/cancel-run` 可主动撤销同绑定且尚未开工的请求。API key 只从私有文件读取，状态源限本机回环且不跟随 HTTP 跳转。未配置状态源时 n8n 仍应使用默认即时 `409 busy`。
 
-私有源码 Python 101/101、公开导出树 Python 101 项（其中 1 项依赖未公开的本机配置而跳过）、5 项产品测试及 Windows PowerShell 5.1 产品包回归通过。独立 Checker 在隔离 n8n 2.39.6 CLI 上对源码和最终 alpha.23 ZIP 分别验收：执行取消后 waiter 在原占用释放前从 1 降为 0 且未补跑；正常排队接续；已开工动作 stop 后完成并释放；失败动作为 HTTP 502，旧 request ID 回放不重做。最终私有 ZIP 的 24 个白名单文件与清单哈希、CRC 均匹配；公开 Task Lease 源码白名单 33/33 项哈希匹配。隔离测试服务已停止，01 常驻服务仍为 alpha.20，DELL 未首装；私有包未作为公开 Release 发布。Webhook/UI 执行、多节点长流程、Windows/Lite 输入及最后一次状态检查到动作启动之间的竞态不在本次验收内。原始日志与凭据不在本仓。
+私有源码 Python 101/101、公开导出树 Python 101 项（其中 1 项依赖未公开的本机配置而跳过）、5 项产品测试及 Windows PowerShell 5.1 产品包回归通过。独立 Checker 在隔离 n8n 2.39.6 CLI 上对源码和最终 alpha.23 ZIP 分别验收：执行取消后 waiter 在原占用释放前从 1 降为 0 且未补跑；正常排队接续；已开工动作 stop 后完成并释放；失败动作为 HTTP 502，旧 request ID 回放不重做。最终私有 ZIP 的 24 个白名单文件与清单哈希、CRC 均匹配；公开 Task Lease 源码白名单 33/33 项哈希匹配。隔离测试服务已停止。01 已从该 ZIP 侧装并切换常驻，安装诊断确认服务进程属于 alpha.23；`lite-1` 短租约获取与释放通过，末态四频道无占用或脏状态，共享 n8n 健康检查仍为 200。共享实例尚无执行状态源或普通固定动作频道，DELL 未首装；私有包未作为公开 Release 发布。Webhook/UI 执行、多节点长流程、Windows/Lite 输入及最后一次状态检查到动作启动之间的竞态不在本次验收内。原始日志与凭据不在本仓。
 
 ## 2026-09-28 Task Lease alpha.22 本地源码候选（历史记录，未公开发行）
 
