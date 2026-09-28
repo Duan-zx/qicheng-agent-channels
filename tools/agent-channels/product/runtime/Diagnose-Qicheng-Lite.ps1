@@ -7,6 +7,47 @@ if([string]::IsNullOrWhiteSpace($InstallRoot)){$InstallRoot=$PSScriptRoot}
 $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
 $checks=New-Object 'System.Collections.Generic.List[object]'
 function Add-Check([string]$Name,[bool]$Passed,[string]$Detail){$checks.Add([pscustomobject][ordered]@{name=$Name;passed=$Passed;detail=$Detail})}
+function Test-CompatibleWindowsStartup([string]$ShortcutPath,[string]$LiteRoot){
+    try{
+        # The shortcut is evidence only when it launches this installed package's entrypoint.
+        $shell=New-Object -ComObject WScript.Shell
+        $link=$shell.CreateShortcut($ShortcutPath)
+        $arguments=[string]$link.Arguments
+        if($arguments -notmatch '(?i)(?:^|\s)-File\s+"([^"]+Start-WindowsChannels\.ps1)"\s*$'){return $false}
+        $script=[IO.Path]::GetFullPath($matches[1])
+        $windowsRoot=Split-Path -Parent $script
+        if(-not [string]::Equals([IO.Path]::GetFullPath([string]$link.WorkingDirectory).TrimEnd('\'),$windowsRoot.TrimEnd('\'),[StringComparison]::OrdinalIgnoreCase)){return $false}
+        if(-not [string]::Equals([IO.Path]::GetFullPath([string]$link.TargetPath),[IO.Path]::GetFullPath((Get-Command powershell.exe -ErrorAction Stop).Source),[StringComparison]::OrdinalIgnoreCase)){return $false}
+        if(-not [string]::Equals($LiteRoot.TrimEnd('\'),([IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs\QichengLite'))).TrimEnd('\'),[StringComparison]::OrdinalIgnoreCase)){return $false}
+        $recordPath=Join-Path $windowsRoot '.qicheng-product-install.json'
+        $manifestPath=Join-Path $windowsRoot 'package-manifest.json'
+        if(-not(Test-Path -LiteralPath $recordPath -PathType Leaf) -or -not(Test-Path -LiteralPath $manifestPath -PathType Leaf) -or -not(Test-Path -LiteralPath $script -PathType Leaf)){return $false}
+        $windowsRecord=Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8|ConvertFrom-Json -ErrorAction Stop
+        $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8|ConvertFrom-Json -ErrorAction Stop
+        if($windowsRecord.schemaVersion -ne 1 -or $manifest.schemaVersion -ne 1 -or $manifest.product -ne 'Qicheng Windows Channels' -or $windowsRecord.version -ne $manifest.version -or $windowsRecord.autoStart -ne 'Enabled'){return $false}
+        if([string]$windowsRecord.startupLink -ne $ShortcutPath){return $false}
+        $version=[string]$windowsRecord.version
+        if($version -match '^\d+\.\d+\.\d+-alpha\.(\d+)(?:-local)?$'){
+            if([int]$matches[1] -lt 13){return $false}
+        }elseif($version -notmatch '^\d+\.\d+\.\d+(?:-local)?$'){return $false}
+        if([string]$windowsRecord.packageManifestSha256 -ne (Get-QichengLiteSha256 -Path $manifestPath)){return $false}
+        $entry=@($manifest.files|Where-Object{[string]$_.path -eq 'Start-WindowsChannels.ps1'})
+        if($entry.Count -ne 1){return $false}
+        if([string]$entry[0].sha256 -ne (Get-QichengLiteSha256 -Path $script) -or [uint64]$entry[0].bytes -ne [uint64](Get-Item -LiteralPath $script).Length){return $false}
+        $viewerRelative='viewer/dist/WindowsChannelsViewer.exe'
+        $viewerEntry=@($manifest.files|Where-Object{[string]$_.path -eq $viewerRelative})
+        $viewer=Join-Path $windowsRoot 'viewer\dist\WindowsChannelsViewer.exe'
+        if($viewerEntry.Count -ne 1 -or -not(Test-Path -LiteralPath $viewer -PathType Leaf)){return $false}
+        if([string]$viewerEntry[0].sha256 -ne (Get-QichengLiteSha256 -Path $viewer) -or [uint64]$viewerEntry[0].bytes -ne [uint64](Get-Item -LiteralPath $viewer).Length){return $false}
+        $source=Get-Content -LiteralPath $script -Raw -Encoding UTF8
+        if(-not $source.Contains('Programs\QichengLite\.qicheng-lite-install.json') -or -not $source.Contains('4..(3 + $config.ProjectNames.Count)') -or -not $source.Contains('$disableHostHotkey = $true')){return $false}
+        $configPath=Join-Path ([string]$windowsRecord.dataRoot) 'channels.json'
+        if(-not(Test-Path -LiteralPath $configPath -PathType Leaf)){return $false}
+        $config=Get-Content -LiteralPath $configPath -Raw -Encoding UTF8|ConvertFrom-Json -ErrorAction Stop
+        $count=@($config.projects.PSObject.Properties.Name).Count
+        return ($config.schema_version -eq 1 -and $count -ge 1 -and $count -le 6)
+    }catch{return $false}
+}
 $record=Read-QichengLiteInstallRecord -InstallRoot $installRoot
 Add-Check 'install-record' ($null -ne $record) $(if($record){"版本 $($record.version)"}else{'安装记录缺失'})
 foreach($item in @(
@@ -45,6 +86,8 @@ if([string]::IsNullOrWhiteSpace($LegacyStartupRoot)){$LegacyStartupRoot=[Environ
 $startup=Join-Path (Resolve-QichengLitePath -Path $StartupRoot -Label 'StartupRoot') '启程轻量工作台.lnk'
 $legacy=Join-Path (Resolve-QichengLitePath -Path $LegacyStartupRoot -Label 'LegacyStartupRoot') '启程 Windows 频道.lnk'
 Add-Check 'lite-autostart' (Test-Path -LiteralPath $startup -PathType Leaf) $startup
-Add-Check 'legacy-alt-conflict' (-not(Test-Path -LiteralPath $legacy -PathType Leaf)) $(if(Test-Path -LiteralPath $legacy -PathType Leaf){'旧 Windows 频道仍会登录启动，可能争用 Alt 快捷键'}else{'未发现旧启动项'})
+$legacyPresent=Test-Path -LiteralPath $legacy -PathType Leaf
+$windowsCompatible=$legacyPresent -and (Test-CompatibleWindowsStartup -ShortcutPath $legacy -LiteRoot $installRoot)
+Add-Check 'legacy-alt-conflict' (-not $legacyPresent -or $windowsCompatible) $(if($windowsCompatible){'已核对 Windows 频道启动项、安装记录、包校验及 Lite 快捷键重映射：Alt+4..9，无 host 快捷键'}elseif($legacyPresent){'Windows 频道启动项的兼容性未证实，可能争用 Alt 快捷键'}else{'未发现旧启动项'})
 $failed=@($checks.ToArray()|Where-Object{-not $_.passed}).Count
 [ordered]@{schemaVersion=1;status=if($failed){'attention-required'}else{'healthy'};installRoot=$installRoot;composeProject='qicheng-agent-channels';ports=@($port1,$port2);checks=$checks.ToArray();failedChecks=$failed;mutationsMade=$false;tokenDisplayed=$false}|ConvertTo-Json -Depth 6

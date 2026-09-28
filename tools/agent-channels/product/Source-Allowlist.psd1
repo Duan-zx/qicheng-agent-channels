@@ -42,5 +42,6 @@
         'product/runtime/linux/start.sh'
         'product/runtime/linux/diagnose.sh'
         'product/tests/Test-ProductPackage.ps1'
+        'product/tests/Test-LegacyStartupDiagnosis.ps1'
     )
 }
