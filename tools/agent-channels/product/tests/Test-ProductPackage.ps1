@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([switch]$SkipPublicRoundTrip,[switch]$RecoveryOnly,[switch]$HostReturnOnly)
+param([switch]$SkipPublicRoundTrip,[switch]$RecoveryOnly,[switch]$HostReturnOnly,[switch]$ConfirmNoInteractive)
 
 $ErrorActionPreference='Stop'
 $productRoot=Split-Path -Parent $PSScriptRoot
@@ -274,6 +274,32 @@ static class FakeDocker {
             Console.WriteLine(mode=="windows" ? "windows" : "linux"); return 0;
         }
         if (args.Length>0 && args[0]=="version") { Console.WriteLine("1.0"); return 0; }
+        if (args.Length>1 && args[0]=="image" && args[1]=="inspect") { if (mode=="no-image") return 1; Console.WriteLine(mode=="replaced-tag" ? "sha256:replacement" : "sha256:fixture-image"); return 0; }
+        string ownedInstall=Environment.GetEnvironmentVariable("QICHENG_LITE_FAKE_OWNED_INSTALL");
+        if (!String.IsNullOrEmpty(ownedInstall)) {
+            if (args[0]=="compose" && Array.IndexOf(args,"ps")>=0) { Console.WriteLine("owned-"+args[args.Length-1]); return 0; }
+            if (args[0]=="inspect") {
+                string format=String.Join(" ",args);
+                if (format.Contains("{{.Image}}")) Console.WriteLine("sha256:fixture-image");
+                else if (format.Contains("project.working_dir")) Console.WriteLine(mode=="foreign-owner" ? @"C:\foreign-lite" : ownedInstall);
+                else if (format.Contains("com.docker.compose.project")) Console.WriteLine("qicheng-agent-channels");
+                else if (format.Contains("com.docker.compose.service")) Console.WriteLine("channel1");
+                else if (format.Contains("{{json .Mounts}}")) Console.WriteLine("[{\"Type\":\"volume\",\"Name\":\""+(mode=="foreign-volume" ? "foreign-home" : "qicheng-lite-home-1")+"\",\"Destination\":\"/home/channel\"}]");
+                return 0;
+            }
+            if (args[0]=="create") { Console.WriteLine("aaaaaaaaaaaa"); return 0; }
+            if (args[0]=="cp") {
+                string source=Environment.GetEnvironmentVariable("QICHENG_LITE_FAKE_IMAGE_APP");
+                string destination=args[args.Length-1];
+                foreach(string file in Directory.GetFiles(source,"*",SearchOption.AllDirectories)) {
+                    string target=Path.Combine(destination,file.Substring(source.Length).TrimStart(Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(target));File.Copy(file,target,true);
+                }
+                if(mode=="image-mismatch") File.AppendAllText(Path.Combine(destination,"server.py"),"\n# stale image");
+                return 0;
+            }
+            if (args[0]=="rm") return mode=="rm-fail" ? 1 : 0;
+        }
         string oldDirectory=Environment.GetEnvironmentVariable("QICHENG_LITE_FAKE_OLD_CHANNEL2_DIR");
         if (!String.IsNullOrEmpty(oldDirectory) && args.Length>0 && args[0]=="compose" && Array.IndexOf(args,"ps")>=0 && Array.IndexOf(args,"channel2")>=0) { Console.WriteLine("old-channel2-id"); return 0; }
         if (!String.IsNullOrEmpty(oldDirectory) && args.Length>0 && args[0]=="inspect") { Console.WriteLine(oldDirectory); return 0; }
@@ -297,10 +323,122 @@ exit /b %ERRORLEVEL%
     Assert-True ($cmdOutput -match 'installed-start-failed' -and $cmdOutput -match 'was installed, but its first backend build or health check failed') 'double-click installer did not explain retained install and startup failure'
     Assert-True ($cmdOutput -notmatch 'installation finished') 'double-click installer printed false success after startup failure'
     Assert-True (Test-Path -LiteralPath (Join-Path $cmdInstall '.qicheng-lite-install.json')) 'startup failure did not retain installation'
+    Assert-True ((Get-Content -LiteralPath $dockerLog -Raw) -match '--build') 'normal double-click installation did not request a backend build'
     if($RecoveryOnly){
         $env:QICHENG_TEST_INPUT_AUTH='direct-v1'
         $global:mockStateUris=New-Object 'System.Collections.Generic.List[string]'
         function Invoke-RestMethod { param([string]$Uri,[hashtable]$Headers,[int]$TimeoutSec) $global:mockStateUris.Add($Uri); [pscustomobject]@{input_target='private-linux-display';input_auth=$env:QICHENG_TEST_INPUT_AUTH;channel_id=if($Uri -match ':18761/'){'1'}else{'2'};width=1600;height=900} }
+        $freshOptions=$singleOptions.Clone();$freshOptions.InstallRoot=Join-Path $testRoot 'fresh-offline'
+        $freshOfflineError=''
+        try{& $installer @freshOptions -ReuseExistingBackendImage -ErrorAction Stop|Out-Null}catch{$freshOfflineError=$_.Exception.Message}
+        Assert-True ($freshOfflineError -match '首次安装必须构建' -and -not(Test-Path -LiteralPath $freshOptions.InstallRoot)) "offline image reuse accepted a fresh installation: $freshOfflineError"
+        Copy-Item -LiteralPath (Join-Path $build.windows.directory 'backend') -Destination $testRoot -Recurse
+        $env:QICHENG_LITE_FAKE_IMAGE_APP=Join-Path $testRoot 'backend'
+        $env:QICHENG_LITE_FAKE_OWNED_INSTALL=$singleInstall
+        $recordPath=Join-Path $singleInstall '.qicheng-lite-install.json'
+        $recordHold=Join-Path $singleInstall '.qicheng-lite-install.hold'
+        Move-Item -LiteralPath $recordPath -Destination $recordHold
+        try{
+            $missingRecordError=''
+            try{& $installer @singleOptions -ReuseExistingBackendImage -ErrorAction Stop|Out-Null}catch{$missingRecordError=$_.Exception.Message}
+            Assert-True ($missingRecordError -match '首次安装必须构建') 'offline image reuse accepted an installation without its record'
+        }finally{Move-Item -LiteralPath $recordHold -Destination $recordPath}
+        $oldBackend=Join-Path $singleInstall 'backend\server.py'
+        $oldBackendBytes=[IO.File]::ReadAllBytes($oldBackend)
+        try{
+            Add-Content -LiteralPath $oldBackend -Value '# changed backend'
+            $changedBackendError=''
+            try{& $installer @singleOptions -ReuseExistingBackendImage -ErrorAction Stop|Out-Null}catch{$changedBackendError=$_.Exception.Message}
+            Assert-True ($changedBackendError -match '原 manifest 校验' -and (Test-Path -LiteralPath (Join-Path $singleInstall '.qicheng-lite-install.json'))) 'changed backend silently reused the image'
+        }finally{[IO.File]::WriteAllBytes($oldBackend,$oldBackendBytes)}
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='remote'
+        $remoteInstallError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$remoteInstallError=$_.Exception.Message}
+        Assert-True ($remoteInstallError -match '本机 Docker endpoint' -and (Test-Path -LiteralPath $recordPath)) 'remote endpoint passed offline preflight'
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='replaced-tag'
+        $replacedTagError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$replacedTagError=$_.Exception.Message}
+        Assert-True ($replacedTagError -match '镜像或 Compose 归属不匹配' -and (Test-Path -LiteralPath $recordPath)) 'replaced image tag passed offline preflight'
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='foreign-owner'
+        $foreignOwnerError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$foreignOwnerError=$_.Exception.Message}
+        Assert-True ($foreignOwnerError -match '镜像或 Compose 归属不匹配' -and (Test-Path -LiteralPath $recordPath)) 'foreign Compose owner passed offline preflight'
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='foreign-volume'
+        $foreignVolumeError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$foreignVolumeError=$_.Exception.Message}
+        Assert-True ($foreignVolumeError -match '持久卷归属不匹配' -and (Test-Path -LiteralPath $recordPath)) 'foreign volume passed offline preflight'
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='image-mismatch'
+        $imageMismatchError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$imageMismatchError=$_.Exception.Message}
+        Assert-True ($imageMismatchError -match '镜像内后端文件不匹配' -and (Test-Path -LiteralPath $recordPath)) 'wrong image bytes passed offline preflight'
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='rm-fail'
+        $cleanupError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$cleanupError=$_.Exception.Message}
+        Assert-True ($cleanupError -match '镜像探针清理失败' -and $cleanupError -match 'probeContainerId=aaaaaaaaaaaa' -and (Test-Path -LiteralPath $recordPath)) 'failed probe container cleanup did not block installation or report its ID'
+        Remove-Item Env:QICHENG_LITE_FAKE_DOCKER_MODE
+        $temporaryBase=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+        $probeBefore=@(Get-ChildItem -LiteralPath $temporaryBase -Directory -Filter 'qicheng-lite-image-check-*'|ForEach-Object{$_.FullName})
+        function Remove-Item { throw 'injected probe directory cleanup failure' }
+        $directoryCleanupError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -ErrorAction Stop|Out-Null}catch{$directoryCleanupError=$_.Exception.Message}
+        finally{Microsoft.PowerShell.Management\Remove-Item -LiteralPath Function:\Remove-Item -Force}
+        $probeLeft=@(Get-ChildItem -LiteralPath $temporaryBase -Directory -Filter 'qicheng-lite-image-check-*'|Where-Object{$probeBefore -notcontains $_.FullName})
+        Assert-True ($directoryCleanupError -match '镜像探针清理失败' -and $directoryCleanupError -match 'probeContainerId=aaaaaaaaaaaa' -and $probeLeft.Count -eq 1 -and (Test-Path -LiteralPath $recordPath)) 'failed probe directory cleanup did not block installation'
+        foreach($left in $probeLeft){
+            $resolvedLeft=[IO.Path]::GetFullPath($left.FullName)
+            Assert-True ([IO.Path]::GetDirectoryName($resolvedLeft).Equals($temporaryBase,[StringComparison]::OrdinalIgnoreCase) -and [IO.Path]::GetFileName($resolvedLeft) -match '^qicheng-lite-image-check-[0-9a-f]{32}$') 'injected probe cleanup path escaped temporary root'
+            Microsoft.PowerShell.Management\Remove-Item -LiteralPath $resolvedLeft -Recurse -Force
+        }
+        $env:QICHENG_LITE_FAKE_DOCKER_MODE='no-image'
+        $missingImageError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -ErrorAction Stop|Out-Null}catch{$missingImageError=$_.Exception.Message}
+        Assert-True ($missingImageError -match '本地缺少' -and (Test-Path -LiteralPath (Join-Path $singleInstall '.qicheng-lite-install.json'))) 'missing local image was accepted'
+        Remove-Item Env:QICHENG_LITE_FAKE_DOCKER_MODE
+        $oldDockerfile=Join-Path $singleInstall 'Dockerfile'
+        $themeDockerfile=[IO.File]::ReadAllText($oldDockerfile)
+        [IO.File]::WriteAllText($oldDockerfile,$themeDockerfile.Replace(' SCREEN_HEIGHT=900 GTK_THEME=Adwaita:dark',' SCREEN_HEIGHT=900'))
+        $oldPackageManifestPath=Join-Path $singleInstall 'package-manifest.json'
+        $oldPackageManifest=Read-Json $oldPackageManifestPath
+        $dockerfileEntry=@($oldPackageManifest.files|Where-Object{$_.path -eq 'Dockerfile'})[0]
+        $dockerfileEntry.sha256=(Get-FileHash -LiteralPath $oldDockerfile -Algorithm SHA256).Hash.ToLowerInvariant()
+        $oldPackageManifest|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $oldPackageManifestPath -Encoding UTF8
+        Add-Content -LiteralPath $oldDockerfile -Value '# changed Dockerfile'
+        $dockerfileEntry.sha256=(Get-FileHash -LiteralPath $oldDockerfile -Algorithm SHA256).Hash.ToLowerInvariant()
+        $oldPackageManifest|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $oldPackageManifestPath -Encoding UTF8
+        $changedDockerfileError=''
+        try{& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -ErrorAction Stop|Out-Null}catch{$changedDockerfileError=$_.Exception.Message}
+        Assert-True ($changedDockerfileError -match 'Dockerfile 后端构建内容已变化') 'changed Dockerfile silently reused the image'
+        [IO.File]::WriteAllText($oldDockerfile,$themeDockerfile.Replace(' SCREEN_HEIGHT=900 GTK_THEME=Adwaita:dark',' SCREEN_HEIGHT=900'))
+        $dockerfileEntry.sha256=(Get-FileHash -LiteralPath $oldDockerfile -Algorithm SHA256).Hash.ToLowerInvariant()
+        $oldPackageManifest|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $oldPackageManifestPath -Encoding UTF8
+        Remove-Item -LiteralPath $dockerLog -Force
+        $offlinePlan=(& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker|Out-String|ConvertFrom-Json)
+        $previewCalls=Get-Content -LiteralPath $dockerLog -Raw
+        Assert-True ($offlinePlan.status -eq 'upgrade-preview' -and $offlinePlan.backendImageAction -eq 'reuse-local-image' -and -not $offlinePlan.imageContentVerified -and -not $offlinePlan.hostChangesMade -and $previewCalls -notmatch '(^|\s)(create|cp|rm)(\s|$)') 'offline preview mutated Docker or claimed image content verification'
+        Remove-Item -LiteralPath $dockerLog -Force
+        $whatIfText=(& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -WhatIf|Out-String)
+        $whatIfCalls=Get-Content -LiteralPath $dockerLog -Raw
+        Assert-True ($whatIfText -match 'imageContentVerified' -and $whatIfText -match 'false' -and $whatIfCalls -notmatch '(^|\s)(create|cp|rm)(\s|$)' -and (Test-Path -LiteralPath $recordPath)) 'Apply -WhatIf created an image probe or changed the install'
+        if($ConfirmNoInteractive){
+            Remove-Item -LiteralPath $dockerLog -Force
+            $confirmOptions=$singleOptions.Clone();$confirmOptions.Remove('Confirm')
+            $confirmText=(& $installer @confirmOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply -Confirm|Out-String)
+            $confirmCalls=Get-Content -LiteralPath $dockerLog -Raw
+            Assert-True ($confirmText -match 'imageContentVerified' -and $confirmText -match 'false' -and $confirmCalls -notmatch '(^|\s)(create|cp|rm)(\s|$)' -and (Test-Path -LiteralPath $recordPath)) 'Confirm=No created an image probe or changed the install'
+        }
+        Remove-Item -LiteralPath $dockerLog -Force
+        function Get-CimInstance { param([string]$ClassName,[string]$ErrorAction) [pscustomobject]@{ExecutablePath=(Join-Path $singleInstall 'dist\AgentChannels.exe');ProcessId=4242;Name='AgentChannels.exe'} }
+        try{$viewerBlocked=(& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -Apply|Out-String|ConvertFrom-Json)}
+        finally{Microsoft.PowerShell.Management\Remove-Item -LiteralPath Function:\Get-CimInstance -Force}
+        $viewerBlockedCalls=Get-Content -LiteralPath $dockerLog -Raw
+        Assert-True ($viewerBlocked.status -eq 'blocked-process-in-use' -and -not $viewerBlocked.imageContentVerified -and $viewerBlockedCalls -notmatch '(^|\s)(create|cp|rm)(\s|$)' -and (Test-Path -LiteralPath $recordPath)) 'viewer-in-use path created an image probe or changed the install'
+        Remove-Item -LiteralPath $dockerLog -Force
+        $offlineUpgrade=(& $installer @singleOptions -ReuseExistingBackendImage -DockerPath $fakeDocker -LaunchAfterInstall -HealthAttempts 1 -Apply|Out-String|ConvertFrom-Json)
+        Assert-True ($offlineUpgrade.status -eq 'installed' -and $offlineUpgrade.startStatus -eq 'started' -and $offlineUpgrade.backendImageAction -eq 'reuse-local-image') 'offline upgrade did not restart with existing image'
+        $offlineCalls=Get-Content -LiteralPath $dockerLog -Raw
+        Assert-True ($offlineCalls -match '--no-build --pull never' -and $offlineCalls -notmatch '--build') 'offline upgrade attempted build or implicit pull'
+        Remove-Item Env:QICHENG_LITE_FAKE_OWNED_INSTALL
+        Remove-Item Env:QICHENG_LITE_FAKE_IMAGE_APP
         $singleStarted=(& (Join-Path $singleInstall 'Start-Qicheng-Lite.ps1') -InstallRoot $singleInstall -NoWindowsChannels -DockerPath $fakeDocker -HealthAttempts 1|Out-String|ConvertFrom-Json)
         Assert-True ($singleStarted.status -eq 'started' -and $singleStarted.channelCount -eq 1 -and @($singleStarted.services).Count -eq 1 -and @($singleStarted.ports).Count -eq 1) 'single-channel start contract failed'
         $singleDiagnosis=(& (Join-Path $singleInstall 'Diagnose-Qicheng-Lite.ps1') -InstallRoot $singleInstall -DockerPath $fakeDocker -StartupRoot $singleOptions.StartupRoot -LegacyStartupRoot $singleOptions.LegacyStartupRoot|Out-String|ConvertFrom-Json)
@@ -516,6 +654,8 @@ throw 'Unexpected fake Docker arguments'
         if([int]$process.ProcessId -ne $PID){Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue}
     }
     Remove-Item Env:QICHENG_LITE_FAKE_DOCKER_LOG -ErrorAction SilentlyContinue
+    Remove-Item Env:QICHENG_LITE_FAKE_IMAGE_APP -ErrorAction SilentlyContinue
+    Remove-Item Env:QICHENG_LITE_FAKE_OWNED_INSTALL -ErrorAction SilentlyContinue
     Remove-Item Env:QICHENG_LITE_FAKE_DOCKER_MODE -ErrorAction SilentlyContinue
     Remove-Item Env:QICHENG_LITE_FAKE_DESKTOP_MARKER -ErrorAction SilentlyContinue
     Remove-Item Env:QICHENG_LITE_FAKE_DESKTOP_LOG -ErrorAction SilentlyContinue

@@ -27,6 +27,7 @@ if "%STATUS_EXIT%"=="2" (
   echo.
   echo Qicheng Lite was installed, but its first backend build or health check failed.
   echo Your installation and data were kept. Start Docker, then use the Qicheng Lite shortcut to retry.
+  echo For a verified existing install with a local image, use -ReuseExistingBackendImage to upgrade offline.
   if not defined QICHENG_LITE_NO_PAUSE pause
   exit /b 2
 )

@@ -1,6 +1,10 @@
 # 验证范围与限制
 
-## 2026-09-28 Lite alpha.14 外观源码候选（未公开发行）
+## 2026-09-28 Lite alpha.14 外观与离线升级源码候选（未公开发行）
+
+新增显式 `-ReuseExistingBackendImage` 离线升级入口：只对已有 Lite 安装开放，预览阶段核对本机 Docker Linux engine、旧安装后端文件、镜像、Compose 容器和持久卷归属；执行前再核对镜像内后端文件。使用本地镜像时不构建或拉取镜像，数据卷继续保留。默认安装流程仍构建新版镜像。此路径不适用首次安装，也不证明新版 Dockerfile 镜像已构建；正式 01 安装和真实容器升级尚未验收，没有对应公开 Release。
+
+公开候选树的 Lite 源码清单已按工作树实际字节核对 45/45；Windows PowerShell 5.1 `RecoveryOnly` 隔离产品测试通过，结果确认未触碰真实 Docker、Docker Desktop 或登录启动项。该测试使用模拟环境，不替代真实升级验收。
 
 01 当前 Codex 会话已通过原生 MCP 实际只读调用 Lite 两频道的状态与截图，以及 Windows A/B 租约频道状态，目标分别是不同私有显示/客体；Lite 仍 paused、零输入，这不证明 AI 写入闭环。现行 Lite alpha.13、Windows alpha.20、Task Lease alpha.23 的本机只读诊断分别为 15/15、16/16、ready；DELL 尚未首装。
 

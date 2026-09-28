@@ -11,6 +11,7 @@ param(
     [string]$LegacyStartupRoot,
     [switch]$DisableLegacyWindowsChannelsStartup,
     [switch]$LaunchAfterInstall,
+    [switch]$ReuseExistingBackendImage,
     [string]$DockerPath='docker',
     [ValidateRange(1,45)][int]$HealthAttempts=45,
     [int]$Port1=18761,
@@ -62,6 +63,110 @@ $actual=@(Get-ChildItem -LiteralPath $packageRoot -File -Recurse|ForEach-Object{
 foreach($relative in $actual){if(-not $expected.Contains($relative)){throw "安装包白名单外文件：$relative"}}
 if($actual.Count -ne $expected.Count){throw '安装包文件数量与白名单不一致。'}
 
+# An older install record has no image provenance. Reuse is therefore an explicit
+# upgrade choice, gated by the previous package's build inputs and a local image.
+$imageContentVerified=$false
+if($ReuseExistingBackendImage){
+    if(-not $existingRecord){throw '离线复用只适用于已有 Lite 安装；首次安装必须构建后端。'}
+    if(-not[string]::IsNullOrWhiteSpace($env:DOCKER_HOST) -and $env:DOCKER_HOST -notmatch '(?i)^npipe:////\./pipe/(docker_engine|dockerDesktopLinuxEngine)$'){throw '离线复用拒绝远端 Docker endpoint；未进行安装。'}
+    $endpoint=@(& $DockerPath context inspect --format '{{.Endpoints.docker.Host}}' 2>$null)
+    if($LASTEXITCODE -ne 0 -or $endpoint.Count -ne 1 -or [string]$endpoint[0] -notmatch '(?i)^npipe:////\./pipe/(docker_engine|dockerDesktopLinuxEngine)$'){throw '无法确认本机 Docker endpoint；离线复用未进行安装。'}
+    $osType=@(& $DockerPath info --format '{{.OSType}}' 2>$null)
+    if($LASTEXITCODE -ne 0 -or $osType.Count -ne 1 -or [string]$osType[0] -cne 'linux'){throw '本机 Docker Linux engine 不可用；离线复用未进行安装。'}
+    $oldManifestPath=Join-Path $installRoot 'package-manifest.json'
+    if(-not(Test-Path -LiteralPath $oldManifestPath -PathType Leaf)){throw '旧安装缺少 package-manifest.json；无法核验镜像来源。'}
+    $oldManifest=Get-Content -LiteralPath $oldManifestPath -Raw -Encoding UTF8|ConvertFrom-Json -ErrorAction Stop
+    if($oldManifest.schemaVersion -ne 1 -or $oldManifest.product -ne 'Qicheng Lite'){throw '旧安装 manifest 无效；拒绝复用镜像。'}
+    $buildInputs=@('.dockerignore','Dockerfile')+@(Get-ChildItem -LiteralPath (Join-Path $packageRoot 'backend') -File -Recurse|ForEach-Object{$_.FullName.Substring($packageRoot.Length).TrimStart('\')})
+    foreach($relative in $buildInputs){
+        $oldPath=Join-Path $installRoot $relative
+        $newPath=Join-Path $packageRoot $relative
+        if(-not(Test-Path -LiteralPath $oldPath -PathType Leaf)){throw "旧安装缺少后端构建文件 $relative；拒绝复用镜像。"}
+        $oldEntry=@($oldManifest.files|Where-Object{[string]$_.path -ieq $relative.Replace('\','/')})
+        if($oldEntry.Count -ne 1 -or (Get-QichengLiteSha256 -Path $oldPath) -ine [string]$oldEntry[0].sha256){throw "旧安装后端文件未通过原 manifest 校验：$relative。"}
+        if($relative -eq 'Dockerfile'){
+            $oldText=[IO.File]::ReadAllText($oldPath).Replace("`r`n","`n")
+            $newText=[IO.File]::ReadAllText($newPath).Replace("`r`n","`n")
+            # The alpha.14 browser chrome change is supplied by Compose as well.
+            $themeLine='ENV DISPLAY=:99 SCREEN_WIDTH=1600 SCREEN_HEIGHT=900 GTK_THEME=Adwaita:dark'
+            $baseLine='ENV DISPLAY=:99 SCREEN_WIDTH=1600 SCREEN_HEIGHT=900'
+            if($newText -ne $oldText -and -not($newText.Replace($themeLine,$baseLine) -ceq $oldText)){
+                throw 'Dockerfile 后端构建内容已变化；拒绝复用旧镜像。'
+            }
+        }elseif((Get-QichengLiteSha256 -Path $oldPath) -ine (Get-QichengLiteSha256 -Path $newPath)){
+            throw "后端构建文件已变化：$relative；拒绝复用旧镜像。"
+        }
+    }
+    $oldBackend=@(Get-ChildItem -LiteralPath (Join-Path $installRoot 'backend') -File -Recurse|ForEach-Object{$_.FullName.Substring($installRoot.Length).TrimStart('\')})
+    if(@($oldBackend|Where-Object{$buildInputs -inotcontains $_}).Count){throw '旧安装含有新包未声明的后端文件；拒绝复用旧镜像。'}
+    $imageId=@(& $DockerPath image inspect --format '{{.Id}}' 'qicheng-agent-channels:0.1-local' 2>$null)
+    if($LASTEXITCODE -ne 0 -or $imageId.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$imageId[0])){
+        throw '本地缺少 qicheng-agent-channels:0.1-local 镜像；离线复用未进行安装。'
+    }
+    $oldCompose=Join-Path $installRoot 'compose.yaml'
+    $oldComposeArgs=@('compose','--project-name','qicheng-agent-channels','--project-directory',$installRoot,'-f',$oldCompose)
+    if(Test-Path -LiteralPath (Join-Path $installRoot '.local\broker.token') -PathType Leaf){$oldComposeArgs+=@('-f',(Join-Path $installRoot 'compose.broker.yaml'))}
+    $oldChannelCount=Get-QichengLiteChannelCount -Record $existingRecord
+    foreach($channel in 1..$oldChannelCount){
+        $containerIds=@(& $DockerPath @oldComposeArgs --profile second ps -a -q "channel$channel" 2>$null|Where-Object{$_})
+        if($LASTEXITCODE -ne 0 -or $containerIds.Count -ne 1){throw "无法核验旧频道 $channel 容器；离线复用未进行安装。"}
+        $containerId=[string]$containerIds[0]
+        $containerImage=@(& $DockerPath inspect --format '{{.Image}}' $containerId 2>$null)
+        $project=@(& $DockerPath inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' $containerId 2>$null)
+        $service=@(& $DockerPath inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' $containerId 2>$null)
+        $workingDir=@(& $DockerPath inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' $containerId 2>$null)
+        $mountsText=@(& $DockerPath inspect --format '{{json .Mounts}}' $containerId 2>$null)
+        if($LASTEXITCODE -ne 0 -or $containerImage.Count -ne 1 -or [string]$containerImage[0] -cne [string]$imageId[0] -or $project.Count -ne 1 -or [string]$project[0] -cne 'qicheng-agent-channels' -or $service.Count -ne 1 -or [string]$service[0] -cne "channel$channel" -or $workingDir.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$workingDir[0]) -or -not([IO.Path]::GetFullPath([string]$workingDir[0]).Equals($installRoot,[StringComparison]::OrdinalIgnoreCase)) -or $mountsText.Count -ne 1){throw "旧频道 $channel 的镜像或 Compose 归属不匹配；拒绝复用。"}
+        $mounts=@([string]$mountsText[0]|ConvertFrom-Json -ErrorAction Stop)
+        $homeMount=@($mounts|Where-Object{$_.Type -eq 'volume' -and $_.Name -ceq "qicheng-lite-home-$channel" -and $_.Destination -ceq '/home/channel'})
+        if($homeMount.Count -ne 1){throw "旧频道 $channel 的持久卷归属不匹配；拒绝复用。"}
+    }
+    function Assert-QichengLiteImageContent {
+        $probeContainer=$null
+        $probeBase=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+        $probeRoot=[IO.Path]::GetFullPath((Join-Path $probeBase ('qicheng-lite-image-check-'+[guid]::NewGuid().ToString('N'))))
+        $probeError=$null
+        $cleanupErrors=New-Object 'System.Collections.Generic.List[string]'
+        try{
+            New-Item -ItemType Directory -Path $probeRoot -ErrorAction Stop|Out-Null
+            $probeIds=@(& $DockerPath create --network none --read-only --entrypoint /usr/bin/true ([string]$imageId[0]) 2>$null)
+            if($LASTEXITCODE -ne 0 -or $probeIds.Count -ne 1 -or [string]$probeIds[0] -notmatch '^[0-9a-f]{12,64}$'){throw '无法创建只读镜像校验容器；离线复用未进行安装。'}
+            $probeContainer=[string]$probeIds[0]
+            & $DockerPath cp "${probeContainer}:/app/." $probeRoot|Out-Null
+            if($LASTEXITCODE -ne 0){throw '无法读取镜像内后端文件；离线复用未进行安装。'}
+            $imageFiles=@(Get-ChildItem -LiteralPath $probeRoot -File -Recurse)
+            if(@($imageFiles|Where-Object{($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0}).Count){throw '镜像内后端包含符号链接；拒绝复用。'}
+            $imageBackend=@($imageFiles|ForEach-Object{$_.FullName.Substring($probeRoot.Length).TrimStart('\').Replace('\','/')})
+            $expectedBackend=@($buildInputs|Where-Object{$_ -like 'backend\*'}|ForEach-Object{$_.Substring(8).Replace('\','/')})
+            if($imageBackend.Count -ne $expectedBackend.Count -or @($imageBackend|Where-Object{$expectedBackend -inotcontains $_}).Count){throw '镜像内后端文件清单不匹配；拒绝复用。'}
+            foreach($relative in $expectedBackend){
+                $imagePath=Join-Path $probeRoot $relative
+                $oldPath=Join-Path (Join-Path $installRoot 'backend') $relative
+                if(-not(Test-Path -LiteralPath $imagePath -PathType Leaf) -or (Get-QichengLiteSha256 -Path $imagePath) -ine (Get-QichengLiteSha256 -Path $oldPath)){throw "镜像内后端文件不匹配：$relative；拒绝复用。"}
+            }
+        }catch{$probeError=$_}
+        finally{
+            if($probeContainer){
+                try{
+                    & $DockerPath rm $probeContainer 2>$null|Out-Null
+                    if($LASTEXITCODE -ne 0){throw 'Docker 探针容器删除失败。'}
+                }catch{[void]$cleanupErrors.Add($_.Exception.Message)}
+            }
+            if(Test-Path -LiteralPath $probeRoot){
+                try{
+                    $resolvedProbe=[IO.Path]::GetFullPath($probeRoot)
+                    if(-not([IO.Path]::GetDirectoryName($resolvedProbe).Equals($probeBase,[StringComparison]::OrdinalIgnoreCase)) -or [IO.Path]::GetFileName($resolvedProbe) -notmatch '^qicheng-lite-image-check-[0-9a-f]{32}$' -or ((Get-Item -LiteralPath $resolvedProbe -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw '探针临时目录超出本次创建的安全路径；拒绝递归清理。'}
+                    Remove-Item -LiteralPath $resolvedProbe -Recurse -Force -ErrorAction Stop
+                    if(Test-Path -LiteralPath $resolvedProbe){throw '探针临时目录删除后仍存在。'}
+                }catch{[void]$cleanupErrors.Add($_.Exception.Message)}
+            }
+        }
+        if($cleanupErrors.Count){throw ('镜像探针清理失败；旧安装保持不变；probeContainerId='+$(if($probeContainer){$probeContainer}else{'unknown'})+'：'+($cleanupErrors -join '; '))}
+        if($probeError){throw $probeError}
+        return $true
+    }
+}
+
 if((Test-Path -LiteralPath $installRoot) -and -not $existingRecord){throw '目标目录已存在但不是启程轻量版安装，拒绝覆盖。'}
 $tokenValue=$null
 if(-not[string]::IsNullOrWhiteSpace($ImportTokenPath)){
@@ -92,14 +197,15 @@ if($brokerTokenValue -and $existingRecord -and (Test-Path -LiteralPath (Join-Pat
 $legacyLink=Join-Path $legacyStartupRoot '启程 Windows 频道.lnk'
 $legacyBackup=Join-Path $dataRoot 'compatibility-backup\启程 Windows 频道.lnk'
 $selectedPorts=@(18761);if($ChannelCount -eq 2){$selectedPorts+=18762}
-$plan=[ordered]@{schemaVersion=1;status='not-installed';version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;files=$expected.Count;tokenAction=if($ImportTokenPath){'import'}elseif($tokenValue){'preserve'}else{'generate'};composeProject='qicheng-agent-channels';channelCount=$ChannelCount;ports=$selectedPorts;defaultViewerMode='background';disableLegacyWindowsChannelsStartup=[bool]$DisableLegacyWindowsChannelsStartup;legacyShortcutPresent=(Test-Path -LiteralPath $legacyLink -PathType Leaf);volumesRemoved=$false;applyRequested=[bool]$Apply;hostChangesMade=$false}
+$plan=[ordered]@{schemaVersion=1;status=if($existingRecord){'upgrade-preview'}else{'not-installed'};version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;files=$expected.Count;tokenAction=if($ImportTokenPath){'import'}elseif($tokenValue){'preserve'}else{'generate'};composeProject='qicheng-agent-channels';channelCount=$ChannelCount;ports=$selectedPorts;defaultViewerMode='background';backendImageAction=if($ReuseExistingBackendImage){'reuse-local-image'}else{'build'};imageContentVerified=$imageContentVerified;disableLegacyWindowsChannelsStartup=[bool]$DisableLegacyWindowsChannelsStartup;legacyShortcutPresent=(Test-Path -LiteralPath $legacyLink -PathType Leaf);volumesRemoved=$false;applyRequested=[bool]$Apply;hostChangesMade=$false}
 if(-not $Apply){$plan|ConvertTo-Json -Depth 5;return}
 
 $viewerPath=Join-Path $installRoot 'dist\AgentChannels.exe'
 $running=@()
 try{$running=@(Get-CimInstance Win32_Process -ErrorAction Stop|Where-Object{[string]$_.ExecutablePath -and ([string]$_.ExecutablePath).Equals($viewerPath,[StringComparison]::OrdinalIgnoreCase)}|ForEach-Object{[ordered]@{processId=[int]$_.ProcessId;name=[string]$_.Name;role='viewer'}})}catch{}
-if($running.Count){[ordered]@{schemaVersion=1;status='blocked-process-in-use';message='启程轻量工作台仍在运行。请从托盘退出后重试；当前版本保持不变。';processes=$running;existingVersionPreserved=$true;hostChangesMade=$false}|ConvertTo-Json -Depth 5;return}
+if($running.Count){[ordered]@{schemaVersion=1;status='blocked-process-in-use';message='启程轻量工作台仍在运行。请从托盘退出后重试；当前版本保持不变。';processes=$running;existingVersionPreserved=$true;hostChangesMade=$false;imageContentVerified=$false}|ConvertTo-Json -Depth 5;return}
 if(-not $PSCmdlet.ShouldProcess($installRoot,'安装或升级启程轻量版')){$plan|ConvertTo-Json -Depth 5;return}
+if($ReuseExistingBackendImage){$imageContentVerified=Assert-QichengLiteImageContent}
 
 $parent=Split-Path -Parent $installRoot
 New-Item -ItemType Directory -Path $parent -Force|Out-Null
@@ -228,6 +334,6 @@ try{
 
 $startStatus=$null
 if($LaunchAfterInstall){
-    try{$startStatus=(& (Join-Path $installRoot 'Start-Qicheng-Lite.ps1') -Background -BuildBackend -DockerPath $DockerPath -HealthAttempts $HealthAttempts|Out-String|ConvertFrom-Json).status}catch{$startStatus='start-failed';$startError=$_.Exception.Message}
+    try{$startStatus=(& (Join-Path $installRoot 'Start-Qicheng-Lite.ps1') -Background -BuildBackend:(!$ReuseExistingBackendImage) -DockerPath $DockerPath -HealthAttempts $HealthAttempts|Out-String|ConvertFrom-Json).status}catch{$startStatus='start-failed';$startError=$_.Exception.Message}
 }
-[ordered]@{schemaVersion=1;status=if($startStatus -eq 'start-failed'){'installed-start-failed'}else{'installed'};version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;tokenImported=[bool]$ImportTokenPath;tokenDisplayed=$false;composeProject='qicheng-agent-channels';channelCount=$ChannelCount;ports=$selectedPorts;viewerMode='background';legacyStartupDisabled=$legacyDisabled;legacyBackup=if($legacyDisabled){$legacyBackup}else{$null};startStatus=$startStatus;startError=if($startStatus -eq 'start-failed'){$startError}else{$null};volumesRemoved=$false;hostChangesMade=$true}|ConvertTo-Json -Depth 5
+[ordered]@{schemaVersion=1;status=if($startStatus -eq 'start-failed'){'installed-start-failed'}else{'installed'};version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;tokenImported=[bool]$ImportTokenPath;tokenDisplayed=$false;composeProject='qicheng-agent-channels';channelCount=$ChannelCount;ports=$selectedPorts;viewerMode='background';backendImageAction=if($ReuseExistingBackendImage){'reuse-local-image'}else{'build'};imageContentVerified=$imageContentVerified;legacyStartupDisabled=$legacyDisabled;legacyBackup=if($legacyDisabled){$legacyBackup}else{$null};startStatus=$startStatus;startError=if($startStatus -eq 'start-failed'){$startError}else{$null};volumesRemoved=$false;hostChangesMade=$true}|ConvertTo-Json -Depth 5

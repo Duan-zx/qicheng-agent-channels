@@ -29,6 +29,15 @@
 
 第一条只显示计划；第二条才执行。token 必须是 64 位小写十六进制，复制后只允许当前用户和 SYSTEM 访问，值不会进入输出或 manifest。
 
+已有安装升级时若 Docker Hub 暂不可达，且你已保存频道中的表单与下载、从托盘选择“退出并暂停输入”，可在新版解压目录先预览显式离线复用，再执行：
+
+```powershell
+.\Install-Qicheng-Lite.ps1 -ReuseExistingBackendImage
+.\Install-Qicheng-Lite.ps1 -ReuseExistingBackendImage -LaunchAfterInstall -Apply
+```
+
+离线复用会在替换旧安装前核对本机 Docker Linux engine、旧安装与运行镜像的后端文件、Compose 容器及数据卷归属；若后端变化、镜像不符或首次安装则拒绝。预览只读，实际执行会暂时重建频道容器并沿用原资料卷。默认双击仍构建新版镜像；离线复用只适用于已核实兼容的升级，不表示 Dockerfile 的新版镜像已经构建。
+
 默认从托盘后台启动查看器（`--background`）。桌面、普通开始菜单和登录启动项都使用隐藏 PowerShell；“管理启程轻量工作台”用于打开可见管理界面。登录启动项会在确认本机 Docker 管道后、Linux engine 尚未就绪时启动本机已安装的 Docker Desktop，从首次探测起最多等待 120 秒；若仍不可用，则明确报错且不启动后端和查看器。Docker CLI 缺失或当前 endpoint 无法确认时不会启动 Desktop；远端 Docker context 和 Windows engine 也会被拒绝。它不会修改 Docker Desktop 自启动设置、接受许可或停止其他容器。桌面和开始菜单的手动入口仍要求 engine 已经可用，以便快速发现错误。
 
 为避免两套产品同时注册全局 Alt 快捷键，双击安装会停用**精确名为**“启程 Windows 频道.lnk”的旧当前用户 Startup 快捷方式，并把原文件备份到轻量版 DataRoot。不会改其他启动项，也不会杀进程。开始菜单“恢复旧 Windows 频道自启动”可恢复备份；目标已存在时拒绝覆盖。

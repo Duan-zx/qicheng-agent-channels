@@ -161,8 +161,8 @@
     },
     {
       "path": "tools/agent-channels/product/QUICKSTART.zh-CN.md",
-      "bytes": 8222,
-      "sha256": "e24b8081eae47e49074ea5c1566350ce85f451e616a9cb92b532b667355108cc"
+      "bytes": 9007,
+      "sha256": "851ddd723cc2377d5fc0855883e2421f1875b414fe0a756bd8603c5846b4c10d"
     },
     {
       "path": "tools/agent-channels/product/Source-Allowlist.psd1",
@@ -186,13 +186,13 @@
     },
     {
       "path": "tools/agent-channels/product/runtime/Install-Qicheng-Lite.ps1",
-      "bytes": 18884,
-      "sha256": "677110408e1b4fb6e731d90360e9c2ffe73f6a89d76990b45485f21d33ff887f"
+      "bytes": 29216,
+      "sha256": "b5967338162979997ee5fdbc04bfdfdcc1f3e7324f50cf5a54a08e8b0cd79c3d"
     },
     {
       "path": "tools/agent-channels/product/runtime/Start-Qicheng-Lite.ps1",
-      "bytes": 13717,
-      "sha256": "6cba9da29c56cc9ebea9097973307756a0f0ce66d2c279b07d076847936f1e39"
+      "bytes": 13737,
+      "sha256": "83200fffcad20273d545cad5e75cd51075cd7b7e6dd102f540812a0f3b579051"
     },
     {
       "path": "tools/agent-channels/product/runtime/Diagnose-Qicheng-Lite.ps1",
@@ -211,8 +211,8 @@
     },
     {
       "path": "tools/agent-channels/product/runtime/Install-Qicheng-Lite.cmd",
-      "bytes": 1965,
-      "sha256": "b2e4a86311ad9690a6b7ce1206e51a3967c30e0311c2888d946ccd95d1b48d24"
+      "bytes": 2075,
+      "sha256": "0773ec88b087e378915c13cfc535dded415243ccca42c64e6d632760a6a246ab"
     },
     {
       "path": "tools/agent-channels/product/runtime/linux/install.sh",
@@ -231,8 +231,8 @@
     },
     {
       "path": "tools/agent-channels/product/tests/Test-ProductPackage.ps1",
-      "bytes": 49281,
-      "sha256": "fe48929cbee59444c32bde2c69796b3e50a3beb5a8170e6e327fb8559daf2157"
+      "bytes": 63453,
+      "sha256": "24543ae7de41b976b8248cac9579b751c9181a9c4bc6ad8d8de5fdcd5e8b08e6"
     },
     {
       "path": "tools/agent-channels/product/tests/Test-LegacyStartupDiagnosis.ps1",

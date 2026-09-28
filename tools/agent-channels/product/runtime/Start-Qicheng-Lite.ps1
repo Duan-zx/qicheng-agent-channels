@@ -118,7 +118,7 @@ if($channelCount -eq 1){
     }
 }
 $dockerArguments=@($dockerComposeArguments)+@('--profile','second','up','-d')
-if($BuildBackend){$dockerArguments+='--build'}else{$dockerArguments+='--no-build'}
+if($BuildBackend){$dockerArguments+='--build'}else{$dockerArguments+=@('--no-build','--pull','never')}
 $dockerArguments+=$services
 & $DockerPath @dockerArguments
 if($LASTEXITCODE -ne 0){
