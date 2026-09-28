@@ -1,5 +1,11 @@
 # 验证范围与限制
 
+## 2026-09-28 Windows alpha.19 本地源码候选（未公开发行）
+
+Windows alpha.18 私有试用 ZIP 缺少三凭据客体的离线安装脚本，包内旧说明还引导用户使用仅接受单令牌 payload 的 Direct 安装器；它不能作为双原生频道 Broker 门禁的独立首装包。alpha.19 本地候选已把 `Install-GuestPayloadOffline.ps1` 及其模拟测试纳入产品包和公开源码白名单，说明区分客体 channel/broker/human 三枚凭据与 Task Lease HTTP Bearer，并要求先核对真实 VM 身份。公开清单 68/68 项的大小与 SHA-256 已在候选树核对；公开源码独立构包 91 文件、PowerShell 5.1 产品回归、Windows Python 109 项和离线预检模拟 14 项通过。
+
+01 从私有提交 `2ee8b3b` 构建的 alpha.19 ZIP 在独立目录解压、逐项核 91 个文件哈希，并完成不导入既有配置、不启动 Viewer 的用户级首次安装；首次设置 Inspect 如实返回 `setup-required`，未创建 VM。离线安装模拟只覆盖计划、拒绝路径和启动参数检查，**未运行 `-Apply`、未挂载真实 VHDX、未确认真实客体用户资料或代理启动**。01 正在运行的 Windows 客体与查看器未用此包热升级，DELL 首装和真实 Broker 门禁仍待验证。该 ZIP 仅在私有产品交付仓，不是公开下载资产。旧截图与主题素材的发布范围问题仍未解决。
+
 ## 2026-09-28 Lite alpha.11 / Task Lease alpha.20 本地候选（未公开发行）
 
 01 本机已安装 Lite `0.2.0-alpha.11` 与 Task Lease `0.1.0-alpha.20`。Lite 的两套 Linux 浏览器容器在升级后保持原有持久卷，安装诊断 14/14 项通过；Task Lease 由登录任务运行，安装诊断显示服务进程属于新版安装。Broker 识别四个固定频道：两套 Windows 客体和两套 Lite 浏览器频道。检查时四个频道均无活动租约或待确认输入，原有 n8n 健康检查返回 200，两台 Windows 客体运行中。这些是 01 的本机状态，不等于 DELL 首次安装或公开 Release。

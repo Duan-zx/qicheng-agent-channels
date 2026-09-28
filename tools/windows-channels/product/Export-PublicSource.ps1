@@ -20,6 +20,7 @@ $allowlist = @(
     'New-ChannelVMs.ps1',
     'Register-HostService.ps1',
     'Build-GuestPayload.ps1',
+    'Install-GuestPayloadOffline.ps1',
     'Stage-GuestPayloadDirect.ps1',
     'Switch-GuestPayloadDirect.ps1',
     'Install-GuestPayloadDirect.ps1',
@@ -54,6 +55,7 @@ $allowlist = @(
     'tests/Test-ProvisionSafety.ps1',
     'tests/PayloadSafety.Tests.ps1',
     'tests/ThreeCredentialPayload.Tests.ps1',
+    'tests/InstallGuestPayloadOffline.Tests.ps1',
     'tests/InstallGuestPayloadDirect.Tests.ps1',
     'tests/AutologonDirect.Tests.ps1',
     'tests/HostServiceSafety.Tests.ps1',
@@ -95,6 +97,6 @@ foreach ($copy in $copies) {
     $item = Get-Item -LiteralPath $destination
     $manifestFiles += [ordered]@{ path=$copy.Destination; kind=$copy.Kind; bytes=$item.Length; sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
-$manifest = [ordered]@{ schemaVersion=1; policy='Explicit public source allowlist preserving tools/windows-channels relative structure; no private Git identity.'; excluded=@('Install-GuestPayloadOffline.ps1','Install-GuestPayload.ps1','.local','dist','PM memory','tokens','VM disks','ISO files','private Git metadata'); files=$manifestFiles }
+$manifest = [ordered]@{ schemaVersion=1; policy='Explicit public source allowlist preserving tools/windows-channels relative structure; no private Git identity.'; excluded=@('Install-GuestPayload.ps1','.local','dist','PM memory','tokens','VM disks','ISO files','private Git metadata'); files=$manifestFiles }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $output 'PUBLIC-SOURCE-MANIFEST.json') -Encoding UTF8
 [ordered]@{ schemaVersion=1; status='exported'; outputDirectory=$output; fileCount=$manifestFiles.Count; moduleRoot=(Join-Path $output $module); manifest=(Join-Path $output 'PUBLIC-SOURCE-MANIFEST.json') } | ConvertTo-Json -Depth 4

@@ -29,7 +29,7 @@ try {
     $manifest = Get-Content -LiteralPath (Join-Path $packageRoot 'package-manifest.json') -Raw | ConvertFrom-Json
     $themeSourceRoot = Join-Path (Split-Path -Parent $productRoot) 'theme'
     $themeSourceCount = @(@('ai-space.png','ai-space-v2.png','Set-WorkspaceTheme.ps1','README.md') | Where-Object { Test-Path -LiteralPath (Join-Path $themeSourceRoot $_) -PathType Leaf }).Count
-    $expectedPackageFiles = 81 + (2 * $themeSourceCount)
+    $expectedPackageFiles = 83 + (2 * $themeSourceCount)
     Assert-True ($manifest.files.Count -eq $expectedPackageFiles) 'Unexpected package allowlist count.'
     $paths = @($manifest.files.path)
     Assert-True ($paths -contains 'LICENSE' -and $paths -contains 'source/LICENSE') 'Apache LICENSE is missing from the install or source package.'
@@ -49,6 +49,7 @@ try {
         Assert-True ($paths -contains ('source/tests/' + $testName)) "Lease or WeChat CLI source test is not packaged: $testName"
     }
     Assert-True ($paths -contains 'source/Stage-GuestPayloadDirect.ps1' -and $paths -contains 'source/Switch-GuestPayloadDirect.ps1' -and $paths -contains 'source/tests/ThreeCredentialPayload.Tests.ps1') 'Three-credential stage source or tests are missing.'
+    Assert-True ($paths -contains 'source/Install-GuestPayloadOffline.ps1' -and $paths -contains 'source/tests/InstallGuestPayloadOffline.Tests.ps1') 'Three-credential offline installer or its simulated test is missing.'
     Assert-True ($paths -contains 'source/tests/HostServiceSafety.Tests.ps1') 'Host service safety tests are not packaged.'
     Assert-True ($paths -contains 'source/product/Build-Package.ps1') 'Product package builder is not included in source distribution.'
     Assert-True ($paths -contains 'source/product/tests/Test-ProductPackage.ps1') 'Product package tests are not included in source distribution.'
@@ -59,12 +60,15 @@ try {
         }
     }
     Assert-True (-not ($paths -match '(?i)token|\.local|\.vhdx|\.iso|project-memory|\.git')) 'Sensitive or machine-local path entered the package.'
-    Assert-True (-not ($paths -match '(?i)Install-GuestPayloadOffline|evidence/|docs/pm/')) 'Unreviewed candidate or project memory entered the package.'
+    Assert-True (-not ($paths -match '(?i)evidence/|docs/pm/')) 'Unreviewed evidence or project memory entered the package.'
     foreach ($entry in $manifest.files) {
         $file = Join-Path $packageRoot ([string]$entry.path)
         Assert-True (Test-Path -LiteralPath $file -PathType Leaf) "Manifest file missing: $($entry.path)"
         Assert-True ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ieq [string]$entry.sha256) "Hash mismatch: $($entry.path)"
     }
+    $offlineTestJson = & (Join-Path $packageRoot 'source\tests\InstallGuestPayloadOffline.Tests.ps1') | Out-String
+    $offlineTest = $offlineTestJson | ConvertFrom-Json
+    Assert-True ($offlineTest.passed -eq 14 -and $offlineTest.failed -eq 0 -and $offlineTest.vmMounts -eq 0 -and $offlineTest.agentStarts -eq 0) 'Packaged offline installer failed the simulated three-credential plan and rejection tests.'
     $installRoot = Join-Path $temporaryRoot 'install'
     $dataRoot = Join-Path $temporaryRoot 'data'
     $startMenu = Join-Path $temporaryRoot 'start-menu'
@@ -495,7 +499,7 @@ class FakeHotkeyViewer {
         New-Item -ItemType Directory -Path $publicRoot | Out-Null
         $exportJson = & (Join-Path $productRoot 'Export-PublicSource.ps1') -OutputDirectory $publicRoot | Out-String
         $export = $exportJson | ConvertFrom-Json
-        $expectedPublicFiles = 62 + $themeSourceCount
+        $expectedPublicFiles = 64 + $themeSourceCount
         Assert-True ($export.status -eq 'exported' -and $export.fileCount -eq $expectedPublicFiles) 'Public source export count or status is incorrect.'
         $publicModule = Join-Path $publicRoot 'tools\windows-channels'
         Assert-True (Test-Path -LiteralPath (Join-Path $publicRoot 'LICENSE') -PathType Leaf) 'Public repository LICENSE is missing.'
@@ -503,12 +507,11 @@ class FakeHotkeyViewer {
         Assert-True (Test-Path -LiteralPath (Join-Path $publicModule 'product\Build-Package.ps1') -PathType Leaf) 'Exported package builder is missing.'
         Assert-True (Test-Path -LiteralPath (Join-Path $publicModule 'product\tests\Test-ProductPackage.ps1') -PathType Leaf) 'Exported product tests are missing.'
         Assert-True (Test-Path -LiteralPath (Join-Path $publicModule 'tests\HostServiceSafety.Tests.ps1') -PathType Leaf) 'Exported HostService safety tests are missing.'
-        foreach ($relative in @('host\lease_client.py','host\broker_client.py','guest\wechat_cli.py','Stage-GuestPayloadDirect.ps1','Switch-GuestPayloadDirect.ps1','tests\test_guest_lease.py','tests\test_host_lease.py','tests\test_broker_client.py','tests\test_wechat_cli.py','tests\ThreeCredentialPayload.Tests.ps1')) {
+        foreach ($relative in @('host\lease_client.py','host\broker_client.py','guest\wechat_cli.py','Install-GuestPayloadOffline.ps1','Stage-GuestPayloadDirect.ps1','Switch-GuestPayloadDirect.ps1','tests\test_guest_lease.py','tests\test_host_lease.py','tests\test_broker_client.py','tests\test_wechat_cli.py','tests\ThreeCredentialPayload.Tests.ps1','tests\InstallGuestPayloadOffline.Tests.ps1')) {
             Assert-True (Test-Path -LiteralPath (Join-Path $publicModule $relative) -PathType Leaf) "Exported source is missing: $relative"
         }
         Assert-True ((Get-FileHash -LiteralPath (Join-Path $publicRoot 'LICENSE') -Algorithm SHA256).Hash -eq $licenseHash) 'Public repository LICENSE differs from the module Apache LICENSE.'
         Assert-True ((Get-FileHash -LiteralPath (Join-Path $publicModule 'LICENSE') -Algorithm SHA256).Hash -eq $licenseHash) 'Public module LICENSE differs from the reviewed Apache LICENSE.'
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicModule 'Install-GuestPayloadOffline.ps1'))) 'Offline candidate entered public source export.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicModule 'evidence'))) 'Untracked evidence entered public source export.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicModule 'docs\pm'))) 'Project memory entered public source export.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicModule '.local'))) 'Private .local data entered public source export.'
@@ -529,7 +532,7 @@ class FakeHotkeyViewer {
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $startup '启程 Windows 频道.lnk'))) 'Applied uninstall left the product startup shortcut.'
     Assert-True (Test-Path -LiteralPath $unrelatedStartupLink -PathType Leaf) 'Applied uninstall removed an unrelated startup shortcut.'
     Assert-True (Test-Path -LiteralPath $dataRoot -PathType Container) 'Applied uninstall removed user data without RemoveUserData.'
-    [ordered]@{ status='passed'; packageFiles=$manifest.files.Count; publicSourceRoundTripValidated=(-not $SkipPublicExportRoundTrip); archive=$build.archive; planValidated=$true; windowsPowerShellInstallerPreflight=$true; windowsPowerShell51ImportValidated=$true; windowsPowerShell51SetupValidated=$true; powerShell7ImportValidated=$true; firstRunSetupValidated=$true; invalidConfigurationRepairValidated=$true; existingConfigurationReuseValidated=$true; workspaceCountOptionsValidated='1..8 without Lite; 1..6 with Lite'; liteCoexistenceLimitValidated=$true; workspaceResourceEstimateValidated=$true; vmCreatedStateRemainsPendingValidated=$true; failedUpgradeRestoreValidated=$true; upgradeProcessBlockValidated=$true; temporaryInstallValidated=$true; configImportValidated=$true; viewerDerivedRoot=$derivedRoot; viewerSelfTestValidated=$true; powerShell7DiagnosisValidated=$true; shortcutsValidated=$true; defaultLaunchHiddenAndManagementShowValidated=$true; autoStartEnabledValidated=$true; autoStartDisabledValidated=$true; uninstallExactStartupLinkValidated=$true; aiConnectorsValidated=2; stableMcpLauncherValidated=$true; codexCliIsolatedFakeValidated=$true; codexEmptyListAddRecorded=$true; codexSameConfigNoOpValidated=$true; codexNameConflictRejected=$true; nativeMcpDiscovered=$false; uninstallPreservesUserData=$true; relativePathRejected=$true; realUserInstallPerformed=$false } | ConvertTo-Json -Depth 4
+    [ordered]@{ status='passed'; packageFiles=$manifest.files.Count; publicSourceRoundTripValidated=(-not $SkipPublicExportRoundTrip); offlinePreflightSimulated=$true; offlineApplyValidated=$false; archive=$build.archive; planValidated=$true; windowsPowerShellInstallerPreflight=$true; windowsPowerShell51ImportValidated=$true; windowsPowerShell51SetupValidated=$true; powerShell7ImportValidated=$true; firstRunSetupValidated=$true; invalidConfigurationRepairValidated=$true; existingConfigurationReuseValidated=$true; workspaceCountOptionsValidated='1..8 without Lite; 1..6 with Lite'; liteCoexistenceLimitValidated=$true; workspaceResourceEstimateValidated=$true; vmCreatedStateRemainsPendingValidated=$true; failedUpgradeRestoreValidated=$true; upgradeProcessBlockValidated=$true; temporaryInstallValidated=$true; configImportValidated=$true; viewerDerivedRoot=$derivedRoot; viewerSelfTestValidated=$true; powerShell7DiagnosisValidated=$true; shortcutsValidated=$true; defaultLaunchHiddenAndManagementShowValidated=$true; autoStartEnabledValidated=$true; autoStartDisabledValidated=$true; uninstallExactStartupLinkValidated=$true; aiConnectorsValidated=2; stableMcpLauncherValidated=$true; codexCliIsolatedFakeValidated=$true; codexEmptyListAddRecorded=$true; codexSameConfigNoOpValidated=$true; codexNameConflictRejected=$true; nativeMcpDiscovered=$false; uninstallPreservesUserData=$true; relativePathRejected=$true; realUserInstallPerformed=$false } | ConvertTo-Json -Depth 4
 } finally {
     if ($null -eq $previousLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $previousLocalAppData }
     $resolvedTemporaryRoot = [IO.Path]::GetFullPath($temporaryRoot).TrimEnd([char[]]@('\','/'))
