@@ -322,7 +322,7 @@ sealed class HostCli {
     internal Task<Dictionary<string, object>> RunAsync(string project, string command, string outputPath, IEnumerable<string> extraArguments) {
         return Task.Run(delegate {
             using (FileStream configLease = configuration.OpenVerified()) {
-            List<string> arguments = new List<string> { "-m", "host.client", "--config", configuration.Path, "--project", project, command };
+            List<string> arguments = new List<string> { "-B", "-m", "host.client", "--config", configuration.Path, "--project", project, command };
             if (outputPath != null) { arguments.Add("--out"); arguments.Add(outputPath); }
             if (extraArguments != null) arguments.AddRange(extraArguments);
             ProcessStartInfo start = new ProcessStartInfo {
@@ -637,6 +637,10 @@ sealed class ViewerForm : Form {
     readonly Panel header = new Panel();
     readonly Panel statusCard = new Panel();
     readonly FlowLayoutPanel actions = new FlowLayoutPanel();
+    readonly Panel immersiveChrome = new Panel();
+    readonly Label chromeBrand = new Label();
+    readonly Label chromeActivity = new Label();
+    readonly Label chromeShortcut = new Label();
     readonly TableLayoutPanel content = new TableLayoutPanel();
     readonly TableLayoutPanel inputBar = new TableLayoutPanel();
     readonly List<Button> projectButtons = new List<Button>();
@@ -650,6 +654,10 @@ sealed class ViewerForm : Form {
     readonly Button settings = new Button();
     readonly Button exitFullscreen = new Button();
     readonly Button toggleControls = new Button();
+    readonly Button more = new Button();
+    readonly ContextMenuStrip moreMenu = new ContextMenuStrip();
+    readonly Panel statusLine = new Panel();
+    readonly Label hotkeyNotice = new Label();
     readonly Label channelTitle = new Label();
     readonly Label channelDetail = new Label();
     readonly Label modeBadge = new Label();
@@ -779,6 +787,14 @@ sealed class ViewerForm : Form {
         statusCard.Controls.Add(channelTitle); statusCard.Controls.Add(channelDetail); statusCard.Controls.Add(modeBadge);
 
         actions.AutoSize = true; actions.AutoSizeMode = AutoSizeMode.GrowAndShrink; actions.Dock = DockStyle.Fill; actions.WrapContents = true; actions.Margin = new Padding(0, 0, 0, 10);
+        actions.Resize += delegate { UpdateImmersiveIdentity(); };
+        immersiveChrome.Dock = DockStyle.Fill; immersiveChrome.BackColor = Color.FromArgb(15, 21, 32); immersiveChrome.Margin = Padding.Empty;
+        immersiveChrome.Resize += delegate { LayoutImmersiveChrome(); };
+        chromeBrand.Text = "启程  /  AI 工作空间"; chromeBrand.ForeColor = Color.FromArgb(227, 236, 249);
+        chromeBrand.Font = new Font(Font.FontFamily, 9F, FontStyle.Bold); chromeBrand.TextAlign = ContentAlignment.MiddleLeft; chromeBrand.AutoEllipsis = true;
+        chromeActivity.ForeColor = Color.FromArgb(218, 229, 244); chromeActivity.TextAlign = ContentAlignment.BottomRight; chromeActivity.AutoEllipsis = true;
+        chromeShortcut.ForeColor = Color.FromArgb(139, 157, 181); chromeShortcut.TextAlign = ContentAlignment.TopRight; chromeShortcut.AutoEllipsis = true;
+        immersiveChrome.Controls.Add(chromeBrand); immersiveChrome.Controls.Add(chromeActivity); immersiveChrome.Controls.Add(chromeShortcut);
         ConfigureAction(hostTop, "返回本机", Color.White, ViewerPalette.Ink, delegate { ShowLocal(true); });
         ConfigureAction(takeover, "人接管", ViewerPalette.Accent, Color.White, async delegate { await ControlAsync("takeover"); });
         ConfigureAction(allow, "交给 AI", Color.White, ViewerPalette.Accent, async delegate { await ControlAsync("allow"); });
@@ -788,9 +804,21 @@ sealed class ViewerForm : Form {
         ConfigureAction(viewVm, "故障登录", Color.White, ViewerPalette.Muted, delegate { LaunchVmConnect(); });
         ConfigureAction(toggleControls, "隐藏控制栏", Color.White, ViewerPalette.Muted, delegate { HideImmersiveControls(); });
         ConfigureAction(exitFullscreen, "退出全屏", Color.White, ViewerPalette.Muted, delegate { ShowManagement(true); });
+        ConfigureAction(more, "更多  ···", Color.White, ViewerPalette.Ink, delegate { moreMenu.Show(more, new Point(0, more.Height)); });
+        moreMenu.Items.Add("立即刷新", null, async delegate { await RefreshSelectedAsync(true); });
+        moreMenu.Items.Add("故障登录", null, delegate { LaunchVmConnect(); });
+        moreMenu.Items.Add(new ToolStripSeparator());
+        moreMenu.Items.Add("隐藏控制栏  Esc 恢复", null, delegate { HideImmersiveControls(); });
+        moreMenu.Items.Add("设置与管理", null, delegate { ShowManagement(true); });
+        moreMenu.Items.Add("运行设置", null, delegate { LaunchSetup(); });
+        moreMenu.Items.Add("退出全屏", null, delegate { ShowManagement(true); });
+        moreMenu.Opening += delegate {
+            moreMenu.Items[1].Enabled = SelectedProject != null && SelectedProject.VmName != null && !busy;
+            moreMenu.Items[5].Enabled = !busy;
+        };
         ConfigureTopLabel(identityTop); ConfigureTopLabel(modeTop);
         actions.Controls.Add(hostTop); actions.Controls.Add(identityTop); actions.Controls.Add(modeTop); actions.Controls.Add(takeover); actions.Controls.Add(allow); actions.Controls.Add(pause);
-        actions.Controls.Add(refresh); actions.Controls.Add(settings); actions.Controls.Add(viewVm); actions.Controls.Add(toggleControls); actions.Controls.Add(exitFullscreen);
+        actions.Controls.Add(refresh); actions.Controls.Add(settings); actions.Controls.Add(viewVm); actions.Controls.Add(toggleControls); actions.Controls.Add(exitFullscreen); actions.Controls.Add(more);
 
         canvas.Dock = DockStyle.Fill; canvas.Margin = Padding.Empty;
         canvas.RemoteClick += delegate(object sender, RemotePointEventArgs e) { FlushDirectText(); QueueHumanInput(new string[] { "--actor", "human", "--action", "click", "--x", e.X.ToString(), "--y", e.Y.ToString(), "--button", e.Button.ToString() }); };
@@ -809,8 +837,12 @@ sealed class ViewerForm : Form {
         sendText.Margin = Padding.Empty;
         inputBar.Controls.Add(textInput, 0, 0); inputBar.Controls.Add(sendText, 1, 0);
 
-        status.AutoSize = true; status.Dock = DockStyle.Fill; status.ForeColor = ViewerPalette.Muted; status.Margin = new Padding(2, 2, 0, 0); status.Text = "就绪";
-        content.Controls.Add(statusCard, 0, 0); content.Controls.Add(actions, 0, 1); content.Controls.Add(canvas, 0, 2); content.Controls.Add(inputBar, 0, 3); content.Controls.Add(status, 0, 4);
+        statusLine.Dock = DockStyle.Fill; statusLine.Height = 24; statusLine.Margin = Padding.Empty;
+        status.AutoEllipsis = true; status.Dock = DockStyle.Fill; status.TextAlign = ContentAlignment.MiddleLeft; status.ForeColor = ViewerPalette.Muted; status.Margin = Padding.Empty; status.Text = "就绪";
+        status.TextChanged += delegate { UpdateStatusPresentation(); };
+        hotkeyNotice.AutoSize = true; hotkeyNotice.Dock = DockStyle.Right; hotkeyNotice.TextAlign = ContentAlignment.MiddleRight; hotkeyNotice.ForeColor = ViewerPalette.Danger; hotkeyNotice.Visible = false;
+        statusLine.Controls.Add(status); statusLine.Controls.Add(hotkeyNotice);
+        content.Controls.Add(statusCard, 0, 0); content.Controls.Add(actions, 0, 1); content.Controls.Add(canvas, 0, 2); content.Controls.Add(inputBar, 0, 3); content.Controls.Add(statusLine, 0, 4);
     }
 
     void ConfigureAction(Button button, string text, Color back, Color fore, EventHandler click) {
@@ -855,6 +887,10 @@ sealed class ViewerForm : Form {
         for (int index = 0; index < hotkeys.Channels.Length; index++) RegisterShortcut(200 + index, hotkeys.Channels[index]);
         hotkeyWarning.Text = failedHotkeys.Count == 0 ? "" : "快捷键被占用：" + String.Join("、", failedHotkeys.ToArray()) + "（请用菜单切换）";
         hotkeyWarning.Visible = failedHotkeys.Count > 0;
+        hotkeyNotice.Text = failedHotkeys.Count == 0 ? "" : "快捷键冲突 " + String.Join("、", failedHotkeys.ToArray()) + " · 托盘可切换";
+        hotkeyNotice.Tag = hotkeyWarning.Text;
+        hotkeyNotice.Visible = failedHotkeys.Count > 0;
+        UpdateStatusPresentation();
         WriteHotkeyStatus(hotkeyStatusPath);
     }
 
@@ -902,6 +938,7 @@ sealed class ViewerForm : Form {
             projectTrayItems[index].Text = "Windows 频道 " + (index + 1) + "  " + hotkeys.ChannelLabel(index);
         }
         if (selectedProject < 0) channelDetail.Text = hotkeys.ChannelSummary() + " 进入独立 Windows 频道";
+        UpdateStatusPresentation();
         WriteHotkeyStatus(request.StatusPath);
         if (request.Show) ShowManagement(true);
         return true;
@@ -946,48 +983,157 @@ sealed class ViewerForm : Form {
         immersive = false; controlsHidden = false;
         FormBorderStyle = FormBorderStyle.Sizable; WindowState = FormWindowState.Normal;
         header.Visible = true; navigation.Visible = true; statusCard.Visible = true;
-        actions.Visible = true; inputBar.Visible = true; status.Visible = true;
+        if (actions.Parent == immersiveChrome) {
+            immersiveChrome.Controls.Remove(actions);
+            content.Controls.Remove(immersiveChrome);
+            content.Controls.Add(actions, 0, 1);
+        }
+        actions.Visible = true; statusLine.Visible = true;
         SetAuxiliaryRowsVisible(true);
+        content.RowStyles[1].SizeType = SizeType.AutoSize;
         content.Padding = new Padding(22, 20, 22, 18);
         content.RowStyles[0].Height = 86F;
+        content.BackColor = ViewerPalette.Background;
+        actions.AutoSize = true; actions.Dock = DockStyle.Fill; actions.BackColor = ViewerPalette.Background; actions.WrapContents = true; actions.Padding = Padding.Empty; actions.Margin = new Padding(0, 0, 0, 10);
+        SetActionAppearance(hostTop, Color.White, ViewerPalette.Ink);
+        SetActionAppearance(takeover, ViewerPalette.Accent, Color.White);
+        SetActionAppearance(allow, Color.White, ViewerPalette.Accent);
+        SetActionAppearance(pause, Color.White, ViewerPalette.Danger);
+        statusLine.BackColor = ViewerPalette.Background; status.ForeColor = ViewerPalette.Muted;
+        foreach (Control control in actions.Controls) control.Margin = new Padding(0, 0, ViewerLayout.Gap, ViewerLayout.Gap);
+        identityTop.MinimumSize = modeTop.MinimumSize = new Size(112, ViewerLayout.ControlHeight);
+        identityTop.MaximumSize = modeTop.MaximumSize = Size.Empty;
         hostTop.Visible = false; exitFullscreen.Visible = false; toggleControls.Visible = false;
-        refresh.Visible = SelectedProject != null; settings.Visible = true;
+        more.Visible = false; refresh.Visible = SelectedProject != null; settings.Visible = true;
         ProjectBinding project = SelectedProject;
         viewVm.Visible = project != null && project.VmName != null;
-        ShowShell(activate); UpdateButtons();
+        ShowShell(activate); UpdateButtons(); UpdateStatusPresentation();
     }
 
     void EnterImmersive(bool activate) {
         immersive = true; controlsHidden = false;
         FormBorderStyle = FormBorderStyle.None; WindowState = FormWindowState.Maximized;
         header.Visible = false; navigation.Visible = false; statusCard.Visible = false;
-        actions.Visible = true; inputBar.Visible = true; status.Visible = true;
+        if (actions.Parent == content) {
+            content.Controls.Remove(actions);
+            immersiveChrome.Controls.Add(actions);
+            content.Controls.Add(immersiveChrome, 0, 1);
+        }
+        immersiveChrome.Visible = true; actions.Visible = true; statusLine.Visible = true;
         SetAuxiliaryRowsVisible(true);
-        content.Padding = new Padding(8);
+        content.RowStyles[1].SizeType = SizeType.Absolute; content.RowStyles[1].Height = 52F;
+        content.Padding = Padding.Empty; content.BackColor = ViewerPalette.Canvas;
         content.RowStyles[0].Height = 0F;
-        hostTop.Visible = true; exitFullscreen.Visible = true; toggleControls.Visible = true;
-        refresh.Visible = false; viewVm.Visible = false; settings.Visible = true;
-        ShowShell(activate); UpdateButtons();
+        actions.AutoSize = false; actions.Dock = DockStyle.None;
+        actions.BackColor = Color.FromArgb(15, 21, 32); actions.WrapContents = false;
+        actions.Padding = new Padding(14, 4, 14, 4); actions.Margin = Padding.Empty;
+        foreach (Control control in actions.Controls) control.Margin = new Padding(0, 0, 8, 0);
+        SetActionAppearance(hostTop, Color.FromArgb(34, 43, 59), Color.FromArgb(224, 231, 242));
+        SetActionAppearance(takeover, Color.FromArgb(44, 57, 75), Color.FromArgb(232, 239, 248));
+        SetActionAppearance(allow, Color.FromArgb(44, 57, 75), Color.FromArgb(232, 239, 248));
+        SetActionAppearance(pause, Color.FromArgb(44, 57, 75), Color.FromArgb(232, 239, 248));
+        SetActionAppearance(more, Color.FromArgb(34, 43, 59), Color.FromArgb(224, 231, 242));
+        identityTop.MinimumSize = modeTop.MinimumSize = Size.Empty;
+        identityTop.MaximumSize = new Size(220, ViewerLayout.ControlHeight);
+        modeTop.MaximumSize = new Size(130, ViewerLayout.ControlHeight);
+        identityTop.AutoEllipsis = true; modeTop.AutoEllipsis = true;
+        identityTop.Padding = modeTop.Padding = new Padding(10, 7, 10, 6);
+        statusLine.BackColor = Color.FromArgb(15, 21, 32); status.ForeColor = Color.FromArgb(178, 191, 209);
+        hostTop.Visible = true; exitFullscreen.Visible = false; toggleControls.Visible = false;
+        refresh.Visible = false; viewVm.Visible = false; settings.Visible = false; more.Visible = true;
+        LayoutImmersiveChrome();
+        UpdateImmersiveIdentity();
+        ShowShell(activate); UpdateButtons(); UpdateStatusPresentation();
+    }
+
+    void LayoutImmersiveChrome() {
+        if (!immersive) return;
+        int width = immersiveChrome.ClientSize.Width;
+        int height = immersiveChrome.ClientSize.Height;
+        if (width <= 0 || height <= 0) return;
+        int brandWidth = width >= 1200 ? 174 : width >= 1000 ? 104 : 0;
+        int rightWidth = width >= 1200 ? 330 : width >= 900 ? 180 : 0;
+        int gap = brandWidth > 0 ? 12 : 0;
+        int actionsWidth = Math.Min(700, Math.Max(0, width - brandWidth - rightWidth - gap - 16));
+        chromeBrand.Visible = brandWidth > 0;
+        chromeBrand.Text = width < 1200 ? "启程" : "启程  /  AI 工作空间";
+        chromeBrand.SetBounds(18, 0, Math.Max(0, brandWidth - 18), height);
+        actions.SetBounds(brandWidth + gap, 0, actionsWidth, height);
+        bool showRight = rightWidth > 0;
+        chromeActivity.Visible = showRight; chromeShortcut.Visible = showRight;
+        if (showRight) {
+            int rightX = width - rightWidth - 18;
+            chromeActivity.SetBounds(rightX, 7, rightWidth, Math.Max(15, height / 2 - 5));
+            chromeShortcut.SetBounds(rightX, height / 2, rightWidth, Math.Max(15, height / 2 - 7));
+        }
+    }
+
+    void UpdateImmersiveIdentity() {
+        if (!immersive || selectedProject < 0) return;
+        int width = actions.ClientSize.Width;
+        bool narrow = width < 980;
+        bool veryNarrow = width < 760;
+        identityTop.Text = narrow ? "频道 " + (selectedProject + 1) :
+            "频道 " + (selectedProject + 1) + " · " + SelectedProject.Name;
+        identityTop.MaximumSize = new Size(veryNarrow ? 80 : narrow ? 105 : 220, ViewerLayout.ControlHeight);
+        modeTop.MaximumSize = new Size(veryNarrow ? 105 : 130, ViewerLayout.ControlHeight);
+        Button[] primary = { hostTop, takeover, allow, pause, more };
+        foreach (Button button in primary) {
+            button.MinimumSize = new Size(veryNarrow ? 60 : 72, 34);
+            button.Padding = new Padding(veryNarrow ? 6 : 12, 0, veryNarrow ? 6 : 12, 0);
+            button.Margin = new Padding(0, 0, veryNarrow ? 4 : 8, 0);
+        }
+        identityTop.Margin = modeTop.Margin = new Padding(0, 0, veryNarrow ? 4 : 8, 0);
+    }
+
+    void SetActionAppearance(Button button, Color back, Color fore) {
+        button.BackColor = back; button.ForeColor = fore;
+        button.FlatAppearance.BorderSize = 0;
+        button.MinimumSize = new Size(immersive ? 72 : 104, immersive ? 34 : ViewerLayout.ControlHeight);
+        button.Padding = immersive ? new Padding(12, 0, 12, 0) : new Padding(10, 2, 10, 2);
     }
 
     void HideImmersiveControls() {
         if (!immersive) return;
-        controlsHidden = true; actions.Visible = false; inputBar.Visible = false; status.Visible = false;
+        controlsHidden = true; actions.Visible = false; inputBar.Visible = false;
+        immersiveChrome.Visible = false;
         SetAuxiliaryRowsVisible(false);
+        UpdateStatusPresentation();
         canvas.Focus();
     }
 
     void SetAuxiliaryRowsVisible(bool visible) {
-        int[] rows = { 1, 3, 4 };
+        int[] rows = { 1, 3 };
         foreach (int row in rows) {
             content.RowStyles[row].SizeType = visible ? SizeType.AutoSize : SizeType.Absolute;
             content.RowStyles[row].Height = 0F;
         }
+        content.RowStyles[4].SizeType = SizeType.Absolute;
+        content.RowStyles[4].Height = immersive && !controlsHidden ? 0F : immersive ? 24F : 28F;
+    }
+
+    void UpdateStatusPresentation() {
+        if (statusLine == null || content.RowStyles.Count < 5) return;
+        chromeActivity.Text = status.Text;
+        chromeShortcut.Text = selectedProject < 0 ? hotkeys.HostLabel + " 本机" :
+            hotkeys.HostLabel + " 本机  ·  " + hotkeys.ChannelLabel(selectedProject) + " 当前频道";
+        if (!immersive) { statusLine.Visible = true; content.RowStyles[4].Height = 28F; return; }
+        string message = status.Text ?? "";
+        bool important = !desktopReady || mode == "unknown" ||
+            message.Contains("失败") || message.Contains("不可用") || message.Contains("未知") ||
+            message.Contains("冲突") || message.Contains("被其他应用占用") || message.Contains("配置已变化");
+        bool showFooter = controlsHidden || important || failedHotkeys.Count > 0;
+        statusLine.Visible = showFooter;
+        content.RowStyles[4].Height = showFooter ? 24F : 0F;
     }
 
     protected override bool ProcessCmdKey(ref Message message, Keys keyData) {
         if (immersive && keyData == Keys.Escape) {
-            if (controlsHidden) { controlsHidden = false; actions.Visible = true; inputBar.Visible = true; status.Visible = true; SetAuxiliaryRowsVisible(true); }
+            if (controlsHidden) {
+                controlsHidden = false; immersiveChrome.Visible = true; actions.Visible = true;
+                SetAuxiliaryRowsVisible(true); content.RowStyles[1].SizeType = SizeType.Absolute; content.RowStyles[1].Height = 52F;
+                UpdateButtons(); UpdateStatusPresentation();
+            }
             else ShowManagement(true);
             return true;
         }
@@ -1028,11 +1174,13 @@ sealed class ViewerForm : Form {
             identityTop.Text = "频道 " + (selectedProject + 1) + " · " + project.Name;
             identityTop.BackColor = ProjectColor(selectedProject);
         }
+        UpdateImmersiveIdentity();
         UpdateModeBadge(); UpdateButtons();
     }
 
     void UpdateModeBadge() {
         if (selectedProject < 0) { modeBadge.Text = "本机"; modeBadge.BackColor = ViewerPalette.AccentSoft; modeBadge.ForeColor = ViewerPalette.Accent; }
+        else if (mode == "unknown") { modeBadge.Text = "状态未知"; modeBadge.BackColor = Color.FromArgb(241, 243, 248); modeBadge.ForeColor = ViewerPalette.Muted; }
         else if (!desktopReady) { modeBadge.Text = "未连接"; modeBadge.BackColor = Color.FromArgb(241, 243, 248); modeBadge.ForeColor = ViewerPalette.Muted; }
         else if (mode == "human") { modeBadge.Text = "人正在接管"; modeBadge.BackColor = Color.FromArgb(229, 247, 239); modeBadge.ForeColor = ViewerPalette.Success; }
         else if (mode == "agent") { modeBadge.Text = "AI 可操作"; modeBadge.BackColor = ViewerPalette.AccentSoft; modeBadge.ForeColor = ViewerPalette.Accent; }
@@ -1062,12 +1210,21 @@ sealed class ViewerForm : Form {
         hostTop.Visible = immersive;
         identityTop.Visible = immersive;
         modeTop.Visible = immersive;
-        exitFullscreen.Visible = immersive;
-        toggleControls.Visible = immersive;
+        exitFullscreen.Visible = false;
+        toggleControls.Visible = false;
+        more.Visible = immersive;
+        settings.Visible = !immersive && !busy;
         bool human = connected && mode == "human" && !controlTransition;
         canvas.HumanInputEnabled = human;
         textInput.Enabled = human;
         sendText.Enabled = human && textInput.TextLength > 0;
+        inputBar.Visible = human && !controlsHidden;
+        content.RowStyles[3].SizeType = inputBar.Visible ? SizeType.AutoSize : SizeType.Absolute;
+        content.RowStyles[3].Height = 0F;
+        takeover.BackColor = immersive && human ? Color.FromArgb(21, 112, 93) : immersive ? Color.FromArgb(44, 57, 75) : ViewerPalette.Accent;
+        allow.BackColor = immersive && connected && mode == "agent" ? Color.FromArgb(46, 83, 174) : immersive ? Color.FromArgb(44, 57, 75) : Color.White;
+        pause.BackColor = immersive && connected && mode == "paused" ? Color.FromArgb(113, 70, 31) : immersive ? Color.FromArgb(44, 57, 75) : Color.White;
+        UpdateStatusPresentation();
     }
 
     bool BeginBusy(string message) {

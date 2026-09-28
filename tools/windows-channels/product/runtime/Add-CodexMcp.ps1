@@ -5,6 +5,9 @@ param(
     [string]$ConfigPath,
     [string]$PythonPath,
     [string]$CodexPath,
+    [string]$BrokerUrl,
+    [string]$BrokerTokenFile,
+    [string]$BrokerChannelId,
     [switch]$Apply
 )
 
@@ -31,10 +34,26 @@ else {
 $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
 $launcher = Join-Path $installRoot 'Invoke-WindowsChannelsMcp.ps1'
 $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$launcher,'-Project',$Project,'-ConfigPath',$config.Path,'-PythonPath',$python)
+$brokerOptions = @($BrokerUrl,$BrokerTokenFile,$BrokerChannelId)
+if (@($brokerOptions | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0,3)) {
+    throw 'BrokerUrl, BrokerTokenFile and BrokerChannelId must be supplied together.'
+}
+if (-not [string]::IsNullOrWhiteSpace($BrokerUrl)) {
+    if ($BrokerUrl -notmatch '^http://127\.0\.0\.1:[0-9]{1,5}/?$' -or $BrokerChannelId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'Broker endpoint or channel ID is invalid.' }
+    $brokerTokenPath = Resolve-QichengLocalPath -Path $BrokerTokenFile -Label 'BrokerTokenFile'
+    if (-not (Test-Path -LiteralPath $brokerTokenPath -PathType Leaf)) { throw 'Broker token file is missing.' }
+    $arguments += @('-BrokerUrl',$BrokerUrl,'-BrokerTokenFile',$brokerTokenPath,'-BrokerChannelId',$BrokerChannelId)
+}
 $listText = (& $codexExecutable mcp list --json 2>$null | Out-String)
 if ($LASTEXITCODE -ne 0) { throw '无法读取现有 Codex MCP 配置；未进行添加或覆盖。' }
-try { $servers = @($listText | ConvertFrom-Json -ErrorAction Stop) } catch { throw 'Codex MCP 列表不是有效 JSON；未进行添加或覆盖。' }
-$existing = @($servers | Where-Object { $_.name -ceq $Name }) | Select-Object -First 1
+try {
+    $parsed = ConvertFrom-Json -InputObject $listText -ErrorAction Stop
+    $servers = if ($null -eq $parsed) { @() } elseif ($parsed -is [array]) { $parsed } else { @($parsed) }
+    foreach ($server in $servers) {
+        if ($null -eq $server -or $null -eq $server.PSObject.Properties['name']) { throw 'missing name' }
+    }
+} catch { throw 'Codex MCP 列表不是有效 JSON 数组；未进行添加或覆盖。' }
+$existing = @($servers | Where-Object { [string]$_.name -ceq $Name }) | Select-Object -First 1
 $existingMatches = $false
 if ($existing) {
     $existingArgs = @($existing.transport.args)

@@ -1,4 +1,4 @@
-Set-StrictMode -Version 2.0
+﻿Set-StrictMode -Version 2.0
 
 function Resolve-QichengLocalPath {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Label)
@@ -81,6 +81,13 @@ function Read-QichengConfig {
         if ([System.IO.Path]::IsPathRooted($tokenText)) { $tokenPath = Resolve-QichengLocalPath -Path $tokenText -Label "token_file:$name" }
         else { $tokenPath = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $resolved) $tokenText)) }
         if (-not $vmIds.Add($vmId.ToString()) -or -not $biosIds.Add($biosId.ToString()) -or -not $tokenPaths.Add($tokenPath)) { throw '不同 project 不得共享 VM ID、BIOS UUID 或 token 文件。' }
+        if ($binding.PSObject.Properties.Name -contains 'human_token_file') {
+            $humanText = [string]$binding.human_token_file
+            if ([string]::IsNullOrWhiteSpace($humanText)) { throw "project 的 human_token_file 为空：$name" }
+            if ([System.IO.Path]::IsPathRooted($humanText)) { $humanPath = Resolve-QichengLocalPath -Path $humanText -Label "human_token_file:$name" }
+            else { $humanPath = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $resolved) $humanText)) }
+            if (-not $tokenPaths.Add($humanPath)) { throw '不同凭据不得共享 token 文件。' }
+        }
         if ($binding.PSObject.Properties.Name -contains 'vm_name' -and ([string]$binding.vm_name -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$')) { throw "vm_name 无效：$name" }
     }
     [pscustomobject]@{ Path = $resolved; Value = $config; ProjectNames = $names }
@@ -106,17 +113,43 @@ function Get-QichengConfigImportMaterial {
         } else {
             [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $source.Path) $tokenText))
         }
-        if (-not (Test-Path -LiteralPath $tokenSource -PathType Leaf)) { throw "project 的 token 文件不存在：$name" }
-        $tokenItem = Get-Item -LiteralPath $tokenSource
-        if ($tokenItem.Length -le 0 -or $tokenItem.Length -gt 256) { throw "project 的 token 文件大小无效：$name" }
-        $tokenValue = (Get-Content -LiteralPath $tokenSource -Raw -Encoding ASCII).Trim()
-        if ($tokenValue -notmatch '^[a-f0-9]{64}$') { throw "project 的 token 格式无效：$name" }
+        $tokenValue = Read-QichengImportToken -Path $tokenSource -Label "token_file:$name"
         $normalized = [ordered]@{ vm_id=[guid]([string]$binding.vm_id).ToString(); bios_uuid=[guid]([string]$binding.bios_uuid).ToString(); token_file=('tokens/' + $name + '.token') }
+        if ($binding.PSObject.Properties.Name -contains 'human_token_file') {
+            $humanText = [string]$binding.human_token_file
+            $humanSource = if ([System.IO.Path]::IsPathRooted($humanText)) {
+                Resolve-QichengLocalPath -Path $humanText -Label "human_token_file:$name"
+            } else {
+                [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $source.Path) $humanText))
+            }
+            $humanValue = Read-QichengImportToken -Path $humanSource -Label "human_token_file:$name"
+            if ($humanValue -eq $tokenValue) { throw "project 的 human token 必须与 channel token 不同：$name" }
+            $normalized.human_token_file = 'tokens/' + $name + '.human.token'
+            $tokens[$name + '.human'] = $humanValue
+        }
         if ($binding.PSObject.Properties.Name -contains 'vm_name') { $normalized.vm_name = [string]$binding.vm_name }
         $projects[$name] = $normalized
         $tokens[$name] = $tokenValue
     }
     [pscustomobject]@{ SourcePath=$source.Path; Config=[ordered]@{ schema_version=1; projects=$projects }; Tokens=$tokens }
+}
+
+function Read-QichengImportToken {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Label)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Label 文件不存在。" }
+    $item = Get-Item -LiteralPath $Path
+    if ($item.Length -le 0 -or $item.Length -gt 256) { throw "$Label 文件大小无效。" }
+    $acl = Get-Acl -LiteralPath $Path
+    if (-not $acl.AreAccessRulesProtected) { throw "$Label 文件权限过宽。" }
+    $allowed = @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
+    foreach ($rule in $acl.Access) {
+        if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+        $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($allowed -notcontains $sid) { throw "$Label 文件权限过宽。" }
+    }
+    $value = (Get-Content -LiteralPath $Path -Raw -Encoding ASCII).Trim()
+    if ($value -notmatch '^[a-f0-9]{64}$') { throw "$Label 格式无效。" }
+    return $value
 }
 
 function Set-QichengPrivateDirectoryAcl {
@@ -142,6 +175,21 @@ function Set-QichengPrivateDirectoryAcl {
     }
 }
 
+function Set-QichengPrivateFileAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($null -eq $identity.User) { throw 'Cannot resolve the current Windows user SID.' }
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $allow = [System.Security.AccessControl.AccessControlType]::Allow
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identity.User, 'FullControl', $allow)))
+    $systemSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, 'FullControl', $allow)))
+    $file = New-Object System.IO.FileInfo($Path)
+    if ($file.PSObject.Methods.Name -contains 'SetAccessControl') { $file.SetAccessControl($acl) }
+    else { [System.IO.FileSystemAclExtensions]::SetAccessControl($file, $acl) }
+}
+
 function Import-QichengConfig {
     param(
         [Parameter(Mandatory = $true)]$Material,
@@ -159,6 +207,7 @@ function Import-QichengConfig {
         $destinationToken = Join-Path $tokensRoot ($name + '.token')
         if ((Test-Path -LiteralPath $destinationToken) -and -not $Replace) { throw "DataRoot already contains a token for project: $name" }
         Set-Content -LiteralPath $destinationToken -Value ([string]$Material.Tokens[$name]) -Encoding ASCII -NoNewline
+        Set-QichengPrivateFileAcl -Path $destinationToken
     }
     $temporaryConfig = Join-Path $root ('.channels.import.' + [guid]::NewGuid().ToString('N') + '.json')
     try {
@@ -168,5 +217,5 @@ function Import-QichengConfig {
     } finally {
         if (Test-Path -LiteralPath $temporaryConfig) { Remove-Item -LiteralPath $temporaryConfig -Force }
     }
-    [pscustomobject]@{ ConfigPath=$destinationConfig; Projects=@($Material.Tokens.Keys); ImportedFrom=$Material.SourcePath }
+    [pscustomobject]@{ ConfigPath=$destinationConfig; Projects=@($Material.Config.projects.Keys); ImportedFrom=$Material.SourcePath }
 }

@@ -1,5 +1,12 @@
 [CmdletBinding()]
-param([Parameter(Mandatory = $true)][string]$Project, [string]$ConfigPath, [string]$PythonPath)
+param(
+    [Parameter(Mandatory = $true)][string]$Project,
+    [string]$ConfigPath,
+    [string]$PythonPath,
+    [string]$BrokerUrl,
+    [string]$BrokerTokenFile,
+    [string]$BrokerChannelId
+)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Product.Common.ps1')
@@ -14,5 +21,13 @@ if ([string]::IsNullOrWhiteSpace($pythonCandidate)) { throw '安装记录中没�
 $python = Resolve-QichengLocalPath -Path $pythonCandidate -Label 'PythonPath'
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw '已配置的 Python 不存在；请重新安装或更新 Python 路径。' }
 Set-Location -LiteralPath $installRoot
-& $python -m host.mcp --config $config.Path --project $Project
+$brokerOptions = @($BrokerUrl,$BrokerTokenFile,$BrokerChannelId)
+if (@($brokerOptions | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0,3)) {
+    throw 'BrokerUrl, BrokerTokenFile and BrokerChannelId must be supplied together.'
+}
+$arguments = @('-B','-m','host.mcp','--config',$config.Path,'--project',$Project)
+if (-not [string]::IsNullOrWhiteSpace($BrokerUrl)) {
+    $arguments += @('--broker-url',$BrokerUrl,'--broker-token-file',$BrokerTokenFile,'--broker-channel-id',$BrokerChannelId)
+}
+& $python @arguments
 exit $LASTEXITCODE

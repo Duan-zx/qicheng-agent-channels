@@ -9,8 +9,13 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$BIOSUUID,
 
-    [Parameter(Mandatory = $true)]
     [string]$TokenFile,
+
+    [string]$ChannelTokenFile,
+
+    [string]$BrokerTokenFile,
+
+    [string]$HumanTokenFile,
 
     [switch]$Compact
 )
@@ -114,7 +119,16 @@ $outputCreated = $false
 try {
     $pythonSource = Resolve-SafeLocalPath -Path $EmbeddedPythonDirectory
     $payloadRoot = Resolve-SafeLocalPath -Path $OutputDirectory
-    $tokenSource = Resolve-SafeLocalPath -Path $TokenFile
+    $threeCredentialMode = [bool]($ChannelTokenFile -or $BrokerTokenFile -or $HumanTokenFile)
+    if ($threeCredentialMode) {
+        if ($TokenFile -or -not $ChannelTokenFile -or -not $BrokerTokenFile -or -not $HumanTokenFile) {
+            throw 'Provide all three ChannelTokenFile, BrokerTokenFile, and HumanTokenFile paths, without TokenFile.'
+        }
+        $tokenSources = @(@($ChannelTokenFile, $BrokerTokenFile, $HumanTokenFile) | ForEach-Object { Resolve-SafeLocalPath -Path $_ })
+    } else {
+        if (-not $TokenFile) { throw 'TokenFile is required for a legacy single-token payload.' }
+        $tokenSources = @(Resolve-SafeLocalPath -Path $TokenFile)
+    }
     $guestSource = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'guest'))
 
     if (-not (Test-Path -LiteralPath $pythonSource -PathType Container)) {
@@ -123,10 +137,14 @@ try {
     if (-not (Test-Path -LiteralPath $guestSource -PathType Container)) {
         throw "Guest source directory does not exist: $guestSource"
     }
-    if (-not (Test-Path -LiteralPath $tokenSource -PathType Leaf)) {
-        throw "Token file does not exist: $tokenSource"
+    if (@($tokenSources | Sort-Object -Unique).Count -ne $tokenSources.Count) {
+        throw 'Credential files must use distinct paths.'
     }
-    Assert-PrivateTokenAcl -Path $tokenSource
+    foreach ($tokenSource in $tokenSources) {
+        if (-not (Test-Path -LiteralPath $tokenSource -PathType Leaf)) { throw "Token file does not exist: $tokenSource" }
+        if ((Get-Item -LiteralPath $tokenSource).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Token file must not be a reparse point.' }
+        Assert-PrivateTokenAcl -Path $tokenSource
+    }
     if (Test-Path -LiteralPath $payloadRoot) {
         throw "Output path already exists: $payloadRoot"
     }
@@ -147,9 +165,13 @@ try {
     }
     $canonicalUuid = $parsedUuid.ToString('D')
 
-    $token = [System.IO.File]::ReadAllText($tokenSource, [System.Text.Encoding]::ASCII).Trim()
-    if ($token -cnotmatch '^[a-f0-9]{64}$') {
-        throw 'Token file must contain exactly one 64-character lowercase hexadecimal token.'
+    $tokens = @($tokenSources | ForEach-Object {
+        $value = [System.IO.File]::ReadAllText($_, [System.Text.Encoding]::ASCII).Trim()
+        if ($value -cnotmatch '^[a-f0-9]{64}$') { throw 'Token file must contain exactly one 64-character lowercase hexadecimal token.' }
+        $value
+    })
+    if (@($tokens | Sort-Object -Unique -CaseSensitive).Count -ne $tokens.Count) {
+        throw 'Channel, broker, and human credentials must differ.'
     }
 
     $pythonExe = Join-Path $pythonSource 'python.exe'
@@ -212,14 +234,20 @@ try {
     [System.IO.File]::WriteAllLines($destinationPth, $destinationPthLines, [System.Text.UTF8Encoding]::new($false))
 
     $destinationToken = Join-Path $localDestination 'channel.token'
-    [System.IO.File]::WriteAllText($destinationToken, $token + [Environment]::NewLine, [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText($destinationToken, $tokens[0] + [Environment]::NewLine, [System.Text.Encoding]::ASCII)
+    if ($threeCredentialMode) {
+        [System.IO.File]::WriteAllText((Join-Path $localDestination 'broker.token'), $tokens[1] + [Environment]::NewLine, [System.Text.Encoding]::ASCII)
+        [System.IO.File]::WriteAllText((Join-Path $localDestination 'human.token'), $tokens[2] + [Environment]::NewLine, [System.Text.Encoding]::ASCII)
+    }
+
+    $additionalArguments = if ($threeCredentialMode) { ' --broker-token-file "%~dp0.local\broker.token" --human-token-file "%~dp0.local\human.token"' } else { '' }
 
     $startScript = @"
 @echo off
 setlocal
 echo [qicheng] Starting the experimental guest channel in this interactive Windows guest.
 echo [qicheng] Identity and token values are configured and will not be displayed.
-"%~dp0python\python.exe" -m guest.agent --expected-bios-uuid "$canonicalUuid" --token-file "%~dp0.local\channel.token" >nul 2>&1
+"%~dp0python\python.exe" -B -m guest.agent --expected-bios-uuid "$canonicalUuid" --token-file "%~dp0.local\channel.token"$additionalArguments >nul 2>&1
 set "CHANNEL_EXIT=%ERRORLEVEL%"
 echo [qicheng] Guest channel exited with code %CHANNEL_EXIT%. Sensitive values were not logged.
 exit /b %CHANNEL_EXIT%
@@ -235,11 +263,13 @@ exit /b %CHANNEL_EXIT%
         }
     } | Sort-Object { $_.path })
     $manifest = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = if ($threeCredentialMode) { 2 } else { 1 }
         payloadType = 'qicheng-windows-guest'
         expectedBiosUuid = $canonicalUuid
         entrypoint = 'Start-Channel.cmd'
         tokenPath = '.local/channel.token'
+        credentialMode = if ($threeCredentialMode) { 'channel-broker-human' } else { 'single-channel' }
+        tokenPaths = if ($threeCredentialMode) { @('.local/channel.token', '.local/broker.token', '.local/human.token') } else { @('.local/channel.token') }
         files = $manifestFiles
     }
     [System.IO.File]::WriteAllText((Join-Path $payloadRoot 'payload-manifest.json'), ($manifest | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
@@ -252,6 +282,7 @@ exit /b %CHANNEL_EXIT%
         pythonExecutable = 'python\python.exe'
         guestModule = 'guest.agent'
         tokenDestination = '.local\channel.token'
+        credentialMode = if ($threeCredentialMode) { 'channel-broker-human' } else { 'single-channel' }
         startCommand = 'Start-Channel.cmd'
         manifest = 'payload-manifest.json'
         automaticLoginConfigured = $false

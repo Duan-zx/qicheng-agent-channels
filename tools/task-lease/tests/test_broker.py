@@ -1,0 +1,780 @@
+import json
+import secrets
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from broker import Broker, BrokerHTTPServer  # noqa: E402
+
+
+class BrokerHTTPTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.credential = secrets.token_hex(32)
+        (root / "broker.token").write_text(self.credential, encoding="ascii")
+        (root / "project-A").mkdir()
+        (root / "project-B").mkdir()
+        (root / "project-C").mkdir()
+        actions = {"check": {"argv": [sys.executable, "-c", "print('guarded')"],
+                             "timeout_seconds": 2},
+                   "hold": {"argv": [sys.executable, "-c",
+                           "import pathlib,time; pathlib.Path('started').touch(); "
+                           "deadline=time.monotonic()+2; "
+                           "exec('while not pathlib.Path(\"finish\").exists() and time.monotonic()<deadline: time.sleep(0.01)')"],
+                           "timeout_seconds": 3}}
+        (root / "config.json").write_text(json.dumps({
+            "default_ttl_seconds": 3,
+            "max_ttl_seconds": 30,
+            "channels": [
+                {"channel_id": "channel-A", "endpoint_id": "wechat-1",
+                 "tool_id": "wechat", "project_id": "project-A",
+                 "project_path": str(root / "project-A"), "actions": actions},
+                {"channel_id": "channel-B", "endpoint_id": "wechat-1",
+                 "tool_id": "wechat", "project_id": "project-B",
+                 "project_path": str(root / "project-B"), "actions": actions},
+                {"channel_id": "channel-C", "endpoint_id": "browser-2",
+                 "tool_id": "browser", "project_id": "project-C",
+                 "project_path": str(root / "project-C"), "actions": actions},
+            ]
+        }), encoding="utf-8")
+        self.now = [1000.0]
+        broker = Broker(config_path=root / "config.json", credential_path=root / "broker.token",
+                        db_path=root / "leases.db", clock=lambda: self.now[0])
+        self.server = BrokerHTTPServer(broker, 0)
+        self.addCleanup(self.server.server_close)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self._stop)
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+
+    def _stop(self):
+        self.server.shutdown()
+        self.thread.join(5)
+
+    def call(self, path, body=None, credential=True):
+        headers = {"Authorization": "Bearer " + self.credential} if credential else {}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        req = Request(self.base + path, data=json.dumps(body).encode() if body is not None else None,
+                      headers=headers, method="POST" if body is not None else "GET")
+        try:
+            with urlopen(req, timeout=5) as response:
+                return response.status, json.load(response)
+        except HTTPError as error:
+            return error.code, json.load(error)
+
+    def acquire(self, request_id, channel_id, **extra):
+        return self.call("/v1/acquire", {"request_id": request_id, "task_id": request_id,
+                                         "channel_id": channel_id, **extra})
+
+    def test_unauthorized_and_binding_override_rejected(self):
+        self.assertEqual(401, self.call("/v1/status", credential=False)[0])
+        self.assertEqual(401, self.call("/v1/acquire", {}, credential=False)[0])
+        status, _ = self.acquire("attempt-1", "channel-A", project_path=self.temp.name)
+        self.assertEqual(400, status)
+        status, lease = self.acquire("attempt-1", "channel-A")
+        self.assertEqual(200, status)
+        self.assertEqual("wechat-1", lease["endpoint_id"])
+        self.assertNotEqual(self.temp.name, lease["project_path"])
+        status, current = self.call("/v1/status?channel_id=channel-A")
+        self.assertEqual(200, status)
+        self.assertNotIn("token", current["channels"][0]["lease"])
+
+    def test_http_endpoint_contention_and_distinct_parallelism(self):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(self.acquire, "attempt-A", "channel-A")
+            second = pool.submit(self.acquire, "attempt-B", "channel-B")
+            outcomes = [first.result(), second.result()]
+        self.assertCountEqual([200, 409], [item[0] for item in outcomes])
+        self.assertEqual("busy", next(body["error"] for code, body in outcomes if code == 409))
+        status, distinct = self.acquire("attempt-C", "channel-C")
+        self.assertEqual(200, status)
+        self.assertNotEqual("wechat-1", distinct["endpoint_id"])
+        status, current = self.call("/v1/status")
+        self.assertEqual(200, status)
+        self.assertEqual(2, sum(item["lease"] is not None for item in current["channels"]))
+
+    def test_http_different_endpoints_can_acquire_concurrently(self):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(self.acquire, "attempt-A", "channel-A")
+            second = pool.submit(self.acquire, "attempt-C", "channel-C")
+            self.assertEqual(200, first.result()[0])
+            self.assertEqual(200, second.result()[0])
+
+    def test_expiry_retry_renew_release(self):
+        status, first = self.acquire("attempt-1", "channel-A")
+        self.assertEqual(200, status)
+        self.assertEqual(first, self.acquire("attempt-1", "channel-A")[1])
+        self.now[0] += 2
+        status, renewed = self.call("/v1/renew", {"channel_id": "channel-A",
+                                                  "token": first["token"], "ttl_seconds": 5})
+        self.assertEqual(200, status)
+        self.assertEqual(1007.0, renewed["expires_at"])
+        self.now[0] = 1007.0
+        self.assertEqual(410, self.acquire("attempt-1", "channel-A")[0])
+        status, successor = self.acquire("attempt-2", "channel-B")
+        self.assertEqual(200, status)
+        self.assertGreater(successor["generation"], first["generation"])
+        self.assertEqual(403, self.call("/v1/release", {"channel_id": "channel-B",
+                                                        "token": first["token"]})[0])
+        self.assertEqual(200, self.call("/v1/release", {"channel_id": "channel-B",
+                                                        "token": successor["token"]})[0])
+        self.assertEqual(410, self.acquire("attempt-2", "channel-B")[0])
+
+    def test_no_guest_lease_has_no_guest_identity_or_ack_requirement(self):
+        status, lease = self.acquire("ordinary", "channel-A")
+        self.assertEqual(200, status)
+        self.assertNotIn("guest_identity", lease)
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        self.assertEqual(200, self.acquire("next", "channel-B")[0])
+
+    def test_execute_requires_current_owner_and_fixed_action(self):
+        status, first = self.acquire("attempt-1", "channel-A")
+        self.assertEqual(200, status)
+        payload = {"channel_id": "channel-A", "token": first["token"], "action": "check"}
+        status, result = self.call("/v1/execute", payload)
+        self.assertEqual(200, status)
+        self.assertTrue(result["ok"])
+        self.assertEqual("guarded", result["stdout"].strip())
+        self.assertEqual(400, self.call("/v1/execute", {**payload, "argv": ["bad"]})[0])
+        self.assertEqual(400, self.call("/v1/execute", {**payload, "action": "unknown"})[0])
+        self.now[0] += 3
+        self.assertEqual(410, self.call("/v1/execute", payload)[0])
+        status, successor = self.acquire("attempt-2", "channel-B")
+        self.assertEqual(200, status)
+        self.assertEqual(403, self.call("/v1/execute", {**payload,
+            "channel_id": "channel-B"})[0])
+        self.assertEqual(200, self.call("/v1/execute", {**payload,
+            "channel_id": "channel-B", "token": successor["token"]})[0])
+
+    def test_execute_serializes_release_and_successor(self):
+        status, first = self.acquire("attempt-1", "channel-A")
+        self.assertEqual(200, status)
+        project = Path(first["project_path"])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            running = pool.submit(self.call, "/v1/execute", {
+                "channel_id": "channel-A", "token": first["token"], "action": "hold"})
+            deadline = time.monotonic() + 2
+            while not (project / "started").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue((project / "started").exists())
+            releasing = pool.submit(self.call, "/v1/release", {
+                "channel_id": "channel-A", "token": first["token"]})
+            self.assertFalse(releasing.done())
+            (project / "finish").touch()
+            self.assertEqual(200, running.result(timeout=5)[0])
+            self.assertEqual(200, releasing.result(timeout=5)[0])
+        self.assertEqual(410, self.call("/v1/execute", {
+            "channel_id": "channel-A", "token": first["token"], "action": "check"})[0])
+        self.assertEqual(200, self.acquire("attempt-2", "channel-B")[0])
+
+    def test_execute_different_endpoints_run_concurrently(self):
+        _, first = self.acquire("attempt-A", "channel-A")
+        _, second = self.acquire("attempt-C", "channel-C")
+        project = Path(first["project_path"])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            running = pool.submit(self.call, "/v1/execute", {
+                "channel_id": "channel-A", "token": first["token"], "action": "hold"})
+            deadline = time.monotonic() + 2
+            while not (project / "started").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue((project / "started").exists())
+            try:
+                began = time.monotonic()
+                status, result = self.call("/v1/execute", {
+                    "channel_id": "channel-C", "token": second["token"], "action": "check"})
+                self.assertEqual(200, status)
+                self.assertTrue(result["ok"])
+                self.assertLess(time.monotonic() - began, 1.5)
+            finally:
+                (project / "finish").touch()
+            self.assertEqual(200, running.result(timeout=5)[0])
+
+    def test_port_alias_and_unregistered_cli_port_rejected(self):
+        root = Path(self.temp.name)
+        config_path = root / "port-config.json"
+        base = {"channel_id": "A", "endpoint_id": "devtools-A",
+                "tool_id": "wechat-cli", "project_id": "A",
+                "project_path": str(root / "project-A"),
+                "exclusive_ports": [9420],
+                "actions": {"check": {"argv": [sys.executable, "--port", "9420"],
+                                       "timeout_seconds": 1}}}
+        other = {**base, "channel_id": "B", "endpoint_id": "devtools-B",
+                 "project_id": "B", "project_path": str(root / "project-B")}
+        def make(channels):
+            config_path.write_text(json.dumps({"channels": channels}), encoding="utf-8")
+            return Broker(config_path=config_path, credential_path=root / "broker.token",
+                          db_path=root / "ports.db")
+        with self.assertRaisesRegex(ValueError, "shared TCP port"):
+            make([base, other])
+        with self.assertRaisesRegex(ValueError, "exclusive_port"):
+            make([{**base, "actions": {"check": {"argv": [sys.executable,
+                "--port", "9421"], "timeout_seconds": 1}}}])
+        self.assertEqual(2, len(make([base, {**other, "endpoint_id": "devtools-A"}]).channels))
+
+    def test_existing_package_can_start_without_candidate_bridge(self):
+        package = Path(self.temp.name) / "old-package"
+        package.mkdir()
+        source = Path(__file__).resolve().parents[1]
+        for name in ("broker.py", "lease.py"):
+            shutil.copy2(source / name, package / name)
+        result = subprocess.run([sys.executable, str(package / "broker.py"), "--help"],
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+
+class GuestInputTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.credential = secrets.token_hex(32)
+        (self.root / "broker.token").write_text(self.credential, encoding="ascii")
+        projects = {}
+        channels = []
+        for letter, vm, bios in (
+                ("A", "11111111-1111-4111-8111-111111111111", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+                ("C", "22222222-2222-4222-8222-222222222222", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")):
+            project_path = self.root / f"project-{letter}"
+            project_path.mkdir()
+            channel_token = self.root / f"channel-{letter}.token"
+            channel_token.write_text(secrets.token_hex(32), encoding="ascii")
+            (self.root / f"guest-broker-{letter}.token").write_text(
+                secrets.token_hex(32), encoding="ascii")
+            projects[f"guest-{letter.lower()}"] = {
+                "vm_id": vm, "bios_uuid": bios, "token_file": str(channel_token)}
+            channels.append({
+                "channel_id": f"channel-{letter}", "endpoint_id": f"guest-{letter}",
+                "tool_id": "windows-guest", "project_id": f"project-{letter}",
+                "project_path": str(project_path),
+                "actions": {"check": {"argv": [sys.executable, "-c", "print('old-action')"],
+                                      "timeout_seconds": 2}},
+                "guest": {"host_config_path": str(self.root / "host.json"),
+                          "project": f"guest-{letter.lower()}",
+                          "broker_token_file": str(self.root / f"guest-broker-{letter}.token")}})
+        (self.root / "host.json").write_text(json.dumps({
+            "schema_version": 1, "projects": projects}), encoding="utf-8")
+        self.config_path = self.root / "config.json"
+        self.config_path.write_text(json.dumps({"channels": channels}), encoding="utf-8")
+        self.events = []
+        self.events_lock = threading.Lock()
+        self.input_failure = False
+        self.claim_failure = False
+        self.guest_mode = "agent"
+        self.release_failure = False
+        self.after_claim = None
+        self.hold_a = False
+        self.started_a = threading.Event()
+        self.resume_a = threading.Event()
+        outer = self
+
+        class FakeGuest:
+            def __init__(self, binding, broker_token_file):
+                self.letter = Path(broker_token_file).stem[-1]
+                self.binding = binding
+                outer.record((self.letter, "init"))
+
+            def state(self):
+                return {"mode": outer.guest_mode}
+
+            def claim(self, owner, ttl_seconds):
+                outer.record((self.letter, "claim", owner, ttl_seconds))
+                if outer.claim_failure:
+                    raise RuntimeError("identity mismatch secret diagnostic")
+                if outer.after_claim:
+                    outer.after_claim()
+
+            def input(self, action, **fields):
+                outer.record((self.letter, "input", action, fields))
+                if self.letter == "A" and outer.hold_a:
+                    outer.started_a.set()
+                    if not outer.resume_a.wait(3):
+                        raise TimeoutError("test input wait expired")
+                if outer.input_failure:
+                    raise RuntimeError("raw text and token must be redacted")
+
+            def release(self):
+                outer.record((self.letter, "release"))
+                if outer.release_failure:
+                    raise RuntimeError("raw guest token must be redacted")
+
+        self.broker = Broker(config_path=self.config_path,
+                             credential_path=self.root / "broker.token",
+                             db_path=self.root / "leases.db",
+                             guest_client_factory=FakeGuest)
+        self.server = BrokerHTTPServer(self.broker, 0)
+        self.addCleanup(self.server.server_close)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self._stop)
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+
+    def _stop(self):
+        self.resume_a.set()
+        self.server.shutdown()
+        self.thread.join(5)
+
+    def record(self, event):
+        with self.events_lock:
+            self.events.append(event)
+
+    def call(self, path, body, credential=True):
+        headers = {"Content-Type": "application/json"}
+        if credential:
+            headers["Authorization"] = "Bearer " + self.credential
+        request = Request(self.base + path, data=json.dumps(body).encode("utf-8"),
+                          headers=headers, method="POST")
+        try:
+            with urlopen(request, timeout=5) as response:
+                return response.status, json.load(response)
+        except HTTPError as error:
+            return error.code, json.load(error)
+
+    def acquire(self, letter, request_id):
+        return self.call("/v1/acquire", {"channel_id": f"channel-{letter}",
+                                         "task_id": request_id, "request_id": request_id})
+
+    def payload(self, letter, token, **fields):
+        if fields.get("action") in {"click", "move", "key", "type"}:
+            fields.setdefault("action_id", "action-1")
+        return {"channel_id": f"channel-{letter}", "token": token, **fields}
+
+    def restart_input(self, body):
+        source = Path(__file__).resolve().parents[1]
+        code = ("import json,sys;sys.path.insert(0,sys.argv[4]);"
+                "from broker import Broker;"
+                "broker=Broker(config_path=sys.argv[1],credential_path=sys.argv[2],"
+                "db_path=sys.argv[3]);"
+                "print(json.dumps(broker.input(json.load(sys.stdin))))")
+        result = subprocess.run([
+            sys.executable, "-I", "-c", code, str(self.config_path),
+            str(self.root / "broker.token"), str(self.root / "leases.db"), str(source)],
+            input=json.dumps(body), capture_output=True, text=True, timeout=5)
+        self.assertEqual(0, result.returncode, result.stderr)
+        return json.loads(result.stdout)
+
+    def restart_acquire(self, letter, request_id, now=None):
+        source = Path(__file__).resolve().parents[1]
+        code = ("import json,sys;sys.path.insert(0,sys.argv[4]);"
+                "from broker import Broker;"
+                "broker=Broker(config_path=sys.argv[1],credential_path=sys.argv[2],"
+                "db_path=sys.argv[3],clock=lambda:float(sys.argv[7])"
+                " if sys.argv[7]!='real' else __import__('time').time());"
+                "print(json.dumps(broker.acquire({'channel_id':sys.argv[5],"
+                "'task_id':sys.argv[6],'request_id':sys.argv[6]})))")
+        result = subprocess.run([
+            sys.executable, "-I", "-c", code, str(self.config_path),
+            str(self.root / "broker.token"), str(self.root / "leases.db"),
+            str(source), f"channel-{letter}", request_id,
+            "real" if now is None else str(now)],
+            capture_output=True, text=True, timeout=5)
+        self.assertEqual(0, result.returncode, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_input_claim_release_and_guest_execute_denial(self):
+        status, lease = self.acquire("A", "attempt-A")
+        self.assertEqual(200, status)
+        self.assertEqual({"vm_id": "11111111-1111-4111-8111-111111111111",
+                          "bios_uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                          "project": "guest-a"}, lease["guest_identity"])
+        renewed = self.call("/v1/renew", {"channel_id": "channel-A",
+                                           "token": lease["token"]})[1]
+        self.assertEqual(lease["guest_identity"], renewed["guest_identity"])
+        body = self.payload("A", lease["token"], action="click", x=20, y=30, button=1)
+        self.assertEqual((200, {"ok": True, "action": "click"}), self.call("/v1/input", body))
+        self.assertEqual([("A", "init"), ("A", "claim", "attempt-A", 30),
+                          ("A", "input", "click", {"x": 20, "y": 30, "button": 1}),
+                          ("A", "release")], self.events)
+        status, result = self.call("/v1/execute", self.payload(
+            "A", lease["token"], action="check"))
+        self.assertEqual(403, status)
+        self.assertEqual({"ok": False, "error": "guest_execute_disabled"}, result)
+
+    def test_rejects_field_binding_and_token_overrides(self):
+        _, lease = self.acquire("A", "attempt-A")
+        self.assertEqual(200, self.acquire("C", "attempt-C")[0])
+        base = self.payload("A", lease["token"], action="type", text="private input")
+        self.assertEqual(400, self.call("/v1/input", {
+            key: value for key, value in base.items() if key != "action_id"})[0])
+        self.assertEqual(401, self.call("/v1/input", base, credential=False)[0])
+        self.assertEqual(403, self.call("/v1/input", {**base, "token": secrets.token_hex(32)})[0])
+        self.assertEqual(403, self.call("/v1/input", {**base, "channel_id": "channel-C"})[0])
+        for wrong in ({**base, "vm_id": "fake"}, {**base, "project_path": self.temp.name},
+                      {**base, "text": "x" * 2001}, {**base, "text": "bad\x00text"},
+                      {**base, "action": "key", "key": "secret-key"},
+                      self.payload("A", lease["token"], action="click", x=-1, y=1)):
+            status, response = self.call("/v1/input", wrong)
+            self.assertEqual(400, status)
+            self.assertNotIn("private input", json.dumps(response))
+        self.assertEqual([], self.events)
+
+    def test_claim_input_and_release_fail_closed_without_raw_diagnostics(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="type", text="private input")
+        self.claim_failure = True
+        self.assertEqual((503, {"ok": False, "error": "guest_unavailable"}),
+                         self.call("/v1/input", body))
+        self.assertFalse(any(event[1] == "input" for event in self.events))
+        with closing(sqlite3.connect(self.root / "leases.db")) as db:
+            self.assertEqual(0, db.execute(
+                "SELECT COUNT(*) FROM guest_input_attempts").fetchone()[0])
+            self.assertEqual(0, db.execute(
+                "SELECT COUNT(*) FROM guest_dirty").fetchone()[0])
+        self.claim_failure = False
+        self.events.clear()
+        self.assertEqual((200, {"ok": True, "action": "type"}),
+                         self.call("/v1/input", body))
+        self.assertEqual(1, sum(event[1] == "input" for event in self.events))
+        self.assertEqual(200, self.call("/v1/ack", {
+            "channel_id": "channel-A", "token": lease["token"],
+            "action_id": "action-1"})[0])
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        self.assertEqual(200, self.acquire("A", "after-claim-failure")[0])
+
+    def test_paused_preflight_has_no_attempt_or_dirty_and_can_recover(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="key", key="Return")
+        self.guest_mode = "paused"
+        self.assertEqual((503, {"ok": False, "error": "guest_unavailable"}),
+                         self.call("/v1/input", body))
+        self.assertFalse(any(event[1] in ("claim", "input") for event in self.events))
+        with closing(sqlite3.connect(self.root / "leases.db")) as db:
+            self.assertEqual(0, db.execute(
+                "SELECT COUNT(*) FROM guest_input_attempts").fetchone()[0])
+            self.assertEqual(0, db.execute(
+                "SELECT COUNT(*) FROM guest_dirty").fetchone()[0])
+        self.guest_mode = "agent"
+        self.assertEqual((200, {"ok": True, "action": "key"}),
+                         self.call("/v1/input", body))
+
+    def test_slow_guest_claim_cannot_input_after_local_lease_expires(self):
+        now = [1000.0]
+        self.broker.store.clock = lambda: now[0]
+        _, lease = self.acquire("A", "slow-claim")
+        self.after_claim = lambda: now.__setitem__(0, lease["expires_at"] + 1)
+        body = self.payload("A", lease["token"], action="key", key="Return")
+        self.assertEqual((410, {"ok": False, "error": "lease_expired"}),
+                         self.call("/v1/input", body))
+        self.assertFalse(any(event[1] == "input" for event in self.events))
+        self.assertIn(("A", "release"), self.events)
+        with closing(sqlite3.connect(self.root / "leases.db")) as db:
+            self.assertEqual(0, db.execute(
+                "SELECT COUNT(*) FROM guest_input_attempts").fetchone()[0])
+            self.assertEqual(0, db.execute(
+                "SELECT COUNT(*) FROM guest_dirty").fetchone()[0])
+        self.assertEqual(200, self.acquire("A", "after-slow-claim")[0])
+
+    def test_expiry_after_attempt_record_does_not_send_input(self):
+        now = [1000.0]
+        self.broker.store.clock = lambda: now[0]
+        _, lease = self.acquire("A", "slow-record")
+        original = self.broker._begin_input_attempt
+        def delayed(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if result == "new":
+                now[0] = lease["expires_at"] + 1
+            return result
+        self.broker._begin_input_attempt = delayed
+        self.addCleanup(setattr, self.broker, "_begin_input_attempt", original)
+        body = self.payload("A", lease["token"], action="key", key="Return")
+        self.assertEqual((410, {"ok": False, "error": "lease_expired"}),
+                         self.call("/v1/input", body))
+        self.assertFalse(any(event[1] == "input" for event in self.events))
+        self.assertEqual((409, {"ok": False, "error": "guest_dirty"}),
+                         self.acquire("A", "after-slow-record"))
+
+    def test_input_failure_and_release_uncertain_keep_dirty(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="type", text="private input")
+        self.input_failure = True
+        self.assertEqual((502, {"ok": False, "error": "input_failed"}),
+                         self.call("/v1/input", body))
+        self.assertEqual(409, self.call("/v1/ack", {
+            "channel_id": "channel-A", "token": lease["token"],
+            "action_id": "action-1"})[0])
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        self.assertEqual((409, {"ok": False, "error": "guest_dirty"}),
+                         self.acquire("A", "new-A"))
+
+    def test_guest_release_failure_keeps_dirty(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="key", key="Return")
+        self.release_failure = True
+        self.assertEqual((503, {"ok": False, "error": "guest_release_uncertain"}),
+                         self.call("/v1/input", body))
+        self.release_failure = False
+        self.assertEqual((409, {"ok": False, "error": "already_attempted"}),
+                         self.call("/v1/input", body))
+        self.assertEqual(409, self.call("/v1/ack", {
+            "channel_id": "channel-A", "token": lease["token"],
+            "action_id": "action-1"})[0])
+
+    def test_same_channel_input_serializes_release_and_other_guest_runs(self):
+        _, first = self.acquire("A", "attempt-A")
+        _, other = self.acquire("C", "attempt-C")
+        self.hold_a = True
+        first_body = self.payload("A", first["token"], action="move", x=2, y=3)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            running = pool.submit(self.call, "/v1/input", first_body)
+            self.assertTrue(self.started_a.wait(2))
+            same = pool.submit(self.call, "/v1/input", {
+                **first_body, "action_id": "action-2"})
+            self.assertFalse(same.done())
+            began = time.monotonic()
+            status, _ = self.call("/v1/input", self.payload(
+                "C", other["token"], action="key", key="Return"))
+            self.assertEqual(200, status)
+            self.assertLess(time.monotonic() - began, 1.5)
+            self.resume_a.set()
+            self.assertEqual(200, running.result(timeout=5)[0])
+            self.assertEqual((409, {"ok": False, "error": "ack_required"}),
+                             same.result(timeout=5))
+        self.assertEqual((200, {"ok": True, "action_id": "action-1"}),
+                         self.call("/v1/ack", self.payload("A", first["token"],
+                                                           action_id="action-1")))
+        self.assertEqual(200, self.call("/v1/input", {
+            **first_body, "action_id": "action-2"})[0])
+        self.assertEqual(200, self.call("/v1/ack", self.payload(
+            "A", first["token"], action_id="action-2"))[0])
+        a_events = [event[1] for event in self.events if event[0] == "A"]
+        self.assertEqual(["init", "claim", "input", "release",
+                          "init", "claim", "input", "release"], a_events)
+        self.assertEqual(200, self.call("/v1/release",
+                                        self.payload("A", first["token"]))[0])
+
+    def test_guest_binding_validation_and_owner_limit(self):
+        self.assertEqual(400, self.acquire("A", "owner:invalid")[0])
+        self.assertEqual(400, self.acquire("A", "x" * 65)[0])
+        config = json.loads(self.config_path.read_text(encoding="utf-8"))
+        config["channels"][0]["guest"]["broker_token_file"] = str(self.root / "channel-A.token")
+        self.config_path.write_text(json.dumps(config), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "token files must differ"):
+            Broker(config_path=self.config_path, credential_path=self.root / "broker.token",
+                   db_path=self.root / "other.db")
+        config["channels"][0]["guest"]["broker_token_file"] = str(self.root / "broker.token")
+        self.config_path.write_text(json.dumps(config), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "local bearer credential"):
+            Broker(config_path=self.config_path, credential_path=self.root / "broker.token",
+                   db_path=self.root / "other.db")
+
+    def test_equal_guest_tokens_and_verified_identity_failure_fail_closed(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="key", key="Return")
+        channel_secret = (self.root / "channel-A.token").read_text(encoding="ascii")
+        broker_secret = (self.root / "guest-broker-A.token").read_text(encoding="ascii")
+        (self.root / "guest-broker-A.token").write_text(channel_secret, encoding="ascii")
+        with self.assertRaisesRegex(RuntimeError, "channel and broker credentials must differ"):
+            Broker(config_path=self.config_path,
+                   credential_path=self.root / "broker.token",
+                   db_path=self.root / "leases.db")
+        self.assertEqual([], self.events)
+        (self.root / "guest-broker-A.token").write_text(broker_secret, encoding="ascii")
+        self.claim_failure = True
+        status, response = self.call("/v1/input", {**body, "action_id": "action-2"})
+        self.assertEqual(503, status)
+        self.assertEqual({"ok": False, "error": "guest_unavailable"}, response)
+        self.assertFalse(any(event[1] == "input" for event in self.events))
+
+    def test_action_id_replays_success_and_rejects_changed_fields_after_restart(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="type", text="private input")
+        # Model a lost HTTP response: the first action completed, then the caller
+        # sends the exact same request without seeing that response.
+        self.call("/v1/input", body)
+        self.assertEqual((200, {"ok": True, "action": "type"}),
+                         self.call("/v1/input", body))
+        self.assertEqual(1, sum(event[1] == "input" for event in self.events))
+        self.assertEqual({"ok": True, "action": "type"}, self.restart_input(body))
+        self.assertEqual({"ok": False, "error": "action_conflict"},
+                         self.restart_input({**body, "text": "changed"}))
+        self.assertEqual(1, sum(event[1] == "input" for event in self.events))
+        with closing(sqlite3.connect(self.root / "leases.db")) as db:
+            row = db.execute("""SELECT channel_id, request_id, action_id,
+                fingerprint, status FROM guest_input_attempts""").fetchone()
+        self.assertEqual(("channel-A", "attempt-A", "action-1"), row[:3])
+        self.assertEqual("success", row[4])
+        self.assertEqual(64, len(row[3]))
+        self.assertNotIn("private input", str(row))
+        self.assertNotIn(lease["token"], str(row))
+
+    def test_uncertain_tombstone_blocks_retry_after_restart(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="click", x=1, y=2)
+        active = self.broker.store.current("channel-A")
+        channel = self.broker.channels["channel-A"]
+        fingerprint = self.broker._attempt_fingerprint(channel, active, "click",
+                                                        {"x": 1, "y": 2})
+        self.assertEqual("new", self.broker._begin_input_attempt(
+            "channel-A", "guest-A", "attempt-A", "action-1", fingerprint))
+        self.assertEqual({"ok": False, "error": "already_attempted"},
+                         self.restart_input(body))
+        self.assertEqual([], self.events)
+        self.assertEqual((409, {"ok": False, "error": "already_attempted"}),
+                         self.call("/v1/input", body))
+
+    def test_error_retry_never_resends_input(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="type", text="private input")
+        self.input_failure = True
+        self.assertEqual(502, self.call("/v1/input", body)[0])
+        self.input_failure = False
+        self.assertEqual((409, {"ok": False, "error": "already_attempted"}),
+                         self.call("/v1/input", body))
+        self.assertEqual(1, sum(event[1] == "input" for event in self.events))
+
+    def test_ack_idempotent_then_release_unlocks_endpoint(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="key", key="Return")
+        self.assertEqual(200, self.call("/v1/input", body)[0])
+        ack = {"channel_id": "channel-A", "token": lease["token"],
+               "action_id": "action-1"}
+        self.assertEqual(403, self.call("/v1/ack", {
+            **ack, "token": secrets.token_hex(32)})[0])
+        self.assertEqual(409, self.call("/v1/ack", {
+            **ack, "action_id": "missing"})[0])
+        self.assertEqual(400, self.call("/v1/ack", {
+            **ack, "request_id": "attempt-A"})[0])
+        self.assertEqual((200, {"ok": True, "action_id": "action-1"}),
+                         self.call("/v1/ack", ack))
+        self.assertEqual((200, {"ok": True, "action_id": "action-1"}),
+                         self.call("/v1/ack", ack))
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        self.assertEqual(200, self.acquire("A", "next-A")[0])
+        with closing(sqlite3.connect(self.root / "leases.db")) as db:
+            self.assertEqual(0, db.execute("SELECT COUNT(*) FROM guest_dirty").fetchone()[0])
+
+    def test_legacy_guest_attempt_schema_fails_closed(self):
+        _, lease = self.acquire("A", "attempt-A")
+        self.assertEqual(200, self.call("/v1/input", self.payload(
+            "A", lease["token"], action="key", key="Return"))[0])
+        with closing(sqlite3.connect(self.root / "leases.db")) as db:
+            db.execute("DROP TABLE guest_dirty")
+            db.commit()
+        with self.assertRaisesRegex(RuntimeError, "offline reconciliation"):
+            Broker(config_path=self.config_path,
+                   credential_path=self.root / "broker.token",
+                   db_path=self.root / "leases.db",
+                   guest_client_factory=self.broker.guest_client_factory)
+
+    def test_success_without_ack_release_and_expiry_remain_dirty(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="key", key="Return")
+        self.assertEqual(200, self.call("/v1/input", body)[0])
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        self.assertEqual((409, {"ok": False, "error": "guest_dirty"}),
+                         self.acquire("A", "next-A"))
+        self.assertEqual({"ok": False, "error": "guest_dirty"},
+                         self.restart_acquire("A", "process-A"))
+        self.assertEqual(410, self.call("/v1/ack", {
+            "channel_id": "channel-A", "token": lease["token"],
+            "action_id": "action-1"})[0])
+
+    def test_uncertain_attempt_blocks_alias_and_new_action_after_expiry(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="click", x=1, y=2)
+        self.input_failure = True
+        self.assertEqual(502, self.call("/v1/input", body)[0])
+        self.input_failure = False
+        config = json.loads(self.config_path.read_text(encoding="utf-8"))
+        alias_root = self.root / "project-B"
+        alias_root.mkdir()
+        alias = dict(config["channels"][0])
+        alias.update(channel_id="channel-B", project_id="project-B",
+                     project_path=str(alias_root))
+        config["channels"].append(alias)
+        self.config_path.write_text(json.dumps(config), encoding="utf-8")
+        alias_broker = Broker(config_path=self.config_path,
+                              credential_path=self.root / "broker.token",
+                              db_path=self.root / "leases.db",
+                              guest_client_factory=self.broker.guest_client_factory)
+        self.assertEqual({"ok": False, "error": "guest_dirty"},
+                         alias_broker.acquire({"channel_id": "channel-B",
+                                               "request_id": "alias-B", "task_id": "alias-B"}))
+        self.assertEqual((409, {"ok": False, "error": "ack_required"}),
+                         self.call("/v1/input", {**body, "action_id": "action-2"}))
+        self.broker.store.clock = lambda: lease["expires_at"] + 1
+        self.assertEqual((409, {"ok": False, "error": "guest_dirty"}),
+                         self.acquire("A", "expired-successor"))
+        self.assertEqual({"ok": False, "error": "guest_dirty"},
+                         self.restart_acquire("A", "process-expired",
+                                              now=lease["expires_at"] + 1))
+
+    def test_dirty_inserted_while_acquire_waits_is_checked_again(self):
+        _, lease = self.acquire("A", "attempt-A")
+        entered = threading.Event()
+        prechecked = threading.Event()
+        resume = threading.Event()
+        original = self.broker._begin_input_attempt
+        original_owner = self.broker._dirty_owner
+        def paused(*args, **kwargs):
+            if kwargs.get("record") is False:
+                return original(*args, **kwargs)
+            entered.set()
+            if not resume.wait(3):
+                raise TimeoutError("test pause expired")
+            return original(*args, **kwargs)
+        def probe(endpoint_id):
+            result = original_owner(endpoint_id)
+            if result is None:
+                prechecked.set()
+            return result
+        self.broker._begin_input_attempt = paused
+        self.broker._dirty_owner = probe
+        self.addCleanup(setattr, self.broker, "_begin_input_attempt", original)
+        self.addCleanup(setattr, self.broker, "_dirty_owner", original_owner)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            sending = pool.submit(self.call, "/v1/input", self.payload(
+                "A", lease["token"], action="key", key="Return"))
+            self.assertTrue(entered.wait(2))
+            self.broker.store.clock = lambda: lease["expires_at"] + 1
+            successor = pool.submit(self.acquire, "A", "racing-successor")
+            self.assertTrue(prechecked.wait(2))
+            resume.set()
+            self.assertEqual((410, {"ok": False, "error": "lease_expired"}),
+                             sending.result(timeout=5))
+            self.assertEqual((409, {"ok": False, "error": "guest_dirty"}),
+                             successor.result(timeout=5))
+
+    def test_guest_binding_drift_fails_closed(self):
+        _, lease = self.acquire("A", "attempt-A")
+        body = self.payload("A", lease["token"], action="key", key="Return")
+        token_path = self.root / "channel-A.token"
+        old_token = token_path.read_text(encoding="ascii")
+        token_path.write_text(secrets.token_hex(32), encoding="ascii")
+        self.assertEqual((503, {"ok": False, "error": "attempt_unavailable"}),
+                         self.call("/v1/input", body))
+        self.assertEqual([], self.events)
+        self.assertEqual(503, self.call("/v1/acquire", {
+            "request_id": "new-A", "task_id": "new-A", "channel_id": "channel-A"})[0])
+        token_path.write_text(old_token, encoding="ascii")
+        host = json.loads((self.root / "host.json").read_text(encoding="utf-8"))
+        host["projects"]["guest-a"]["vm_id"] = "33333333-3333-4333-8333-333333333333"
+        (self.root / "host.json").write_text(json.dumps(host), encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "registered guest binding changed"):
+            Broker(config_path=self.config_path,
+                   credential_path=self.root / "broker.token",
+                   db_path=self.root / "leases.db",
+                   guest_client_factory=self.broker.guest_client_factory)
+
+
+if __name__ == "__main__":
+    unittest.main()

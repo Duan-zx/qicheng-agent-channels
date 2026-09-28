@@ -32,15 +32,20 @@ $allowlist = @(
     @{ source=(Join-Path $windowsRoot 'host\__init__.py'); destination='host\__init__.py'; kind='source-runtime' },
     @{ source=(Join-Path $windowsRoot 'host\client.py'); destination='host\client.py'; kind='source-runtime' },
     @{ source=(Join-Path $windowsRoot 'host\mcp.py'); destination='host\mcp.py'; kind='source-runtime' },
+    @{ source=(Join-Path $windowsRoot 'host\broker_client.py'); destination='host\broker_client.py'; kind='source-runtime' },
+    @{ source=(Join-Path $windowsRoot 'host\lease_client.py'); destination='host\lease_client.py'; kind='source-runtime' },
     @{ source=$viewerExe; destination='viewer\dist\WindowsChannelsViewer.exe'; kind='built-executable' },
     @{ source=(Join-Path $windowsRoot 'host\__init__.py'); destination='source\host\__init__.py'; kind='source' },
     @{ source=(Join-Path $windowsRoot 'host\client.py'); destination='source\host\client.py'; kind='source' },
     @{ source=(Join-Path $windowsRoot 'host\mcp.py'); destination='source\host\mcp.py'; kind='source' },
+    @{ source=(Join-Path $windowsRoot 'host\broker_client.py'); destination='source\host\broker_client.py'; kind='source' },
+    @{ source=(Join-Path $windowsRoot 'host\lease_client.py'); destination='source\host\lease_client.py'; kind='source' },
     @{ source=(Join-Path $windowsRoot 'host\README.md'); destination='source\host\README.md'; kind='documentation' },
     @{ source=(Join-Path $windowsRoot 'guest\__init__.py'); destination='source\guest\__init__.py'; kind='source' },
     @{ source=(Join-Path $windowsRoot 'guest\agent.py'); destination='source\guest\agent.py'; kind='source' },
     @{ source=(Join-Path $windowsRoot 'guest\protocol.py'); destination='source\guest\protocol.py'; kind='source' },
     @{ source=(Join-Path $windowsRoot 'guest\windows.py'); destination='source\guest\windows.py'; kind='source' },
+    @{ source=(Join-Path $windowsRoot 'guest\wechat_cli.py'); destination='source\guest\wechat_cli.py'; kind='source' },
     @{ source=(Join-Path $windowsRoot 'guest\README.md'); destination='source\guest\README.md'; kind='documentation' },
     @{ source=(Join-Path $windowsRoot 'viewer\Viewer.cs'); destination='source\viewer\Viewer.cs'; kind='source' },
     @{ source=(Join-Path $windowsRoot 'viewer\Build.ps1'); destination='source\viewer\Build.ps1'; kind='build-script' },
@@ -54,17 +59,24 @@ $allowlist = @(
     @{ source=(Join-Path $windowsRoot 'New-ChannelVMs.ps1'); destination='source\New-ChannelVMs.ps1'; kind='deployment-script' },
     @{ source=(Join-Path $windowsRoot 'Register-HostService.ps1'); destination='source\Register-HostService.ps1'; kind='deployment-script' },
     @{ source=(Join-Path $windowsRoot 'Build-GuestPayload.ps1'); destination='source\Build-GuestPayload.ps1'; kind='deployment-script' },
+    @{ source=(Join-Path $windowsRoot 'Stage-GuestPayloadDirect.ps1'); destination='source\Stage-GuestPayloadDirect.ps1'; kind='deployment-script' },
+    @{ source=(Join-Path $windowsRoot 'Switch-GuestPayloadDirect.ps1'); destination='source\Switch-GuestPayloadDirect.ps1'; kind='deployment-script' },
     @{ source=(Join-Path $windowsRoot 'Install-GuestPayloadDirect.ps1'); destination='source\Install-GuestPayloadDirect.ps1'; kind='deployment-script' },
     @{ source=(Join-Path $windowsRoot 'Enable-GuestAutologonDirect.ps1'); destination='source\Enable-GuestAutologonDirect.ps1'; kind='deployment-script' },
     @{ source=(Join-Path $windowsRoot 'tests\test_contract.py'); destination='source\tests\test_contract.py'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\test_guest_agent.py'); destination='source\tests\test_guest_agent.py'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\test_guest_protocol.py'); destination='source\tests\test_guest_protocol.py'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\test_guest_windows.py'); destination='source\tests\test_guest_windows.py'; kind='test-source' },
+    @{ source=(Join-Path $windowsRoot 'tests\test_guest_lease.py'); destination='source\tests\test_guest_lease.py'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\test_host.py'); destination='source\tests\test_host.py'; kind='test-source' },
+    @{ source=(Join-Path $windowsRoot 'tests\test_host_lease.py'); destination='source\tests\test_host_lease.py'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\test_host_mcp.py'); destination='source\tests\test_host_mcp.py'; kind='test-source' },
+    @{ source=(Join-Path $windowsRoot 'tests\test_broker_client.py'); destination='source\tests\test_broker_client.py'; kind='test-source' },
+    @{ source=(Join-Path $windowsRoot 'tests\test_wechat_cli.py'); destination='source\tests\test_wechat_cli.py'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\Test-PlanSafety.ps1'); destination='source\tests\Test-PlanSafety.ps1'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\Test-ProvisionSafety.ps1'); destination='source\tests\Test-ProvisionSafety.ps1'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\PayloadSafety.Tests.ps1'); destination='source\tests\PayloadSafety.Tests.ps1'; kind='test-source' },
+    @{ source=(Join-Path $windowsRoot 'tests\ThreeCredentialPayload.Tests.ps1'); destination='source\tests\ThreeCredentialPayload.Tests.ps1'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\InstallGuestPayloadDirect.Tests.ps1'); destination='source\tests\InstallGuestPayloadDirect.Tests.ps1'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\AutologonDirect.Tests.ps1'); destination='source\tests\AutologonDirect.Tests.ps1'; kind='test-source' },
     @{ source=(Join-Path $windowsRoot 'tests\HostServiceSafety.Tests.ps1'); destination='source\tests\HostServiceSafety.Tests.ps1'; kind='test-source' },
@@ -122,9 +134,21 @@ foreach ($entry in $allowlist) {
 }
 Remove-Item -LiteralPath $privateBuild -Recurse -Force
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $windowsRoot '..\..'))
-$commit = (& git -C $repoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
-$trackedStatus = (& git -C $repoRoot status --porcelain -- tools/windows-channels/host tools/windows-channels/viewer tools/windows-channels/product 2>$null)
-$sourceManifest = [ordered]@{ schemaVersion=1; version=$Version; repositoryCommit=$commit; selectedSourceDirty=[bool]$trackedStatus; policy='Explicit source allowlist; no discovery of machine-local or private files.'; exclusions=@('tokens','accounts','VM disks','ISO files','.local','project memory','Git history','logs'); files=@($files | Where-Object { $_.kind -ne 'built-executable' }) }
+$commit = $null
+$selectedSourcePaths = @($allowlist | Where-Object { $_.kind -ne 'built-executable' } | ForEach-Object {
+    $sourcePath = [System.IO.Path]::GetFullPath($_.source)
+    if ($sourcePath.StartsWith($repoRoot + '\',[StringComparison]::OrdinalIgnoreCase)) {
+        $sourcePath.Substring($repoRoot.Length + 1).Replace('\','/')
+    }
+} | Sort-Object -Unique)
+$selectedSourceStatus = $null
+# A public-source export intentionally has no .git. Do not invoke git there:
+# Windows PowerShell 5.1 surfaces its stderr as a terminating error.
+if ((Test-Path -LiteralPath (Join-Path $repoRoot '.git')) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+    $commit = (& git -C $repoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+    $selectedSourceStatus = (& git -C $repoRoot status --porcelain -- $selectedSourcePaths 2>$null)
+}
+$sourceManifest = [ordered]@{ schemaVersion=1; version=$Version; repositoryCommit=$commit; selectedSourceDirty=[bool]$selectedSourceStatus; policy='Explicit source allowlist; no discovery of machine-local or private files.'; exclusions=@('tokens','accounts','VM disks','ISO files','.local','project memory','Git history','logs'); files=@($files | Where-Object { $_.kind -ne 'built-executable' }) }
 $sourceManifest | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $output 'SOURCE-MANIFEST.json') -Encoding UTF8
 $sourceItem = Get-Item -LiteralPath (Join-Path $output 'SOURCE-MANIFEST.json')
 $files += [ordered]@{ path='SOURCE-MANIFEST.json'; kind='manifest'; bytes=$sourceItem.Length; sha256=(Get-FileHash -LiteralPath $sourceItem.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -133,4 +157,4 @@ $packageManifest | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path
 $zip = $output.TrimEnd('\') + '.zip'
 if (Test-Path -LiteralPath $zip) { throw "Archive already exists: $zip" }
 Compress-Archive -LiteralPath $output -DestinationPath $zip -CompressionLevel Optimal
-[ordered]@{ schemaVersion=1; status='built'; version=$Version; packageDirectory=$output; archive=$zip; fileCount=$files.Count; manifestSha256=(Get-FileHash -LiteralPath (Join-Path $output 'package-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant(); sourceDirty=[bool]$trackedStatus } | ConvertTo-Json -Depth 4
+[ordered]@{ schemaVersion=1; status='built'; version=$Version; packageDirectory=$output; archive=$zip; fileCount=$files.Count; manifestSha256=(Get-FileHash -LiteralPath (Join-Path $output 'package-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant(); sourceDirty=[bool]$selectedSourceStatus } | ConvertTo-Json -Depth 4

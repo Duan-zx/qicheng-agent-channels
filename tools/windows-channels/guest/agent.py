@@ -73,6 +73,10 @@ def build_parser():
     parser = argparse.ArgumentParser(description="Experimental Hyper-V Windows guest control agent")
     parser.add_argument("--expected-bios-uuid", required=True)
     parser.add_argument("--token-file", required=True)
+    parser.add_argument("--broker-token-file",
+                        help="Enable broker-owned guest input leases with a distinct token")
+    parser.add_argument("--human-token-file",
+                        help="Required with broker leases for local control and human input")
     return parser
 
 
@@ -84,8 +88,15 @@ def main(argv=None):
         raise RuntimeError("This agent only runs inside a verified Windows guest")
     identity = verify_this_guest(args.expected_bios_uuid)
     token = load_token(args.token_file)
+    if bool(args.broker_token_file) != bool(args.human_token_file):
+        raise RuntimeError("Broker leases require distinct broker and human token files")
+    broker_token = load_token(args.broker_token_file) if args.broker_token_file else None
+    human_token = load_token(args.human_token_file) if args.human_token_file else None
+    if broker_token is not None and len({token, broker_token, human_token}) != 3:
+        raise RuntimeError("Channel, broker, and human tokens must differ")
     backend = Win32Desktop()
-    channel = GuestChannel(backend, identity)
+    channel = GuestChannel(backend, identity, broker_token=broker_token,
+                           human_token=human_token)
     listener = create_hyperv_listener()
     with listener:
         serve(listener, token, channel)

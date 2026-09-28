@@ -30,6 +30,33 @@ class McpTests(unittest.TestCase):
         result = self.bridge.tool('windows_channel_screenshot', {})
         self.assertEqual(result['content'][0]['type'], 'image')
 
+    def test_broker_three_tools_explicit_session_and_no_guest_input(self):
+        broker = Mock()
+        broker.begin.return_value = {'session': 'active'}
+        broker.input.return_value = {'ok': True}
+        broker.finish.return_value = {'session': 'finished'}
+        bridge = Bridge(self.client, broker)
+        tools = bridge.handle(dict(id=1, method='tools/list'))['result']['tools']
+        self.assertEqual([tool['name'] for tool in tools],
+                         ['windows_channel_state', 'windows_channel_screenshot',
+                          'windows_channel_input'])
+        self.assertIn('begin', tools[2]['inputSchema']['properties']['action']['enum'])
+        bridge.tool('windows_channel_input', {'action': 'begin'})
+        bridge.tool('windows_channel_input', {'action': 'key', 'key': 'Return'})
+        bridge.tool('windows_channel_input', {'action': 'finish'})
+        broker.begin.assert_called_once_with()
+        broker.input.assert_called_once_with('key', key='Return')
+        broker.finish.assert_called_once_with()
+        self.client.operation.assert_not_called()
+
+    def test_broker_screenshot_is_direct_read_only_unprotected(self):
+        bridge = Bridge(self.client, Mock())
+        self.client.operation.return_value = {'mime_type': 'image/png', 'data': 'cG5n'}
+        self.assertEqual('image', bridge.tool('windows_channel_screenshot', {})['content'][0]['type'])
+        self.client.operation.assert_called_once_with('screenshot')
+        instructions = bridge.handle({'id': 1, 'method': 'initialize'})['result']['instructions']
+        self.assertIn('not atomically protected', instructions)
+
     def test_bounded_binary_read_and_eof(self):
         stream = io.BytesIO(b'{"id":1}\n{"id":2}\n')
         self.assertEqual(read_request(stream), {'id': 1})

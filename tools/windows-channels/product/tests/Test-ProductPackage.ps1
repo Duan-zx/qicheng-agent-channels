@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([switch]$SkipPublicExportRoundTrip,[switch]$RunHotkeyIntegration)
 
 $ErrorActionPreference = 'Stop'
@@ -6,6 +6,17 @@ $productRoot = Split-Path -Parent $PSScriptRoot
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('qicheng-product-test-' + [guid]::NewGuid().ToString('N'))
 $packageRoot = Join-Path $temporaryRoot 'package'
 function Assert-True([bool]$Condition,[string]$Message) { if (-not $Condition) { throw $Message } }
+function Protect-ImportToken([string]$Path) {
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleAll($rule) }
+    foreach ($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18')) {
+        $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'Allow')
+        [void]$acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
 try {
     New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
     $buildJson = & (Join-Path $productRoot 'Build-Package.ps1') -OutputDirectory $packageRoot -Version '0.1.0-test' | Out-String
@@ -15,7 +26,7 @@ try {
     $manifest = Get-Content -LiteralPath (Join-Path $packageRoot 'package-manifest.json') -Raw | ConvertFrom-Json
     $themeSourceRoot = Join-Path (Split-Path -Parent $productRoot) 'theme'
     $themeSourceCount = @(@('ai-space.png','ai-space-v2.png','Set-WorkspaceTheme.ps1','README.md') | Where-Object { Test-Path -LiteralPath (Join-Path $themeSourceRoot $_) -PathType Leaf }).Count
-    $expectedPackageFiles = 69 + (2 * $themeSourceCount)
+    $expectedPackageFiles = 81 + (2 * $themeSourceCount)
     Assert-True ($manifest.files.Count -eq $expectedPackageFiles) 'Unexpected package allowlist count.'
     $paths = @($manifest.files.path)
     Assert-True ($paths -contains 'LICENSE' -and $paths -contains 'source/LICENSE') 'Apache LICENSE is missing from the install or source package.'
@@ -25,9 +36,16 @@ try {
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $packageRoot 'source\LICENSE') -Algorithm SHA256).Hash -eq $licenseHash) 'Source package LICENSE differs from the module Apache LICENSE.'
     Assert-True ($paths -contains 'viewer/dist/WindowsChannelsViewer.exe') 'Built viewer is not packaged in its required relative layout.'
     Assert-True ($paths -contains 'host/mcp.py') 'Runtime MCP source is not packaged.'
+    Assert-True ($paths -contains 'host/lease_client.py' -and $paths -contains 'source/host/lease_client.py') 'Lease client is missing from runtime or reproducible source.'
+    Assert-True ($paths -contains 'host/broker_client.py' -and $paths -contains 'source/host/broker_client.py') 'Broker MCP client is missing from runtime or reproducible source.'
     Assert-True ($paths -contains 'source/guest/agent.py') 'Guest source is not packaged for public reproduction.'
+    Assert-True ($paths -contains 'source/guest/wechat_cli.py') 'Guest WeChat CLI source is not packaged.'
     Assert-True ($paths -contains 'source/New-ChannelVMs.ps1') 'VM preparation source is not packaged.'
     Assert-True ($paths -contains 'source/tests/test_host_mcp.py') 'Source tests are not packaged.'
+    foreach ($testName in @('test_guest_lease.py','test_host_lease.py','test_wechat_cli.py','test_broker_client.py')) {
+        Assert-True ($paths -contains ('source/tests/' + $testName)) "Lease or WeChat CLI source test is not packaged: $testName"
+    }
+    Assert-True ($paths -contains 'source/Stage-GuestPayloadDirect.ps1' -and $paths -contains 'source/Switch-GuestPayloadDirect.ps1' -and $paths -contains 'source/tests/ThreeCredentialPayload.Tests.ps1') 'Three-credential stage source or tests are missing.'
     Assert-True ($paths -contains 'source/tests/HostServiceSafety.Tests.ps1') 'Host service safety tests are not packaged.'
     Assert-True ($paths -contains 'source/product/Build-Package.ps1') 'Product package builder is not included in source distribution.'
     Assert-True ($paths -contains 'source/product/tests/Test-ProductPackage.ps1') 'Product package tests are not included in source distribution.'
@@ -38,6 +56,7 @@ try {
         }
     }
     Assert-True (-not ($paths -match '(?i)token|\.local|\.vhdx|\.iso|project-memory|\.git')) 'Sensitive or machine-local path entered the package.'
+    Assert-True (-not ($paths -match '(?i)Install-GuestPayloadOffline|evidence/|docs/pm/')) 'Unreviewed candidate or project memory entered the package.'
     foreach ($entry in $manifest.files) {
         $file = Join-Path $packageRoot ([string]$entry.path)
         Assert-True (Test-Path -LiteralPath $file -PathType Leaf) "Manifest file missing: $($entry.path)"
@@ -52,6 +71,8 @@ try {
     New-Item -ItemType Directory -Path $importRoot | Out-Null
     Set-Content -LiteralPath (Join-Path $importRoot 'original-1.token') -Value ('a' * 64) -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $importRoot 'original-2.token') -Value ('b' * 64) -Encoding ASCII
+    Protect-ImportToken (Join-Path $importRoot 'original-1.token')
+    Protect-ImportToken (Join-Path $importRoot 'original-2.token')
     $fixtureConfig = [ordered]@{ schema_version=1; projects=[ordered]@{
         'channel-1'=[ordered]@{ vm_id='11111111-2222-4333-8444-555555555555'; bios_uuid='21111111-2222-4333-8444-555555555555'; token_file='original-1.token'; vm_name='qicheng-win-1' }
         'channel-2'=[ordered]@{ vm_id='31111111-2222-4333-8444-555555555555'; bios_uuid='41111111-2222-4333-8444-555555555555'; token_file='original-2.token'; vm_name='qicheng-win-2' }
@@ -106,6 +127,68 @@ try {
     Assert-True ($installedConfig.projects.'channel-1'.token_file -eq 'tokens/channel-1.token') 'Imported token path was not normalized beneath DataRoot.'
     Assert-True ((Get-Content -LiteralPath (Join-Path $dataRoot 'tokens\channel-1.token') -Raw).Trim() -eq ('a' * 64)) 'Imported token value was not preserved.'
     Assert-True ($applyJson -notmatch ('a' * 64) -and $applyJson -notmatch ('b' * 64)) 'Installer output exposed a token value.'
+    Assert-True (-not ($installedConfig.projects.'channel-1'.PSObject.Properties.Name -contains 'human_token_file')) 'Legacy single-token config unexpectedly gained a human token.'
+    $humanImportRoot = Join-Path $temporaryRoot 'private-human-import'
+    New-Item -ItemType Directory -Path $humanImportRoot | Out-Null
+    $humanChannelSource = Join-Path $humanImportRoot 'channel.token'
+    $humanSource = Join-Path $humanImportRoot 'human.token'
+    Set-Content -LiteralPath $humanChannelSource -Value ('c' * 64) -Encoding ASCII
+    Set-Content -LiteralPath $humanSource -Value ('d' * 64) -Encoding ASCII
+    Protect-ImportToken $humanChannelSource
+    Protect-ImportToken $humanSource
+    $humanConfig = Join-Path $humanImportRoot 'channels.json'
+    [ordered]@{ schema_version=1; projects=[ordered]@{
+        'human-channel'=[ordered]@{ vm_id='51111111-2222-4333-8444-555555555555'; bios_uuid='61111111-2222-4333-8444-555555555555'; token_file='channel.token'; human_token_file='human.token' }
+    } } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $humanConfig -Encoding UTF8
+    $humanDataRoot = Join-Path $temporaryRoot 'human-data'
+    $humanOut = Join-Path $temporaryRoot 'winps-human-import.json'
+    $humanErr = Join-Path $temporaryRoot 'winps-human-import.err'
+    $humanArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -ConfigPath "{1}" -DataRoot "{2}"' -f (Join-Path $installRoot 'Import-WindowsChannelsConfig.ps1'),$humanConfig,$humanDataRoot
+    $humanProcess = Start-Process -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source -ArgumentList $humanArgs -RedirectStandardOutput $humanOut -RedirectStandardError $humanErr -Wait -PassThru
+    $humanErrorText = if (Test-Path -LiteralPath $humanErr) { Get-Content -LiteralPath $humanErr -Raw } else { '' }
+    Assert-True ($humanProcess.ExitCode -eq 0) ("Windows PowerShell 5.1 three-credential import failed: " + $humanErrorText)
+    $humanResultText = Get-Content -LiteralPath $humanOut -Raw
+    $humanResult = $humanResultText | ConvertFrom-Json
+    Assert-True ($humanResult.status -eq 'imported' -and @($humanResult.projects).Count -eq 1) 'Three-credential import result is invalid.'
+    $humanInstalled = Get-Content -LiteralPath (Join-Path $humanDataRoot 'channels.json') -Raw | ConvertFrom-Json
+    Assert-True ($humanInstalled.projects.'human-channel'.token_file -eq 'tokens/human-channel.token') 'Three-credential channel path was not normalized.'
+    Assert-True ($humanInstalled.projects.'human-channel'.human_token_file -eq 'tokens/human-channel.human.token') 'Human token path was discarded during import.'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $humanDataRoot 'tokens\human-channel.human.token') -Raw) -eq ('d' * 64)) 'Human token value was not preserved.'
+    Assert-True ($humanResultText -notmatch ('c' * 64) -and $humanResultText -notmatch ('d' * 64)) 'Human import output exposed a token value.'
+    foreach ($tokenPath in @((Join-Path $humanDataRoot 'tokens\human-channel.token'),(Join-Path $humanDataRoot 'tokens\human-channel.human.token'))) {
+        $tokenAcl = Get-Acl -LiteralPath $tokenPath
+        Assert-True $tokenAcl.AreAccessRulesProtected 'Imported token file ACL is not protected.'
+        foreach ($rule in $tokenAcl.Access) {
+            if ($rule.AccessControlType -eq 'Allow') {
+                $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+                Assert-True (@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18') -contains $sid) 'Imported token grants access to another identity.'
+            }
+        }
+    }
+    . (Join-Path $productRoot 'runtime\Product.Common.ps1')
+    Remove-Item -LiteralPath $humanSource
+    $missingRejected = $false
+    try { Get-QichengConfigImportMaterial -ConfigPath $humanConfig | Out-Null } catch { $missingRejected = $true }
+    Assert-True $missingRejected 'Missing human token was accepted.'
+    Set-Content -LiteralPath $humanSource -Value ('d' * 64) -Encoding ASCII
+    $weakRejected = $false
+    try { Get-QichengConfigImportMaterial -ConfigPath $humanConfig | Out-Null } catch { $weakRejected = $true }
+    Assert-True $weakRejected 'Human token with inherited ACL was accepted.'
+    Protect-ImportToken $humanSource
+    Set-Content -LiteralPath $humanSource -Value ('z' * 64) -Encoding ASCII
+    $invalidRejected = $false
+    try { Get-QichengConfigImportMaterial -ConfigPath $humanConfig | Out-Null } catch { $invalidRejected = $true }
+    Assert-True $invalidRejected 'Invalid human token was accepted.'
+    Set-Content -LiteralPath $humanSource -Value ('c' * 64) -Encoding ASCII
+    $duplicateValueRejected = $false
+    try { Get-QichengConfigImportMaterial -ConfigPath $humanConfig | Out-Null } catch { $duplicateValueRejected = $true }
+    Assert-True $duplicateValueRejected 'Identical channel and human token values were accepted.'
+    $sharedPathConfig = Get-Content -LiteralPath $humanConfig -Raw | ConvertFrom-Json
+    $sharedPathConfig.projects.'human-channel'.human_token_file = 'channel.token'
+    $sharedPathConfig | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $humanConfig -Encoding UTF8
+    $duplicatePathRejected = $false
+    try { Get-QichengConfigImportMaterial -ConfigPath $humanConfig | Out-Null } catch { $duplicatePathRejected = $true }
+    Assert-True $duplicatePathRejected 'Shared channel and human token path was accepted.'
     $shell = New-Object -ComObject WScript.Shell
     function Read-Link([string]$Path) {
         Assert-True (Test-Path -LiteralPath $Path -PathType Leaf) "Shortcut is missing: $Path"
@@ -316,6 +399,13 @@ class FakeHotkeyViewer {
     $mcpProcess = Start-Process -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source -ArgumentList $mcpArguments -WorkingDirectory $temporaryRoot -RedirectStandardInput $emptyInput -RedirectStandardOutput $mcpStdout -RedirectStandardError $mcpStderr -Wait -PassThru
     $mcpErrorText = if (Test-Path -LiteralPath $mcpStderr) { Get-Content -LiteralPath $mcpStderr -Raw } else { '' }
     Assert-True ($mcpProcess.ExitCode -eq 0) ("Stable MCP launcher failed when invoked without a client cwd: " + $mcpErrorText)
+    $brokerTokenFile = Join-Path $temporaryRoot 'synthetic-broker.token'
+    [IO.File]::WriteAllText($brokerTokenFile, ('c' * 64), [Text.Encoding]::ASCII)
+    $brokerMcpArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Project channel-1 -PythonPath "{1}" -BrokerUrl "http://127.0.0.1:18770" -BrokerTokenFile "{2}" -BrokerChannelId "channel-1"' -f (Join-Path $installRoot 'Invoke-WindowsChannelsMcp.ps1'),$pythonPath,$brokerTokenFile
+    $brokerMcpStdout = Join-Path $temporaryRoot 'broker-mcp-stdout.txt'
+    $brokerMcpStderr = Join-Path $temporaryRoot 'broker-mcp-stderr.txt'
+    $brokerMcp = Start-Process -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source -ArgumentList $brokerMcpArgs -WorkingDirectory $temporaryRoot -RedirectStandardInput $emptyInput -RedirectStandardOutput $brokerMcpStdout -RedirectStandardError $brokerMcpStderr -Wait -PassThru
+    Assert-True ($brokerMcp.ExitCode -eq 0) 'Stable MCP launcher did not accept fixed broker options.'
     $fakeCodex = Join-Path $temporaryRoot 'fake-codex.cmd'
     $fakeList = Join-Path $temporaryRoot 'fake-codex-list.json'
     $fakeAddLog = Join-Path $temporaryRoot 'fake-codex-add.log'
@@ -340,6 +430,8 @@ class FakeHotkeyViewer {
         $codexPlanJson = & (Join-Path $installRoot 'Add-CodexMcp.ps1') -Name 'qicheng-channel-1' -Project 'channel-1' -PythonPath $pythonPath -CodexPath $fakeCodex | Out-String
         $codexPlan = $codexPlanJson | ConvertFrom-Json
         Assert-True ($codexPlan.status -eq 'not-added' -and -not $codexPlan.nativeToolsDiscovered -and $codexPlan.requiresClientReload) 'Empty fake Codex list did not produce a non-mutating add plan.'
+        $brokerCodexPlan = (& (Join-Path $installRoot 'Add-CodexMcp.ps1') -Name 'qicheng-channel-1-broker' -Project 'channel-1' -PythonPath $pythonPath -CodexPath $fakeCodex -BrokerUrl 'http://127.0.0.1:18770' -BrokerTokenFile $brokerTokenFile -BrokerChannelId 'channel-1' | Out-String) | ConvertFrom-Json
+        Assert-True ($brokerCodexPlan.status -eq 'not-added' -and $brokerCodexPlan.args -contains '-BrokerUrl' -and $brokerCodexPlan.args -contains '-BrokerChannelId') 'Optional broker Codex plan did not preserve fixed routing.'
         $codexApplyJson = & (Join-Path $installRoot 'Add-CodexMcp.ps1') -Name 'qicheng-channel-1' -Project 'channel-1' -PythonPath $pythonPath -CodexPath $fakeCodex -Apply -Confirm:$false | Out-String
         $codexApply = $codexApplyJson | ConvertFrom-Json
         Assert-True ($codexApply.status -eq 'codex-cli-config-added') 'Fake Codex add path did not report success.'
@@ -368,12 +460,13 @@ class FakeHotkeyViewer {
     Assert-True ($uninstallPlan.status -eq 'not-uninstalled' -and -not $uninstallPlan.removeUserData) 'Uninstall default does not preserve user data.'
     $sourceManifest = Get-Content -LiteralPath (Join-Path $packageRoot 'SOURCE-MANIFEST.json') -Raw | ConvertFrom-Json
     Assert-True ($sourceManifest.exclusions -contains 'tokens') 'Source manifest does not state token exclusion.'
+    Assert-True ($sourceManifest.selectedSourceDirty -eq $build.sourceDirty) 'Build status and source manifest disagree about selected source changes.'
     if (-not $SkipPublicExportRoundTrip) {
         $publicRoot = Join-Path $temporaryRoot 'public-source'
         New-Item -ItemType Directory -Path $publicRoot | Out-Null
         $exportJson = & (Join-Path $productRoot 'Export-PublicSource.ps1') -OutputDirectory $publicRoot | Out-String
         $export = $exportJson | ConvertFrom-Json
-        $expectedPublicFiles = 52 + $themeSourceCount
+        $expectedPublicFiles = 62 + $themeSourceCount
         Assert-True ($export.status -eq 'exported' -and $export.fileCount -eq $expectedPublicFiles) 'Public source export count or status is incorrect.'
         $publicModule = Join-Path $publicRoot 'tools\windows-channels'
         Assert-True (Test-Path -LiteralPath (Join-Path $publicRoot 'LICENSE') -PathType Leaf) 'Public repository LICENSE is missing.'
@@ -381,9 +474,14 @@ class FakeHotkeyViewer {
         Assert-True (Test-Path -LiteralPath (Join-Path $publicModule 'product\Build-Package.ps1') -PathType Leaf) 'Exported package builder is missing.'
         Assert-True (Test-Path -LiteralPath (Join-Path $publicModule 'product\tests\Test-ProductPackage.ps1') -PathType Leaf) 'Exported product tests are missing.'
         Assert-True (Test-Path -LiteralPath (Join-Path $publicModule 'tests\HostServiceSafety.Tests.ps1') -PathType Leaf) 'Exported HostService safety tests are missing.'
+        foreach ($relative in @('host\lease_client.py','host\broker_client.py','guest\wechat_cli.py','Stage-GuestPayloadDirect.ps1','Switch-GuestPayloadDirect.ps1','tests\test_guest_lease.py','tests\test_host_lease.py','tests\test_broker_client.py','tests\test_wechat_cli.py','tests\ThreeCredentialPayload.Tests.ps1')) {
+            Assert-True (Test-Path -LiteralPath (Join-Path $publicModule $relative) -PathType Leaf) "Exported source is missing: $relative"
+        }
         Assert-True ((Get-FileHash -LiteralPath (Join-Path $publicRoot 'LICENSE') -Algorithm SHA256).Hash -eq $licenseHash) 'Public repository LICENSE differs from the module Apache LICENSE.'
         Assert-True ((Get-FileHash -LiteralPath (Join-Path $publicModule 'LICENSE') -Algorithm SHA256).Hash -eq $licenseHash) 'Public module LICENSE differs from the reviewed Apache LICENSE.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicModule 'Install-GuestPayloadOffline.ps1'))) 'Offline candidate entered public source export.'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicModule 'evidence'))) 'Untracked evidence entered public source export.'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicModule 'docs\pm'))) 'Project memory entered public source export.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicModule '.local'))) 'Private .local data entered public source export.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicModule 'viewer\dist'))) 'Built viewer output entered public source export.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicRoot 'SOURCE-MANIFEST.json'))) 'Internal package source manifest entered public source export.'

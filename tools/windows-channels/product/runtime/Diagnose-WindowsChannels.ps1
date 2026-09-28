@@ -1,8 +1,9 @@
 [CmdletBinding()]
-param([string]$ConfigPath, [string]$PythonPath, [string]$InstallRoot = $PSScriptRoot)
+param([string]$ConfigPath, [string]$PythonPath, [string]$InstallRoot)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Product.Common.ps1')
+if ([string]::IsNullOrWhiteSpace($InstallRoot)) { $InstallRoot = $PSScriptRoot }
 $installRoot = Resolve-QichengLocalPath -Path $InstallRoot -Label 'InstallRoot'
 $record = Get-QichengInstallRecord -InstallRoot $installRoot
 $dataRoot = if ($record -and $record.dataRoot) { [string]$record.dataRoot } else { Get-QichengDefaultDataRoot }
@@ -42,7 +43,7 @@ if ($getVm -and $config) {
                     try {
                         Push-Location -LiteralPath $installRoot
                         try {
-                            $stateText = & $python -m host.client --config $config.Path --project $name state 2>$null | Out-String
+                            $stateText = & $python -B -m host.client --config $config.Path --project $name state 2>$null | Out-String
                             if ($LASTEXITCODE -eq 0) { $state = $stateText | ConvertFrom-Json -ErrorAction Stop }
                         } finally { Pop-Location }
                     } catch { $state = $null }

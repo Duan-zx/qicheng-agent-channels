@@ -50,11 +50,25 @@ def read_config(path):
         if not token_path.is_absolute():
             token_path = config_path.parent / token_path
         token_path = token_path.resolve()
-        token_key = str(token_path).casefold()
-        if vm_id in vm_ids or bios_id in bios_ids or token_key in tokens:
+        human_path = None
+        if 'human_token_file' in item:
+            if not isinstance(item['human_token_file'], str) or not item['human_token_file'].strip():
+                raise ValueError('Invalid human token file path')
+            human_path = Path(item['human_token_file'])
+            if not human_path.is_absolute():
+                human_path = config_path.parent / human_path
+            human_path = human_path.resolve()
+        token_keys = {str(token_path).casefold()}
+        if human_path is not None:
+            token_keys.add(str(human_path).casefold())
+            if len(token_keys) != 2:
+                raise ValueError('Channel and human token files must differ')
+        if vm_id in vm_ids or bios_id in bios_ids or token_keys & tokens:
             raise ValueError('Projects must not share guest identities or token files')
-        vm_ids.add(vm_id); bios_ids.add(bios_id); tokens.add(token_key)
+        vm_ids.add(vm_id); bios_ids.add(bios_id); tokens.update(token_keys)
         projects[name] = dict(vm_id=vm_id, bios_uuid=bios_id, token_file=token_path)
+        if human_path is not None:
+            projects[name]['human_token_file'] = human_path
     return projects
 
 
@@ -73,16 +87,37 @@ class GuestClient:
     def __init__(self, binding, socket_factory=None):
         self.binding = binding
         self.factory = socket_factory or socket.socket
-        self.token = binding['token_file'].read_text(encoding='utf-8').strip()
-        if not re.fullmatch(r'[a-f0-9]{64}', self.token):
-            raise ValueError('Invalid per-guest token file')
+        self.token = self._read_token(binding['token_file'], 'per-guest')
+        self.human_token_file = binding.get('human_token_file')
+        if self.human_token_file is not None:
+            channel_path = Path(binding['token_file']).resolve()
+            human_path = Path(self.human_token_file).resolve()
+            if str(channel_path).casefold() == str(human_path).casefold():
+                raise ValueError('Channel and human token files must differ')
+            self.human_token_file = human_path
         self.sequence = 0
+
+    @staticmethod
+    def _read_token(path, label):
+        token = Path(path).read_text(encoding='utf-8').strip()
+        if not re.fullmatch(r'[a-f0-9]{64}', token):
+            raise ValueError('Invalid ' + label + ' token file')
+        return token
+
+    def _operation_token(self, op, fields):
+        if self.human_token_file is None or not (op == 'control' or
+                (op == 'input' and fields.get('actor') == 'human')):
+            return self.token
+        human_token = self._read_token(self.human_token_file, 'human')
+        if hmac.compare_digest(human_token, self.token):
+            raise ValueError('Channel and human token values must differ')
+        return human_token
 
     def exchange(self, op, **fields):
         if not hasattr(socket, 'AF_HYPERV'):
             raise RuntimeError('Python 3.12+ with Windows Hyper-V sockets is required')
         self.sequence += 1
-        request = dict(id=str(self.sequence), token=self.token, op=op, **fields)
+        request = dict(id=str(self.sequence), token=self._operation_token(op, fields), op=op, **fields)
         frame = json.dumps(request, ensure_ascii=True).encode('utf-8')
         if len(frame) > MAX_REQUEST:
             raise ValueError('Request too large')
@@ -111,6 +146,8 @@ class GuestClient:
         return result
 
     def operation(self, op, **fields):
+        if op not in ('state', 'screenshot', 'control', 'input'):
+            raise ValueError('Unsupported guest operation')
         state = self.state()
         if op == 'state':
             return state
