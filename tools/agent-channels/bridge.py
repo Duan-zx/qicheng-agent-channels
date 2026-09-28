@@ -12,15 +12,17 @@ import urllib.error
 from broker_client import BrokerClient
 
 TOOLS = [
-    {'name':'channel_state','description':'Read this isolated Linux desktop and input mode.', 'inputSchema':{'type':'object','properties':{},'additionalProperties':False}},
-    {'name':'channel_screenshot','description':'See this isolated Linux desktop, not the Windows host.', 'inputSchema':{'type':'object','properties':{},'additionalProperties':False}},
+    {'name':'channel_state','description':'Read this isolated Linux desktop and input mode.', 'annotations':{'readOnlyHint':True}, 'inputSchema':{'type':'object','properties':{},'additionalProperties':False}},
+    {'name':'channel_screenshot','description':'See this isolated Linux desktop, not the Windows host.', 'annotations':{'readOnlyHint':True}, 'inputSchema':{'type':'object','properties':{},'additionalProperties':False}},
     {'name':'channel_input','description':'Send one action to the isolated Linux desktop. Requires the human to select Allow agent in the viewer. Never falls back to the Windows host.',
+     'annotations':{'readOnlyHint':False},
      'inputSchema':{'type':'object','properties':{'action':{'enum':['click','move','type','key']},'x':{'type':'integer'},'y':{'type':'integer'},'button':{'type':'integer','enum':[1,2,3,4,5]},'text':{'type':'string','maxLength':2000},'key':{'type':'string'}},'required':['action'],'additionalProperties':False}},
 ]
 
 BROKER_TOOLS = [TOOLS[0], TOOLS[1], {
     'name': 'channel_input',
     'description': 'Begin a broker session, send actions, then finish. Begin waits up to 30 seconds by default. A failed or uncertain exchange ends input for this MCP process; never retry it or fall back to direct input.',
+    'annotations': {'readOnlyHint': False},
     'inputSchema': {'type': 'object', 'properties': {
         'action': {'enum': ['begin', 'finish', 'click', 'move', 'type', 'key']},
         'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 300},

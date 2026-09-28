@@ -7,9 +7,9 @@ from .client import GuestClient, read_config
 from .broker_client import BrokerClient
 
 TOOLS = [
-    dict(name='windows_channel_state', description='Read this configured Windows guest identity and input mode.', inputSchema=dict(type='object', properties={}, additionalProperties=False)),
-    dict(name='windows_channel_screenshot', description='Capture this private Windows guest. Never the host desktop.', inputSchema=dict(type='object', properties={}, additionalProperties=False)),
-    dict(name='windows_channel_input', description='Input into this guest only when a human has enabled agent mode. Stop on takeover or pause. For the Enter key use Return, Enter, or ENTER; key actions accept only the documented fixed keys, not arbitrary shortcuts.', inputSchema=dict(type='object', properties=dict(action=dict(enum=['click', 'move', 'type', 'key']), x=dict(type='integer'), y=dict(type='integer'), button=dict(type='integer', enum=[1, 2, 3]), text=dict(type='string', maxLength=2000), key=dict(type='string', description='Return/Enter, BackSpace, Tab, Escape, Delete, arrows, Home, End, Page_Up, Page_Down, space, or ctrl+a/c/v/x/z/f/l')), required=['action'], additionalProperties=False)),
+    dict(name='windows_channel_state', description='Read this configured Windows guest identity and input mode.', annotations=dict(readOnlyHint=True), inputSchema=dict(type='object', properties={}, additionalProperties=False)),
+    dict(name='windows_channel_screenshot', description='Capture this private Windows guest. Never the host desktop.', annotations=dict(readOnlyHint=True), inputSchema=dict(type='object', properties={}, additionalProperties=False)),
+    dict(name='windows_channel_input', description='Input into this guest only when a human has enabled agent mode. Stop on takeover or pause. For the Enter key use Return, Enter, or ENTER; key actions accept only the documented fixed keys, not arbitrary shortcuts.', annotations=dict(readOnlyHint=False), inputSchema=dict(type='object', properties=dict(action=dict(enum=['click', 'move', 'type', 'key']), x=dict(type='integer'), y=dict(type='integer'), button=dict(type='integer', enum=[1, 2, 3]), text=dict(type='string', maxLength=2000), key=dict(type='string', description='Return/Enter, BackSpace, Tab, Escape, Delete, arrows, Home, End, Page_Up, Page_Down, space, or ctrl+a/c/v/x/z/f/l')), required=['action'], additionalProperties=False)),
 ]
 
 # Broker mode keeps the same three public tool names. Screenshot remains a
@@ -19,6 +19,7 @@ TOOLS = [
 BROKER_TOOLS = [TOOLS[0], TOOLS[1], dict(
     name='windows_channel_input',
     description='Begin a broker session for this guest; begin waits up to 30 seconds in the same-channel queue by default. Optional wait_seconds on begin only sets a 0..300 second limit. Input only after begin, then finish; a confirmed finish permits a new begin. A failed or uncertain broker exchange ends this process session: do not retry or begin again; reconcile uncertain input across MCP restarts. No host fallback. Screenshot is not lease protected.',
+    annotations=dict(readOnlyHint=False),
     inputSchema=dict(type='object', properties=dict(
         action=dict(enum=['begin', 'finish', 'click', 'move', 'type', 'key']),
         x=dict(type='integer'), y=dict(type='integer'),

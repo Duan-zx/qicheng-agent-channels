@@ -13,6 +13,17 @@ class McpTests(unittest.TestCase):
     def test_only_three_tools_and_no_control(self):
         result = self.bridge.handle(dict(id=1, method='tools/list'))
         self.assertEqual([t['name'] for t in result['result']['tools']], ['windows_channel_state', 'windows_channel_screenshot', 'windows_channel_input'])
+    def test_tool_read_only_annotations_in_direct_and_broker_modes(self):
+        expected = {
+            'windows_channel_state': {'readOnlyHint': True},
+            'windows_channel_screenshot': {'readOnlyHint': True},
+            'windows_channel_input': {'readOnlyHint': False},
+        }
+        for mode, bridge in (('direct', self.bridge), ('broker', Bridge(self.client, Mock()))):
+            with self.subTest(mode=mode):
+                response = bridge.handle({'id': 1, 'method': 'tools/list'})
+                listed = json.loads(json.dumps(response))['result']['tools']
+                self.assertEqual(expected, {tool['name']: tool['annotations'] for tool in listed})
     def test_actor_override_refused(self):
         with self.assertRaises(ValueError):
             self.bridge.tool('windows_channel_input', dict(actor='human', action='key', key='Return'))

@@ -114,3 +114,5 @@ MCP 适配器在真实后端完成 stdio initialize/tools/state；输入与截�
 01 当前 Lite 浏览器顶栏仍有 Firefox 安全功能提示。Firefox 日志为用户命名空间创建 `EPERM`，Docker 容器非特权且 seccomp 生效；[Mozilla 的问题记录](https://bugzilla.mozilla.org/show_bug.cgi?id=1938410)说明 Docker 默认 seccomp 可导致该提示。网页频道的可用性与浏览器全部安全特性可用是两件事；候选版未隐藏警告或改动容器权限。
 
 公开包不分发Windows系统、用户账号或第三方商业应用。评估系统的有效期及授权要求不会因启程封装而改变。
+
+2026-09-28 的本地候选给 Lite 与 Windows MCP 状态、截图工具声明 `readOnlyHint=true`，输入工具显式声明为写操作。Lite 46 项、Windows 110 项 Python 测试通过。01 的两条 Windows 租约 MCP 从新版 Host 启动后，独立 Codex 模型分别读取 A/B 客体状态；A 完成 `begin→finish`，B 完成 `state→begin→move→finish`，均没有点击或输入文字，Broker 末态无租约或脏状态。该调用依赖用户对两个专用频道的明确授权、人工“交给 AI”和本机 Task Lease；只读标注本身不是权限控制。Lite 两频道仍处暂停，未将其 AI 输入记为通过；DELL 独立安装、最终版冷启动与真实微信项目编译仍待验证。

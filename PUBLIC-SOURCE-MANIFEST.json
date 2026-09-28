@@ -111,8 +111,8 @@
     {
       "path": "tools/windows-channels/host/mcp.py",
       "kind": "source",
-      "bytes": 9467,
-      "sha256": "0023111270c1b9a91b71dd8500dcff99962036606ffc57ed792621bc4ccd10e5"
+      "bytes": 9621,
+      "sha256": "9e8e7083d05ca581a35e80dc79e113bec64a997726d5bb133e8ffbaaba5d2032"
     },
     {
       "path": "tools/windows-channels/host/broker_client.py",
@@ -237,8 +237,8 @@
     {
       "path": "tools/windows-channels/tests/test_host_mcp.py",
       "kind": "source",
-      "bytes": 6165,
-      "sha256": "c74bf710db0c8d24476cc4d83d4836c241930996f68105195496e8fdf00599a5"
+      "bytes": 6849,
+      "sha256": "7ad84ae56822787e743d136dae807d466f18ccbbde0026de0931eca84afb07d7"
     },
     {
       "path": "tools/windows-channels/tests/test_broker_client.py",

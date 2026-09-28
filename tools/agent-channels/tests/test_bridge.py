@@ -30,6 +30,15 @@ class BridgeTests(unittest.TestCase):
         result=self.bridge.handle({'id':2,'method':'tools/list'})
         self.assertEqual([x['name'] for x in result['result']['tools']],['channel_state','channel_screenshot','channel_input'])
         with self.assertRaises(ValueError): self.bridge.tool('channel_input',{'actor':'human','action':'key','key':'Return'})
+    def test_tool_read_only_annotations_in_both_modes(self):
+        for broker in (None, object()):
+            with self.subTest(broker=broker is not None):
+                self.bridge.broker=broker
+                response=self.bridge.handle({'id':2,'method':'tools/list'})
+                tools={tool['name']:tool for tool in response['result']['tools']}
+                self.assertIs(tools['channel_state']['annotations']['readOnlyHint'],True)
+                self.assertIs(tools['channel_screenshot']['annotations']['readOnlyHint'],True)
+                self.assertIs(tools['channel_input']['annotations']['readOnlyHint'],False)
     def test_agent_actor_and_images(self):
         calls=[]
         def request(path,data=None):

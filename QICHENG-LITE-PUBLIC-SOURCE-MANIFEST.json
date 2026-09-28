@@ -51,8 +51,8 @@
     },
     {
       "path": "tools/agent-channels/bridge.py",
-      "bytes": 8566,
-      "sha256": "b1fc4f30818d30b960ac5452b612ebe563f783ad4e964f1a0ec8b247e7b94791"
+      "bytes": 8727,
+      "sha256": "d5d9a1eba04c66eee5db9cc4585b8c3ed226fdb529c5610fa2287fea89fa2062"
     },
     {
       "path": "tools/agent-channels/broker_client.py",
@@ -136,8 +136,8 @@
     },
     {
       "path": "tools/agent-channels/tests/test_bridge.py",
-      "bytes": 13150,
-      "sha256": "26b843e03fd6659f4eed1e9036eb3cc802fa3e61328998794d4771710f57b601"
+      "bytes": 13785,
+      "sha256": "f753bd9f7bf29864869977d20b98de65168bb2d32f20df8704be8369528eeec9"
     },
     {
       "path": "tools/agent-channels/tests/test_backend_container.py",
