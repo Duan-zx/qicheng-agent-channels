@@ -152,9 +152,13 @@ Guest 输入采用 `acquire → input → ack → release`。每次 `/v1/input` 
 
 n8n 若在 Windows 宿主运行，HTTP Request 节点使用 `http://127.0.0.1:18770`；若在本机 Docker Desktop 容器中，01 已实测可经 `http://host.docker.internal:18770` 访问宿主 broker，容器内的 `127.0.0.1` 则指向容器自己。其他主机或容器网络需独立验证；broker 只绑定宿主回环，不提供通用远程服务。把 `broker.token` 存为 n8n 私有 Bearer 凭据，避免写入工作流导出、日志或节点正文；设置 `Content-Type: application/json`：
 
-1. `POST /v1/acquire`，正文如 `{"request_id":"run-123-attempt-1","task_id":"run-123","channel_id":"channel-2","ttl_seconds":60,"wait_seconds":120}`。每次新执行用新的 `request_id`，同次重试沿用原值。`wait_seconds` 可省略；省略或设为 `0` 时保持立即返回 `409 busy`，设为 `1..300` 时按端点先进先出等待。n8n HTTP Request 节点的超时需长于等待时长。
+单个已注册、最长 8 秒的普通频道固定动作优先用 `POST /v1/run`，例如 `{"request_id":"run-123-attempt-1","task_id":"run-123","channel_id":"channel-2","action":"check-login"}`。Broker 在一个请求内取得频道、执行固定动作并释放，不向 n8n 返回租约 token。01 的隔离 n8n 2.39.6 CLI 执行实测：REST 停止虽把执行标为 `canceled`，等待中的 HTTP 连接却未断开，频道空出后仍可能运行排队动作。因此 n8n 当前推荐省略 `wait_seconds`（等同 0），忙时立即收到 409，再由新的执行尝试调度；只有外部取消监控能确认撤队时才使用正数等待。已取得频道的短动作即使客户端断线也会由 Broker 继续完成和释放。Broker 原生 HTTP 等待在连接实际断开时会撤队，但 n8n 的 `canceled` 状态本身不证明断线。
+
+同一个 `request_id` 的并发重试返回 409 `run_in_progress`，完成后的重试回放持久结果，不会再次执行；固定动作非零退出返回 HTTP 502 `action_failed` 并保留退出码和有界输出，使 n8n 不会把动作失败误记为成功。若 Broker 中途退出且结果未确认，返回 503 `result_unknown`，必须核对实际效果，不能换 ID 盲目重做。绑定或动作变化返回 409，已确定的忙碌/超时/排队满也会成为该 ID 的终态；新执行尝试使用新 ID。显式 TTL 须至少比动作超时多 5 秒。此接口不支持客体/Lite 输入、多节点长流程和绕过 Broker 的工具；固定动作外部副作用也不是数据库事务。01 当前常驻 alpha.20 未安装此新接口，源码/新包测试不代表它已在 01 生效。
+
+1. `POST /v1/acquire`，正文如 `{"request_id":"run-123-attempt-1","task_id":"run-123","channel_id":"channel-2","ttl_seconds":60}`。每次新执行用新的 `request_id`，同次重试沿用原值。`wait_seconds` 可省略；省略或设为 `0` 时忙碌即返回 `409 busy`，设为 `1..300` 时 Broker 按端点先进先出等待，但上述 n8n 取消实测说明停止工作流未必撤销等待，不能据此配置为安全的取消语义。确有独立取消监控时，n8n HTTP Request 节点的超时还需长于等待时长。
 2. 只把响应的租约 `token` 传给可信的后续节点；`POST /v1/execute`，正文如 `{"channel_id":"channel-2","token":"<lease token>","action":"check-login"}`。节点不可传入任意命令、路径或端口。
-3. 若任务继续，过期前 `POST /v1/renew`，正文如 `{"channel_id":"channel-2","token":"<lease token>","ttl_seconds":60}`。无论成功、失败或取消，都在收尾分支 `POST /v1/release`，正文如 `{"channel_id":"channel-2","token":"<lease token>"}`。
+3. 若任务继续，过期前 `POST /v1/renew`，正文如 `{"channel_id":"channel-2","token":"<lease token>","ttl_seconds":60}`。正常完成时调用 `POST /v1/release`，正文如 `{"channel_id":"channel-2","token":"<lease token>"}`；可在可执行的错误分支补释放，但不要把工作流停止或进程退出视为该分支一定会运行。01 的隔离 n8n 2.39.6 报错和取消实测中，顺序 Release 节点均未运行，租约只在 TTL 后失效。取消后下一任务在 TTL 前仍会被拒绝；涉及客体输入而缺少成功 ack 时，`guest_dirty` 还会继续阻止后继任务，不能靠 TTL 强行放行。
 
 `GET /v1/status` 返回不含租约令牌的状态，仍要求 broker Bearer 凭据。409 `busy` 表示未启用等待且端点正忙；408 `wait_timeout` 表示等待到期，429 `wait_queue_full` 表示队列已满；410 `lease_gone` 表示该请求已结束，必须新建执行尝试；401 表示 broker 凭据错误。租约 TTL 从成功取得频道时起算，应大于实际动作和收尾时间；等待时长另由 `wait_seconds` 控制。长期或异步动作需要目标侧另建执行门与心跳，不能只靠此 broker。
 

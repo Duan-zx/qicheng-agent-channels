@@ -1,5 +1,11 @@
 # 验证范围与限制
 
+## 2026-09-28 Task Lease alpha.22 本地源码候选（未公开发行）
+
+原有 n8n 工作流按 `Acquire → 动作 → Release` 顺序执行时，隔离 n8n 2.39.6 的真实报错和 REST 停止都跳过末尾 Release；普通频道在 TTL 前仍占用，之后才可被后继获取。新源码为非客体、非 Lite 频道的单个已注册短固定动作加入 `/v1/run`：Broker 一次请求内负责获取、执行和释放，持久绑定请求 ID，已确认结果可回放，未知结果不自动重做。私有源码 Broker 60 项、Lease 19 项，公开导出树 Python 92 项（1 项私有环境测试跳过）、5 项产品测试与 PS5.1 包/公开导出回归通过；Task Lease 公开白名单 33/33 文件大小与 SHA-256 匹配。
+
+01 从私有干净提交构建的 alpha.22 ZIP 在独立目录核对 24/24 文件哈希后，用包内 Broker 与隔离 n8n 2.39.6 实测：固定动作 exit 7 返回 HTTP 502 `action_failed`，工作流为 `error`，同 ID 回放不重做；默认不设 `wait_seconds` 时忙碌立即 409、无排队且频道释放后不补跑；已经开始的短动作即使工作流被 REST 停止，Broker 仍完成一次并释放。另一项 alpha.21 包的隔离试验发现，排队中的 n8n CLI 执行虽被标记 `canceled`，HTTP 等待仍可能继续、之后运行，因此当前 n8n 接法推荐默认立即 409。以上不证明所有 n8n 执行模式、长流程、Windows/Lite 输入或未接入 Broker 的工具具备取消清理。01 常驻仍为 alpha.20，DELL 未独立安装；alpha.22 私有试用 ZIP 不在公开 Release。测试原始日志与临时凭据不在此仓。
+
 ## 2026-09-28 Windows alpha.19 本地源码候选（未公开发行）
 
 Windows alpha.18 私有试用 ZIP 缺少三凭据客体的离线安装脚本，包内旧说明还引导用户使用仅接受单令牌 payload 的 Direct 安装器；它不能作为双原生频道 Broker 门禁的独立首装包。alpha.19 本地候选已把 `Install-GuestPayloadOffline.ps1` 及其模拟测试纳入产品包和公开源码白名单，说明区分客体 channel/broker/human 三枚凭据与 Task Lease HTTP Bearer，并要求先核对真实 VM 身份。公开清单 68/68 项的大小与 SHA-256 已在候选树核对；公开源码独立构包 91 文件、PowerShell 5.1 产品回归、Windows Python 109 项和离线预检模拟 14 项通过。

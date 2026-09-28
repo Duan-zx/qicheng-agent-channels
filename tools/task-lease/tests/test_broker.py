@@ -39,6 +39,9 @@ class BrokerHTTPTests(unittest.TestCase):
         (root / "project-C").mkdir()
         actions = {"check": {"argv": [sys.executable, "-c", "print('guarded')"],
                              "timeout_seconds": 2},
+                   "fail": {"argv": [sys.executable, "-c",
+                            "import sys; print('failed'); sys.stderr.write('reason\\n'); sys.exit(7)"],
+                            "timeout_seconds": 2},
                    "loud": {"argv": [sys.executable, "-c",
                            "import os; os.write(1,b'a'*200000); os.write(2,b'b'*200000)"],
                            "timeout_seconds": 2},
@@ -92,6 +95,10 @@ class BrokerHTTPTests(unittest.TestCase):
         return self.call("/v1/acquire", {"request_id": request_id, "task_id": request_id,
                                          "channel_id": channel_id, **extra})
 
+    def atomic_run(self, request_id, channel_id="channel-A", action="check", **extra):
+        return self.call("/v1/run", {"request_id": request_id, "task_id": request_id,
+                                     "channel_id": channel_id, "action": action, **extra})
+
     def wait_for_queue(self, count):
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
@@ -134,6 +141,201 @@ class BrokerHTTPTests(unittest.TestCase):
         self.assertEqual(200, self.call("/v1/release", {
             "channel_id": "channel-A", "token": owner["token"]})[0])
         self.assertEqual(200, self.acquire("after-disconnect", "channel-B")[0])
+
+    def test_atomic_run_replay_conflict_and_ttl(self):
+        self.assertEqual(400, self.atomic_run("short", ttl_seconds=2)[0])
+        status, first = self.atomic_run("atomic-one")
+        self.assertEqual(200, status)
+        self.assertTrue(first["ok"])
+        self.assertEqual((status, first), self.atomic_run("atomic-one"))
+        self.assertEqual(409, self.atomic_run("atomic-one", action="loud")[0])
+        self.assertEqual(410, self.acquire("atomic-one", "channel-A")[0])
+        self.assertIsNone(self.server.broker.store.current("channel-A"))
+        root = Path(self.temp.name)
+        restarted = Broker(config_path=root / "config.json",
+                           credential_path=root / "broker.token",
+                           db_path=root / "leases.db", clock=lambda: self.now[0])
+        self.assertEqual(first, restarted.run({"request_id": "atomic-one",
+            "task_id": "atomic-one", "channel_id": "channel-A", "action": "check"}))
+
+    def test_atomic_run_nonzero_exit_is_http_failure_and_replays(self):
+        status, first = self.atomic_run("failed-run", action="fail")
+        self.assertEqual(502, status)
+        self.assertEqual("action_failed", first["error"])
+        self.assertFalse(first["ok"])
+        self.assertEqual(7, first["exit_code"])
+        self.assertEqual("failed", first["stdout"].strip())
+        self.assertEqual("reason", first["stderr"].strip())
+        with patch("broker.run_action") as action:
+            self.assertEqual((status, first), self.atomic_run("failed-run", action="fail"))
+        action.assert_not_called()
+
+        _, legacy = self.acquire("legacy-fail", "channel-A")
+        status, old = self.call("/v1/execute", {"channel_id": "channel-A",
+                                                   "token": legacy["token"], "action": "fail"})
+        self.assertEqual(200, status)
+        self.assertFalse(old["ok"])
+        self.assertNotIn("error", old)
+
+    def test_atomic_run_same_key_concurrent_and_parallel_endpoint(self):
+        entered = threading.Event()
+        finish = threading.Event()
+        count = []
+        def held(*_args, **_kwargs):
+            count.append(1)
+            if Path(_kwargs["cwd"]).name == "project-A":
+                entered.set()
+                self.assertTrue(finish.wait(3))
+            return ActionResult(0, False, b"ok", b"", False, False, False)
+        with patch("broker.run_action", side_effect=held):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(self.atomic_run, "same")
+                self.assertTrue(entered.wait(2))
+                try:
+                    private_id = self.server.broker.store.current("channel-A").request_id
+                    self.assertTrue(private_id.startswith("atomic:"))
+                    state = self.call("/v1/status?channel_id=channel-A")[1]
+                    self.assertEqual("[atomic]", state["channels"][0]["lease"]["request_id"])
+                    self.assertEqual(400, self.acquire(private_id, "channel-A", task_id="same")[0])
+                    self.assertEqual((409, {"ok": False, "error": "run_in_progress",
+                                            "request_id": "same"}), self.atomic_run("same"))
+                    self.assertEqual("action_dirty", self.atomic_run("other", "channel-B")[1]["error"])
+                    self.assertEqual(200, self.atomic_run("parallel", "channel-C")[0])
+                finally:
+                    finish.set()
+                self.assertEqual(200, first.result(timeout=5)[0])
+        self.assertEqual(2, len(count))
+
+    def test_atomic_run_busy_timeout_and_queue_full_are_known(self):
+        _, owner = self.acquire("owner", "channel-A")
+        with patch("broker.run_action") as action:
+            self.assertEqual("busy", self.atomic_run("busy", "channel-B")[1]["error"])
+            self.assertEqual("busy", self.atomic_run("busy", "channel-B")[1]["error"])
+            self.assertEqual("wait_timeout", self.atomic_run(
+                "timed", "channel-B", wait_seconds=0.1)[1]["error"])
+            with patch.object(self.server.broker.store, "MAX_WAITERS_PER_ENDPOINT", 0):
+                self.assertEqual("wait_queue_full", self.atomic_run(
+                    "full", "channel-B", wait_seconds=1)[1]["error"])
+        action.assert_not_called()
+        self.call("/v1/release", {"channel_id": "channel-A", "token": owner["token"]})
+
+    def test_atomic_run_wait_queues_behind_live_action_but_stale_dirty_blocks(self):
+        entered = threading.Event()
+        finish = threading.Event()
+        count = []
+        def held(*_args, **_kwargs):
+            count.append(1)
+            if len(count) == 1:
+                entered.set()
+                self.assertTrue(finish.wait(3))
+            return ActionResult(0, False, b"ok", b"", False, False, False)
+        with patch("broker.run_action", side_effect=held):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(self.atomic_run, "first")
+                self.assertTrue(entered.wait(2))
+                second = pool.submit(self.atomic_run, "second", "channel-B",
+                                     wait_seconds=2)
+                self.wait_for_queue(1)
+                finish.set()
+                self.assertEqual(200, first.result(timeout=5)[0])
+                self.assertEqual(200, second.result(timeout=5)[0])
+        self.assertEqual(2, len(count))
+        _, owner = self.acquire("cleaning", "channel-A")
+        channel = self.server.broker.channels["channel-A"]
+        self.server.broker._mark_action_dirty(channel, "cleaning")
+        self.assertEqual("live", self.server.broker._action_dirty_state("wechat-1"))
+        self.server.broker._clear_action_dirty(channel, "cleaning")
+        self.assertEqual("clean", self.server.broker._action_dirty_state("wechat-1"))
+        self.call("/v1/release", {"channel_id": "channel-A", "token": owner["token"]})
+        self.server.broker._mark_action_dirty(self.server.broker.channels["channel-A"],
+                                               "stale")
+        self.assertEqual("stale", self.server.broker._action_dirty_state("wechat-1"))
+        self.assertEqual("action_dirty", self.atomic_run(
+            "after-stale", "channel-B", wait_seconds=1)[1]["error"])
+
+    def test_atomic_run_wait_disconnect_and_post_acquire_disconnect(self):
+        _, owner = self.acquire("blocker", "channel-A")
+        body = json.dumps({"channel_id": "channel-B", "task_id": "wait-run",
+                           "request_id": "wait-run", "action": "check",
+                           "wait_seconds": 2}).encode()
+        request = (b"POST /v1/run HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                   + f"Authorization: Bearer {self.credential}\r\n".encode()
+                   + b"Content-Type: application/json\r\n"
+                   + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+        connection = socket.create_connection(("127.0.0.1", self.server.server_port))
+        connection.sendall(request)
+        self.wait_for_queue(1)
+        connection.close()
+        self.wait_for_queue(0)
+        self.call("/v1/release", {"channel_id": "channel-A", "token": owner["token"]})
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            _, result = self.atomic_run("wait-run", "channel-B")
+            if result["error"] != "run_in_progress":
+                break
+            time.sleep(0.02)
+        self.assertEqual("run_cancelled", result["error"])
+
+        entered = threading.Event()
+        finish = threading.Event()
+        count = []
+        def held(*_args, **_kwargs):
+            count.append(1)
+            entered.set()
+            self.assertTrue(finish.wait(3))
+            return ActionResult(0, False, b"done", b"", False, False, False)
+        body = json.dumps({"channel_id": "channel-A", "task_id": "lost-reply",
+                           "request_id": "lost-reply", "action": "check"}).encode()
+        request = (b"POST /v1/run HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                   + f"Authorization: Bearer {self.credential}\r\n".encode()
+                   + b"Content-Type: application/json\r\n"
+                   + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+        with patch("broker.run_action", side_effect=held):
+            connection = socket.create_connection(("127.0.0.1", self.server.server_port))
+            connection.sendall(request)
+            self.assertTrue(entered.wait(2))
+            connection.close()
+            finish.set()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                status, result = self.atomic_run("lost-reply")
+                if status == 200:
+                    break
+                time.sleep(0.02)
+            self.assertEqual(200, status)
+            self.assertEqual(1, len(count))
+            self.assertEqual("done", result["stdout"])
+
+    def test_atomic_run_uncertain_replay_and_crash_window(self):
+        uncertain = ActionResult(None, True, b"", b"", False, False, True)
+        with patch("broker.run_action", return_value=uncertain) as action:
+            self.assertEqual(504, self.atomic_run("uncertain")[0])
+            self.assertEqual(504, self.atomic_run("uncertain")[0])
+        self.assertEqual(1, action.call_count)
+        self.assertTrue(self.server.broker._action_dirty("wechat-1"))
+
+        root = Path(self.temp.name)
+        channel = self.server.broker.channels["channel-C"]
+        self.assertIsNone(self.server.broker._claim_run("crash", "crash", channel, "check"))
+        restarted = Broker(config_path=root / "config.json",
+                           credential_path=root / "broker.token",
+                           db_path=root / "leases.db", clock=lambda: self.now[0])
+        with patch("broker.run_action") as action:
+            response = restarted.run({"request_id": "crash", "task_id": "crash",
+                                      "channel_id": "channel-C", "action": "check"})
+        self.assertEqual("result_unknown", response["error"])
+        action.assert_not_called()
+
+    def test_atomic_run_interrupted_before_receipt_replays_unknown(self):
+        payload = {"request_id": "interrupted", "task_id": "interrupted",
+                   "channel_id": "channel-A", "action": "check"}
+        with patch("broker.run_action", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.server.broker.run(payload)
+        self.assertEqual({"ok": False, "error": "result_unknown",
+                          "request_id": "interrupted"}, self.server.broker.run(payload))
+        self.assertIsNone(self.server.broker.store.current("channel-A"))
+        self.assertTrue(self.server.broker._action_dirty("wechat-1"))
 
     def test_wait_parameters_and_timeout(self):
         status, _ = self.acquire("owner", "channel-A")
@@ -638,6 +840,11 @@ class BrokerHTTPTests(unittest.TestCase):
 
 
 class GuestInputTests(unittest.TestCase):
+    def test_atomic_run_rejects_guest(self):
+        response = self.broker.run({"request_id": "guest-run", "task_id": "guest-run",
+                                    "channel_id": "channel-A", "action": "check"})
+        self.assertEqual("run_channel_disabled", response["error"])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -1212,6 +1419,11 @@ class GuestInputTests(unittest.TestCase):
 
 
 class BrokerLiteTests(unittest.TestCase):
+    def test_atomic_run_rejects_lite(self):
+        response = self.broker.run({"request_id": "lite-run", "task_id": "lite-run",
+                                    "channel_id": "lite-1", "action": "check"})
+        self.assertEqual("run_channel_disabled", response["error"])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

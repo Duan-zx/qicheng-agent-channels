@@ -278,6 +278,7 @@ class Broker:
                 self._lite_fingerprint(channel)
         self._reconcile_guest_bindings()
         self._init_action_dirty()
+        self._init_runs()
 
     def _digest(self, value: object) -> str:
         encoded = json.dumps(value, ensure_ascii=True, sort_keys=True,
@@ -431,6 +432,17 @@ class Broker:
             return db.execute("SELECT 1 FROM action_dirty WHERE endpoint_id=?",
                               (endpoint_id,)).fetchone() is not None
 
+    def _action_dirty_state(self, endpoint_id: str) -> str:
+        """Read the dirty fence and its lease in one SQLite snapshot."""
+        with self.store._transaction() as db:
+            row = db.execute("""SELECT l.expires_at FROM action_dirty d
+                LEFT JOIN requests r ON r.channel_id=d.channel_id AND r.request_id=d.request_id
+                LEFT JOIN leases l ON l.generation=r.generation
+                WHERE d.endpoint_id=?""", (endpoint_id,)).fetchone()
+            if row is None:
+                return "clean"
+            return "live" if row["expires_at"] is not None and row["expires_at"] > self.store.clock() else "stale"
+
     def _mark_action_dirty(self, channel: Channel, request_id: str):
         with self.store._transaction() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -449,6 +461,56 @@ class Broker:
                  self._action_binding_fingerprint(channel)))
             if cleared.rowcount != 1:
                 raise RuntimeError("action dirty binding changed; reconcile offline")
+
+    def _init_runs(self):
+        with self.store._transaction() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS atomic_runs (
+                request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+                owner TEXT NOT NULL, status TEXT NOT NULL,
+                response TEXT)""")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(atomic_runs)")}
+            if columns != {"request_id", "fingerprint", "owner", "status", "response"}:
+                raise RuntimeError("atomic run schema is unsupported")
+        self._run_owner = secrets.token_hex(16)
+
+    def _claim_run(self, request_id, task_id, channel, action_name):
+        fingerprint = self._digest({"request_id": request_id, "task_id": task_id,
+                                    "binding": self._action_binding_fingerprint(channel),
+                                    "action": action_name})
+        with self.store._transaction() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM atomic_runs WHERE request_id=?",
+                             (request_id,)).fetchone()
+            if row is not None:
+                if not hmac.compare_digest(row["fingerprint"], fingerprint):
+                    raise RequestConflict("atomic run binding or action changed")
+                if row["status"] == "complete":
+                    return json.loads(row["response"])
+                if row["owner"] != self._run_owner:
+                    return {"ok": False, "error": "result_unknown", "request_id": request_id}
+                return {"ok": False, "error": "run_in_progress" if row["status"] == "running"
+                        else "result_unknown", "request_id": request_id}
+            # Reserve the public ID in the legacy request namespace. A regular
+            # acquire cannot expose the private lease token for this run.
+            if db.execute("SELECT 1 FROM requests WHERE request_id=?", (request_id,)).fetchone():
+                raise RequestConflict("request_id already belongs to a lease")
+            db.execute("""INSERT INTO requests
+                (request_id,channel_id,task_id,project_id,project_path,endpoint_id,tool_id)
+                VALUES(?,?,?,?,?,?,?)""", (request_id, channel.channel_id, task_id,
+                channel.project_id, channel.project_path, channel.endpoint_id, channel.tool_id))
+            db.execute("INSERT INTO atomic_runs VALUES (?, ?, ?, 'running', NULL)",
+                       (request_id, fingerprint, self._run_owner))
+        return None
+
+    def _finish_run(self, request_id, response):
+        with self.store._transaction() as db:
+            db.execute("BEGIN IMMEDIATE")
+            changed = db.execute("""UPDATE atomic_runs SET status='complete', response=?
+                WHERE request_id=? AND owner=? AND status='running'""",
+                (json.dumps(response, ensure_ascii=True), request_id,
+                 self._run_owner)).rowcount
+            if changed != 1:
+                raise RuntimeError("atomic run ownership changed")
 
     def _attempt_fingerprint(self, channel: Channel, active, action, fields):
         details = {
@@ -533,11 +595,14 @@ class Broker:
             raise ValueError("channel_id is not registered")
         return self.channels[channel_id]
 
-    def acquire(self, payload: dict, *, disconnected=None) -> dict:
+    def acquire(self, payload: dict, *, disconnected=None, _atomic=False) -> dict:
         allowed = {"request_id", "task_id", "channel_id", "ttl_seconds", "wait_seconds"}
         if set(payload) - allowed or not {"request_id", "task_id", "channel_id"} <= set(payload):
             raise ValueError("acquire accepts only request_id, task_id, channel_id, ttl_seconds, wait_seconds")
         channel = self._channel(payload["channel_id"])
+        if (not _atomic and isinstance(payload["request_id"], str)
+                and payload["request_id"].startswith("atomic:")):
+            raise ValueError("reserved request_id namespace")
         if (channel.guest is not None or channel.lite is not None) and (not isinstance(payload["request_id"], str)
                                           or not _GUEST_OWNER.fullmatch(payload["request_id"])):
             raise ValueError("input request_id must be 1..64 safe characters")
@@ -551,7 +616,9 @@ class Broker:
             raise ValueError("ttl_seconds exceeds configured maximum")
         wait = LeaseStore._wait(payload.get("wait_seconds", 0))
         owner = (channel.channel_id, payload["request_id"])
-        if self._action_dirty(channel.endpoint_id):
+        allow_dirty_wait = _atomic and wait > 0
+        if self._action_dirty_state(channel.endpoint_id) not in (
+                ("clean", "live") if allow_dirty_wait else ("clean",)):
             return {"ok": False, "error": "action_dirty"}
         dirty = self._dirty_owner(channel.endpoint_id)
         if dirty is not None and dirty != owner:
@@ -568,7 +635,8 @@ class Broker:
                     abort_reason = self._binding_error(channel)
             if abort_reason is None and self._dirty_owner(channel.endpoint_id) not in (None, owner):
                 abort_reason = "guest_dirty"
-            if abort_reason is None and self._action_dirty(channel.endpoint_id):
+            if (abort_reason is None and self._action_dirty_state(channel.endpoint_id) not in
+                    (("clean", "live") if allow_dirty_wait else ("clean",))):
                 abort_reason = "action_dirty"
             return abort_reason is not None
         try:
@@ -672,8 +740,11 @@ class Broker:
         channels = [self._channel(channel_id)] if channel_id is not None else self.channels.values()
         def entry(channel):
             active = self.store.current(channel.channel_id)
+            public_lease = active.public() if active else None
+            if public_lease is not None and public_lease["request_id"].startswith("atomic:"):
+                public_lease["request_id"] = "[atomic]"
             result = {"channel_id": channel.channel_id,
-                      "lease": active.public() if active else None,
+                      "lease": public_lease,
                       "action_dirty": self._action_dirty(channel.endpoint_id)}
             if channel.guest is not None or channel.lite is not None:
                 result["guest_dirty"] = self._dirty_owner(channel.endpoint_id) is not None
@@ -759,6 +830,74 @@ class Broker:
                 response["workspace"] = workspace_result
             return response
         return self.store.execute_owned(channel.channel_id, payload["token"], run)
+
+    def run(self, payload: dict, *, disconnected=None) -> dict:
+        """Own a single fixed action from allocation through terminal receipt."""
+        allowed = {"request_id", "task_id", "channel_id", "action",
+                   "ttl_seconds", "wait_seconds"}
+        if set(payload) - allowed or not {"request_id", "task_id", "channel_id", "action"} <= set(payload):
+            raise ValueError("run requires request_id, task_id, channel_id and action")
+        request_id = LeaseStore._id(payload["request_id"], "request_id")
+        task_id = LeaseStore._id(payload["task_id"], "task_id")
+        channel = self._channel(payload["channel_id"])
+        if channel.guest is not None or channel.lite is not None:
+            return {"ok": False, "error": "run_channel_disabled"}
+        action_name = payload["action"]
+        if not isinstance(action_name, str) or action_name not in channel.actions:
+            raise ValueError("action is not registered for this channel")
+        wait = LeaseStore._wait(payload.get("wait_seconds", 0))
+        minimum_ttl = channel.actions[action_name]["timeout_seconds"] + 5
+        ttl = LeaseStore._ttl(payload.get("ttl_seconds", max(self.default_ttl, minimum_ttl)))
+        if ttl < minimum_ttl or ttl > self.max_ttl:
+            raise ValueError("ttl_seconds must cover action deadline and cleanup within max_ttl_seconds")
+        previous = self._claim_run(request_id, task_id, channel, action_name)
+        if previous is not None:
+            return previous
+        private_id = "atomic:" + hmac.new(self.store._key, request_id.encode("utf-8"),
+                                            hashlib.sha256).hexdigest()
+        acquired = None
+        response = None
+        try:
+            acquired = self.acquire({"request_id": private_id, "task_id": task_id,
+                                     "channel_id": channel.channel_id,
+                                     "ttl_seconds": ttl, "wait_seconds": wait},
+                                    disconnected=disconnected, _atomic=True)
+            if not acquired.get("token"):
+                response = {**acquired, "request_id": request_id}
+                if response.get("error") == "client_disconnected":
+                    response["error"] = "run_cancelled"
+            else:
+                # After allocation the operation belongs to the broker. A lost
+                # HTTP connection cannot cancel the action or its cleanup.
+                action_result = self.execute({"channel_id": channel.channel_id,
+                                              "token": acquired["token"],
+                                              "action": action_name})
+                response = {**action_result, "request_id": request_id}
+                if (response.get("ok") is False and "exit_code" in response
+                        and response["exit_code"] != 0):
+                    response["error"] = "action_failed"
+        except (ChannelBusy, EndpointBusy):
+            response = {"ok": False, "error": "busy", "request_id": request_id}
+        except WaitTimedOut:
+            response = {"ok": False, "error": "wait_timeout", "request_id": request_id}
+        except WaitQueueFull:
+            response = {"ok": False, "error": "wait_queue_full", "request_id": request_id}
+        except WaitCancelled:
+            response = {"ok": False, "error": "run_cancelled", "request_id": request_id}
+        except Exception:
+            # The worker may have started before an exception. Never infer that
+            # retrying is safe from a missing HTTP response.
+            response = {"ok": False, "error": "result_unknown", "request_id": request_id}
+        finally:
+            if acquired is not None and acquired.get("token"):
+                try:
+                    self.store.release(channel.channel_id, acquired["token"])
+                except Exception:
+                    response = {"ok": False, "error": "result_unknown", "request_id": request_id}
+            if response is None:
+                response = {"ok": False, "error": "result_unknown", "request_id": request_id}
+            self._finish_run(request_id, response)
+        return response
 
     def input(self, payload: dict) -> dict:
         """Send exactly one bounded action while holding the local endpoint fence."""
@@ -880,7 +1019,10 @@ class BrokerHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except OSError:
+            pass
 
     def _authorized(self) -> bool:
         if self.server.broker.authorize(self.headers.get("Authorization")):
@@ -920,6 +1062,11 @@ class BrokerHandler(BaseHTTPRequestHandler):
             if result.get("error") == "client_disconnected":
                 return
             code = {"timeout": 504, "workspace_unavailable": 503,
+                    "result_unknown": 503, "run_in_progress": 409,
+                    "action_failed": 502,
+                    "run_cancelled": 410, "busy": 409,
+                    "wait_timeout": 408, "wait_queue_full": 429,
+                    "run_channel_disabled": 403,
                     "action_dirty": 503, "action_uncertain": 503,
                     "action_unavailable": 503, "guest_unavailable": 503,
                      "lite_unavailable": 503, "input_failed": 502,
@@ -938,6 +1085,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         routes = {"/v1/acquire": self.server.broker.acquire,
+                   "/v1/run": self.server.broker.run,
                    "/v1/renew": self.server.broker.renew,
                    "/v1/release": self.server.broker.release,
                    "/v1/ack": self.server.broker.ack,
@@ -946,7 +1094,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
         if self.path not in routes:
             self._send(404, {"error": "not_found"})
             return
-        if self.path == "/v1/acquire":
+        if self.path in ("/v1/acquire", "/v1/run"):
             def disconnected():
                 try:
                     readable, _, _ = select.select([self.connection], [], [], 0)
@@ -955,7 +1103,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
                     return not self.connection.recv(1, socket.MSG_PEEK)
                 except (ConnectionError, OSError, ValueError):
                     return True
-            self._dispatch(lambda: self.server.broker.acquire(
+            self._dispatch(lambda: routes[self.path](
                 self._read_json(), disconnected=disconnected))
         else:
             self._dispatch(lambda: routes[self.path](self._read_json()))

@@ -121,6 +121,7 @@ All writes use JSON and `Content-Type: application/json`:
 | `POST /v1/release` | `{"channel_id":"channel-2","token":"<LEASE_TOKEN>"}` | Released lease |
 | `POST /v1/ack` | `{"channel_id":"channel-2","token":"<LEASE_TOKEN>","action_id":"action-1"}` | Idempotent guest success acknowledgement: `{"ok":true,"action_id":"action-1"}` |
 | `POST /v1/execute` | `{"channel_id":"channel-2","token":"<LEASE_TOKEN>","action":"check-login"}` | Exit code and bounded CLI output |
+| `POST /v1/run` | `{"request_id":"attempt-1","task_id":"task-1","channel_id":"channel-2","action":"check-login","wait_seconds":120}` | Broker-owned acquire, one fixed bounded action, release; no lease token returned |
 | `GET /v1/status` | none; optional `?channel_id=channel-2` | Public lease status, no lease token |
 
 The broker returns HTTP 409 `busy` for a held channel or endpoint, 409
@@ -153,7 +154,26 @@ block new lease delivery.
 
 Codex and n8n can call the same loopback HTTP endpoints: acquire, execute a
 registered action, renew before expiry, and release in a final step. The
-`check-login` action above is a read-only probe; register only approved fixed
+separate final step is not guaranteed to run if a workflow errors or is
+cancelled. For a single configured short action on an ordinary (non-guest,
+non-Lite) channel, `/v1/run` keeps acquisition, execution, and release in the
+Broker. Waiting for a channel can be cancelled on client disconnect; once
+acquired, disconnect does not stop the bounded action or its cleanup. An
+isolated n8n 2.39.6 CLI execution marked `canceled` kept its HTTP wait
+connected and later executed the queued action. For n8n, omit `wait_seconds`
+until external cancellation monitoring is available; handle `409 busy` with
+a new scheduled attempt. A stable
+`request_id` binds the task, channel configuration, and action: concurrent
+retries return `run_in_progress`, completed retries replay the stored result,
+nonzero fixed-action exits return HTTP 502 `action_failed` with the exit code
+and bounded output, and an incomplete prior Broker process returns
+`result_unknown` without re-executing. Admission failures are terminal for that request ID; use a fresh
+ID for a new attempt. Explicit TTL must cover the configured action deadline
+plus five seconds. An uncertain process result leaves `action_dirty` and blocks
+new actions. This endpoint does not wrap a multi-node n8n workflow, long-lived
+processes, guest/Lite input, or tools that bypass the Broker.
+
+The `check-login` action above is a read-only probe; register only approved fixed
 commands. Each action has literal arguments and an absolute executable path;
 callers cannot pass arbitrary command text, cwd or port. Without a workspace
 binding, the action runs from the bound project directory under the endpoint

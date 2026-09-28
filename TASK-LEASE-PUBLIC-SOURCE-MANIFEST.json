@@ -26,14 +26,14 @@
     {
       "path": "tools/task-lease/README.md",
       "kind": "source",
-      "bytes": 17025,
-      "sha256": "cb44c92b3d234d2ac0836eed47a90bc485a0b1d285f8742f39f34c10640b5038"
+      "bytes": 18579,
+      "sha256": "088cdf1c9ee8c789356a622dc146ecd7ab29e2be460570a1fef0e65af074b5c3"
     },
     {
       "path": "tools/task-lease/broker.py",
       "kind": "source",
-      "bytes": 56071,
-      "sha256": "20e65b5e4314ee92a5fe1af47a01b5095a64f409d8e7a7ad97353089e6dff918"
+      "bytes": 65015,
+      "sha256": "f7a84e3a70f3312172b3ad90caeb8ba99f3e6342b7cc78dc637869c470c2a656"
     },
     {
       "path": "tools/task-lease/lease.py",
@@ -80,8 +80,8 @@
     {
       "path": "tools/task-lease/tests/test_broker.py",
       "kind": "source",
-      "bytes": 76226,
-      "sha256": "46b93d19af684e48e72a157134986d4d768198a35d68eb101d88897d7ce2b89d"
+      "bytes": 88088,
+      "sha256": "0716830e91008dedb9d448a816bf47c659bb1c5902c7cfe06da27384af9b3667"
     },
     {
       "path": "tools/task-lease/tests/test_attempt_workspace.py",
@@ -98,8 +98,8 @@
     {
       "path": "tools/task-lease/product/README.zh-CN.md",
       "kind": "source",
-      "bytes": 16650,
-      "sha256": "08cdfcd3b76baa98d2d4f7d6acf9b6056872f31620850701b22b9ff60376d689"
+      "bytes": 18830,
+      "sha256": "7362bf4367048f13742cd9578cd1432a2ecd08863207f749ffc86a94b33485ee"
     },
     {
       "path": "tools/task-lease/product/Build-Package.ps1",
