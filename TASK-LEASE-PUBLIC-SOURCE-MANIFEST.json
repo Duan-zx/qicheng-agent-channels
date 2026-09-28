@@ -26,20 +26,20 @@
                   {
                       "path":  "tools/task-lease/README.md",
                       "kind":  "source",
-                      "bytes":  19381,
-                      "sha256":  "9c2d5e98d0cfde1afc33422d449f45dbf30fb8a54ad6a8e7bda9f9fc6551d80b"
+                      "bytes":  20703,
+                      "sha256":  "a84b7eabadb70844add286e1acb8e0fefb941405cb0f43abab54b954fbcdf4e9"
                   },
                   {
                       "path":  "tools/task-lease/broker.py",
                       "kind":  "source",
-                      "bytes":  73686,
-                      "sha256":  "789e454978748bfcfc2cb19b5b82d399494806dd05a855844baf351d13f58f27"
+                      "bytes":  75137,
+                      "sha256":  "18b7b9cdcf252b0a8483c326a6f5c55ca0d6b5aadd82428ce9e9e921052c8dac"
                   },
                   {
                       "path":  "tools/task-lease/lease.py",
                       "kind":  "source",
-                      "bytes":  25588,
-                      "sha256":  "3a19107cdc125e5fc8a9a41dc88a325b12f8167ab607cb0d11d4a87bd4124151"
+                      "bytes":  27297,
+                      "sha256":  "67c95610425e140330a1986eca9c0f0b7fd6ced145a2f68c492216a45efff83a"
                   },
                   {
                       "path":  "tools/task-lease/attempt_workspace.py",
@@ -74,14 +74,14 @@
                   {
                       "path":  "tools/task-lease/tests/test_lease.py",
                       "kind":  "source",
-                      "bytes":  24231,
-                      "sha256":  "fb280dfb31136f78e72930db981cf1f3ecb2ffca3343f897d38b54a2db1f697a"
+                      "bytes":  28577,
+                      "sha256":  "219897ff27f34e7e6877cf67174270086d00c0601ceb084fa200c260fd791c34"
                   },
                   {
                       "path":  "tools/task-lease/tests/test_broker.py",
                       "kind":  "source",
-                      "bytes":  97812,
-                      "sha256":  "5196ae2eb70825c8c552251fd981a7bc127912b6e1f96fe841d7d411cbb5d6f3"
+                      "bytes":  106103,
+                      "sha256":  "17a210f63de3ffb97f9be6bd3212f72fcc3832e1617909813e0530265c1b814b"
                   },
                   {
                       "path":  "tools/task-lease/tests/test_attempt_workspace.py",

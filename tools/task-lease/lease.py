@@ -67,6 +67,10 @@ class InvalidToken(LeaseError):
     pass
 
 
+class MaintenanceMode(LeaseError):
+    pass
+
+
 @dataclass(frozen=True)
 class Lease:
     channel_id: str
@@ -138,7 +142,36 @@ class LeaseStore:
                 );
                 CREATE INDEX IF NOT EXISTS waiter_clients_generation
                     ON waiter_clients(generation);
+                CREATE TABLE IF NOT EXISTS broker_control (
+                    id INTEGER PRIMARY KEY CHECK (id=1),
+                    maintenance INTEGER NOT NULL CHECK (maintenance IN (0,1))
+                );
+                INSERT OR IGNORE INTO broker_control(id, maintenance) VALUES(1, 0);
             """)
+
+    @staticmethod
+    def _require_open(db: sqlite3.Connection):
+        if db.execute("SELECT maintenance FROM broker_control WHERE id=1").fetchone()[0]:
+            raise MaintenanceMode("broker is in maintenance")
+
+    def maintenance(self) -> bool:
+        with self._transaction() as db:
+            return bool(db.execute(
+                "SELECT maintenance FROM broker_control WHERE id=1").fetchone()[0])
+
+    def set_maintenance(self, enabled: bool) -> bool:
+        """Offline administrator control, serialized with allocation/action admission."""
+        if type(enabled) is not bool:
+            raise TypeError("enabled must be boolean")
+        with self._transaction() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("UPDATE broker_control SET maintenance=? WHERE id=1",
+                       (int(enabled),))
+            if enabled:
+                # Queued requests keep their single-use request tombstones.
+                db.execute("DELETE FROM waiter_clients")
+                db.execute("DELETE FROM waiters")
+        return enabled
 
     def _load_key(self) -> bytes:
         if not self.key_path.exists():
@@ -269,6 +302,7 @@ class LeaseStore:
         # Queue bookkeeping uses SQLite's write lock, not action locks. A live
         # waiter can therefore stay visible while an action holds its channel.
         with self._transaction() as db:
+            self._require_open(db)
             db.execute("UPDATE waiter_clients SET heartbeat=? WHERE client_id=?",
                        (self.clock(), client_id))
 
@@ -290,6 +324,7 @@ class LeaseStore:
         request_id, channel_id, _task_id, _project_id, _project_path, endpoint_id, _tool_id = binding
         with self._transaction() as db:
             db.execute("BEGIN IMMEDIATE")
+            self._require_open(db)
             now = self.clock()
             self._prune_waiters(db, endpoint_id, request_id, now)
             previous = db.execute("SELECT * FROM requests WHERE request_id=?",
@@ -387,6 +422,7 @@ class LeaseStore:
                                      request_id, client_id, cancelled):
                 with self._transaction() as db:
                     db.execute("BEGIN IMMEDIATE")
+                    self._require_open(db)
                     now = self.clock()
                     self._prune_waiters(db, endpoint_id, request_id, now)
                     previous = db.execute("SELECT * FROM requests WHERE request_id=?",
@@ -500,7 +536,7 @@ class LeaseStore:
         with self._transaction() as db:
             return self._lease(self._authenticated(db, channel_id, token))
 
-    def execute_owned(self, channel_id: str, token: str, action):
+    def execute_owned(self, channel_id: str, token: str, action, *, allow_maintenance=False):
         """Run a bounded action under channel and endpoint OS locks.
 
         The database is closed before the callback, so independent endpoints
@@ -514,6 +550,9 @@ class LeaseStore:
                 endpoint_id = self._authenticated(db, channel_id, token)["endpoint_id"]
             with self._lock("endpoint", endpoint_id):
                 with self._transaction() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    if not allow_maintenance:
+                        self._require_open(db)
                     row = self._authenticated(db, channel_id, token)
                     active = self._lease(row)
                 return action(active)

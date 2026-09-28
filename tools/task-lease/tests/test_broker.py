@@ -95,6 +95,125 @@ class BrokerHTTPTests(unittest.TestCase):
         return self.call("/v1/acquire", {"request_id": request_id, "task_id": request_id,
                                          "channel_id": channel_id, **extra})
 
+    def test_offline_maintenance_blocks_http_entries_and_survives_restart(self):
+        _, active = self.acquire("owner", "channel-A")
+        self.server.broker.store.set_maintenance(True)
+        self.assertTrue(self.call("/v1/status")[1]["maintenance"])
+        self.assertEqual((503, {"error": "maintenance"}),
+                         self.acquire("next", "channel-C"))
+        self.assertEqual((503, {"error": "maintenance"}),
+                         self.call("/v1/execute", {"channel_id": "channel-A",
+                                                    "token": active["token"],
+                                                    "action": "check"}))
+        with closing(sqlite3.connect(Path(self.temp.name) / "leases.db")) as db:
+            before = tuple(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                           for table in ("requests", "atomic_runs", "waiters"))
+        status, response = self.atomic_run("new-run", "channel-C")
+        self.assertEqual((503, "maintenance"), (status, response["error"]))
+        with closing(sqlite3.connect(Path(self.temp.name) / "leases.db")) as db:
+            after = tuple(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                          for table in ("requests", "atomic_runs", "waiters"))
+        self.assertEqual(before, after)
+        self.assertTrue(Broker(config_path=Path(self.temp.name) / "config.json",
+                               credential_path=Path(self.temp.name) / "broker.token",
+                               db_path=Path(self.temp.name) / "leases.db").store.maintenance())
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": active["token"]})[0])
+        self.server.broker.store.set_maintenance(False)
+        self.assertEqual(200, self.acquire("next", "channel-C")[0])
+
+    def test_maintenance_cli_uses_existing_private_database(self):
+        script = Path(__file__).resolve().parents[1] / "broker.py"
+        db = Path(self.temp.name) / "leases.db"
+        for command, expected in (("on", "on"), ("status", "on"),
+                                  ("off", "off"), ("status", "off")):
+            result = subprocess.run([sys.executable, str(script), "--db", str(db),
+                                     "--maintenance", command], capture_output=True,
+                                    text=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(expected, result.stdout.strip())
+        missing = db.with_name("missing.db")
+        result = subprocess.run([sys.executable, str(script), "--db", str(missing),
+                                 "--maintenance", "on"], capture_output=True,
+                                text=True, timeout=10)
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(missing.exists())
+
+    def test_maintenance_cancels_queued_run_without_later_replay(self):
+        _, active = self.acquire("owner", "channel-A")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(self.atomic_run, "queued-run", "channel-B",
+                                  "hold", wait_seconds=3)
+            self.wait_for_queue(1)
+            self.server.broker.store.set_maintenance(True)
+            status, response = waiting.result(timeout=5)
+        self.assertEqual((503, "maintenance"), (status, response["error"]))
+        self.assertFalse((Path(self.temp.name) / "project-B" / "started").exists())
+        with closing(sqlite3.connect(Path(self.temp.name) / "leases.db")) as db:
+            self.assertEqual(0, db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0])
+        self.server.broker.store.set_maintenance(False)
+        self.call("/v1/release", {"channel_id": "channel-A", "token": active["token"]})
+        status, response = self.atomic_run("queued-run", "channel-B", "hold",
+                                           wait_seconds=3)
+        self.assertEqual((503, "maintenance"), (status, response["error"]))
+        self.assertFalse((Path(self.temp.name) / "project-B" / "started").exists())
+
+    def test_maintenance_and_new_run_claim_share_write_transaction(self):
+        broker = self.server.broker
+        entered = threading.Event()
+        proceed = threading.Event()
+        original = broker.store._require_open
+        def pause_after_check(db):
+            original(db)
+            entered.set()
+            if not proceed.wait(3):
+                raise TimeoutError("claim did not resume")
+        broker.store._require_open = pause_after_check
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                claiming = pool.submit(broker._claim_run, "pre-maintenance", "task",
+                                       broker.channels["channel-C"], "check")
+                self.assertTrue(entered.wait(2))
+                with closing(sqlite3.connect(Path(self.temp.name) / "leases.db",
+                                             timeout=0.05, isolation_level=None)) as db:
+                    with self.assertRaises(sqlite3.OperationalError):
+                        db.execute("BEGIN IMMEDIATE")
+                enabling_started = threading.Event()
+                def enable():
+                    enabling_started.set()
+                    return broker.store.set_maintenance(True)
+                enabling = pool.submit(enable)
+                self.assertTrue(enabling_started.wait(2))
+                self.assertFalse(enabling.done())
+                proceed.set()
+                self.assertIsNone(claiming.result(timeout=3))
+                self.assertTrue(enabling.result(timeout=3))
+        finally:
+            proceed.set()
+            broker.store._require_open = original
+        with closing(sqlite3.connect(Path(self.temp.name) / "leases.db")) as db:
+            self.assertEqual(1, db.execute("SELECT COUNT(*) FROM atomic_runs").fetchone()[0])
+            self.assertEqual(1, db.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
+        status, response = self.atomic_run("post-maintenance", "channel-C")
+        self.assertEqual((503, "maintenance"), (status, response["error"]))
+        with closing(sqlite3.connect(Path(self.temp.name) / "leases.db")) as db:
+            self.assertEqual(1, db.execute("SELECT COUNT(*) FROM atomic_runs").fetchone()[0])
+            self.assertEqual(1, db.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
+
+    def test_run_admitted_before_maintenance_finishes_and_releases(self):
+        project = Path(self.temp.name) / "project-C"
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = pool.submit(self.atomic_run, "in-flight", "channel-C", "hold")
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and not (project / "started").exists():
+                time.sleep(0.01)
+            self.assertTrue((project / "started").exists())
+            self.server.broker.store.set_maintenance(True)
+            (project / "finish").touch()
+            status, response = running.result(timeout=5)
+        self.assertEqual((200, True), (status, response["ok"]))
+        self.assertIsNone(self.server.broker.store.current("channel-C"))
+
     def atomic_run(self, request_id, channel_id="channel-A", action="check", **extra):
         return self.call("/v1/run", {"request_id": request_id, "task_id": request_id,
                                      "channel_id": channel_id, "action": action, **extra})
@@ -1597,6 +1716,24 @@ class BrokerLiteTests(unittest.TestCase):
         response = self.broker.run({"request_id": "lite-run", "task_id": "lite-run",
                                     "channel_id": "lite-1", "action": "check"})
         self.assertEqual("run_channel_disabled", response["error"])
+
+    def test_maintenance_blocks_guest_input_without_sending(self):
+        first = self.acquire(1, "owner-1")
+        self.assertEqual({"ok": True, "action": "key"}, self.broker.input({
+            "channel_id": "lite-1", "token": first["token"],
+            "action_id": "completed", "action": "key", "key": "Return"}))
+        sent_before = list(self.events)
+        self.broker.store.set_maintenance(True)
+        with self.assertRaisesRegex(Exception, "maintenance"):
+            self.broker.input({"channel_id": "lite-1", "token": first["token"],
+                               "action_id": "action-1", "action": "key",
+                               "key": "Return"})
+        self.assertEqual(sent_before, self.events)
+        self.assertEqual({"ok": True, "action_id": "completed"}, self.broker.ack({
+            "channel_id": "lite-1", "token": first["token"],
+            "action_id": "completed"}))
+        self.broker.renew({"channel_id": "lite-1", "token": first["token"]})
+        self.broker.release({"channel_id": "lite-1", "token": first["token"]})
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

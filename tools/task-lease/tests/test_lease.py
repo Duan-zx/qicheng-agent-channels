@@ -71,6 +71,92 @@ class LeaseTests(unittest.TestCase):
         args.update(changes)
         return self.store.acquire(**args)
 
+    def test_maintenance_persists_and_blocks_new_admission(self):
+        first = self.acquire()
+        self.assertTrue(self.store.set_maintenance(True))
+        reopened = lease.LeaseStore(self.path, clock=lambda: self.now[0])
+        self.assertTrue(reopened.maintenance())
+        with self.assertRaises(lease.MaintenanceMode):
+            self.acquire("new", "channel-3", endpoint_id="other")
+        with self.assertRaises(lease.MaintenanceMode):
+            self.acquire()
+        with self.assertRaises(lease.MaintenanceMode):
+            reopened.execute_owned(first.channel_id, first.token, lambda _: "started")
+        self.assertEqual("ack", reopened.execute_owned(
+            first.channel_id, first.token, lambda _: "ack", allow_maintenance=True))
+        reopened.release(first.channel_id, first.token)
+        self.assertIsNone(reopened.current(first.channel_id))
+        reopened.set_maintenance(False)
+        self.assertFalse(self.store.maintenance())
+        self.assertEqual("new", self.acquire("new").request_id)
+
+    def test_maintenance_cancels_waiters_and_allows_running_action_to_finish(self):
+        first = self.acquire()
+        started = threading.Event()
+        finish = threading.Event()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            running = pool.submit(self.store.execute_owned, first.channel_id,
+                                  first.token,
+                                  lambda _: started.set() or finish.wait(3))
+            self.assertTrue(started.wait(2))
+            waiting = pool.submit(self.acquire, "queued", "channel-3",
+                                  wait_seconds=3)
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                with closing(sqlite3.connect(self.path)) as db:
+                    if db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0]:
+                        break
+                time.sleep(0.01)
+            else:
+                self.fail("waiter did not join")
+            self.store.set_maintenance(True)
+            finish.set()
+            self.assertTrue(running.result(timeout=3))
+            with self.assertRaises(lease.MaintenanceMode):
+                waiting.result(timeout=3)
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(0, db.execute("SELECT COUNT(*) FROM waiters").fetchone()[0])
+        self.store.release(first.channel_id, first.token)
+        self.store.set_maintenance(False)
+        with self.assertRaises(lease.LeaseGone):
+            self.acquire("queued", "channel-3", wait_seconds=3)
+        self.assertEqual("fresh", self.acquire("fresh", "channel-3").request_id)
+
+    def test_maintenance_and_acquire_share_write_transaction(self):
+        admitted = threading.Event()
+        proceed = threading.Event()
+        original = self.store._require_open
+        def pause_after_check(db):
+            original(db)
+            admitted.set()
+            if not proceed.wait(3):
+                raise TimeoutError("acquire did not resume")
+        self.store._require_open = pause_after_check
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                acquiring = pool.submit(self.acquire)
+                self.assertTrue(admitted.wait(2))
+                with closing(sqlite3.connect(self.path, timeout=0.05,
+                                             isolation_level=None)) as db:
+                    with self.assertRaises(sqlite3.OperationalError):
+                        db.execute("BEGIN IMMEDIATE")
+                enabling_started = threading.Event()
+                def enable():
+                    enabling_started.set()
+                    return self.store.set_maintenance(True)
+                enabling = pool.submit(enable)
+                self.assertTrue(enabling_started.wait(2))
+                self.assertFalse(enabling.done())
+                proceed.set()
+                first = acquiring.result(timeout=3)
+                self.assertTrue(enabling.result(timeout=3))
+            self.assertEqual(first.public(), self.store.current(first.channel_id).public())
+            with self.assertRaises(lease.MaintenanceMode):
+                self.acquire("later", "channel-3", endpoint_id="other")
+        finally:
+            proceed.set()
+            self.store._require_open = original
+
     def test_exclusive_retry_and_binding(self):
         first = self.acquire()
         self.assertEqual(first, self.acquire())

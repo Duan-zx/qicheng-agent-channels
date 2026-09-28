@@ -112,6 +112,31 @@ adding `--port <PORT>`. Keep the file in a directory whose access is limited
 to the intended local user and service accounts. The broker never prints it.
 The database and its `.key` sibling belong in that directory as well.
 
+### Local maintenance gate (source candidate)
+
+This version can persistently stop new lease and action admission while an
+operator prepares an offline migration. The switch is a local CLI over the
+private database and sibling `.key`; the HTTP bearer cannot change it:
+
+```powershell
+python broker.py --db <PRIVATE_DB> --maintenance on
+python broker.py --db <PRIVATE_DB> --maintenance status
+python broker.py --db <PRIVATE_DB> --maintenance off
+```
+
+Use the `broker.py` from the **running version**. An older broker process does
+not recognize this gate even if a newer CLI writes its table. When enabled,
+new acquire, run, input and execute attempts return HTTP 503 `maintenance`.
+Queued requests end without later replay; already admitted actions may finish,
+and their owners can still acknowledge, renew and release. `GET /v1/status`
+includes the maintenance state. Before moving a database or any bound path,
+verify that current leases, queued/running actions, waiters, dirty endpoints
+and unacknowledged guest input have drained, and confirm at the target that
+no external action remains. An expired lease may still have a physical row;
+do not use `COUNT(leases)=0` alone as the drain test. Keep the old database,
+key and configuration together for rollback. This gate does not intercept
+tools that bypass the broker.
+
 All writes use JSON and `Content-Type: application/json`:
 
 | Method/path | Body | Result |

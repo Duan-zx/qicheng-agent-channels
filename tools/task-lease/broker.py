@@ -24,7 +24,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from bounded_action import run_action
-from lease import (ChannelBusy, EndpointBusy, InvalidToken, LeaseGone,
+from lease import (ChannelBusy, EndpointBusy, InvalidToken, LeaseGone, MaintenanceMode,
                    LeaseStore, RequestConflict, WaitCancelled, WaitQueueFull,
                    WaitTimedOut)
 
@@ -527,6 +527,9 @@ class Broker:
                     return {"ok": False, "error": "result_unknown", "request_id": request_id}
                 return {"ok": False, "error": "run_in_progress" if row["status"] in {"running", "queued", "started"}
                         else "result_unknown", "request_id": request_id}
+            # Admission and the maintenance switch use the same SQLite write
+            # lock. A rejected run must not reserve its public request ID.
+            self.store._require_open(db)
             # Reserve the public ID in the legacy request namespace. A regular
             # acquire cannot expose the private lease token for this run.
             if db.execute("SELECT 1 FROM requests WHERE request_id=?", (request_id,)).fetchone():
@@ -824,7 +827,8 @@ class Broker:
                     WHERE channel_id=? AND request_id=? AND action_id=?""",
                     (channel.channel_id, active.request_id, action_id))
             return {"ok": True, "action_id": action_id}
-        return self.store.execute_owned(channel.channel_id, payload["token"], acknowledge)
+        return self.store.execute_owned(channel.channel_id, payload["token"],
+                                        acknowledge, allow_maintenance=True)
 
     def status(self, channel_id: str | None = None) -> dict:
         channels = [self._channel(channel_id)] if channel_id is not None else self.channels.values()
@@ -839,7 +843,8 @@ class Broker:
             if channel.guest is not None or channel.lite is not None:
                 result["guest_dirty"] = self._dirty_owner(channel.endpoint_id) is not None
             return result
-        return {"channels": [entry(channel) for channel in channels]}
+        return {"maintenance": self.store.maintenance(),
+                "channels": [entry(channel) for channel in channels]}
 
     def execute(self, payload: dict) -> dict:
         """Run one configured, bounded command under its endpoint fence."""
@@ -951,8 +956,11 @@ class Broker:
         ttl = LeaseStore._ttl(payload.get("ttl_seconds", max(self.default_ttl, minimum_ttl)))
         if ttl < minimum_ttl or ttl > self.max_ttl:
             raise ValueError("ttl_seconds must cover action deadline and cleanup within max_ttl_seconds")
-        previous = self._claim_run(request_id, task_id, channel, action_name,
-                                   n8n_execution_id, n8n_workflow_id)
+        try:
+            previous = self._claim_run(request_id, task_id, channel, action_name,
+                                       n8n_execution_id, n8n_workflow_id)
+        except MaintenanceMode:
+            return {"ok": False, "error": "maintenance", "request_id": request_id}
         if previous is not None:
             return previous
         fingerprint = self._run_fingerprint(request_id, task_id, channel, action_name,
@@ -1012,6 +1020,8 @@ class Broker:
             response = {"ok": False, "error": "wait_queue_full", "request_id": request_id}
         except WaitCancelled:
             response = {"ok": False, "error": "run_cancelled", "request_id": request_id}
+        except MaintenanceMode:
+            response = {"ok": False, "error": "maintenance", "request_id": request_id}
         except Exception:
             # The worker may have started before an exception. Never infer that
             # retrying is safe from a missing HTTP response.
@@ -1203,6 +1213,8 @@ class BrokerHandler(BaseHTTPRequestHandler):
             self._send(408, {"error": "wait_timeout"})
         except WaitQueueFull:
             self._send(429, {"error": "wait_queue_full"})
+        except MaintenanceMode:
+            self._send(503, {"error": "maintenance"})
         except InvalidToken:
             self._send(403, {"error": "invalid_token"})
         except (ValueError, TypeError, json.JSONDecodeError) as error:
@@ -1210,7 +1222,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
         else:
             if result.get("error") == "client_disconnected":
                 return
-            code = {"timeout": 504, "workspace_unavailable": 503,
+            code = {"maintenance": 503, "timeout": 504, "workspace_unavailable": 503,
                     "result_unknown": 503, "run_in_progress": 409,
                     "action_failed": 502,
                     "run_cancelled": 410, "busy": 409,
@@ -1275,13 +1287,27 @@ class BrokerHandler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description="Qicheng local lease broker")
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--credential-file", type=Path, required=True)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--credential-file", type=Path)
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--port", type=int, default=18770)
     parser.add_argument("--init-credential", action="store_true",
                         help="create missing private credential file, then exit")
+    parser.add_argument("--maintenance", choices=("on", "off", "status"),
+                        help="offline administrator control; requires private DB access")
     args = parser.parse_args()
+    if args.maintenance:
+        if not args.db.is_file() or not args.db.with_name(args.db.name + ".key").is_file():
+            parser.error("maintenance requires an existing lease database and key")
+        store = LeaseStore(args.db)
+        if args.maintenance == "status":
+            print("on" if store.maintenance() else "off")
+        else:
+            store.set_maintenance(args.maintenance == "on")
+            print(args.maintenance)
+        return
+    if args.credential_file is None:
+        parser.error("--credential-file is required")
     if args.init_credential:
         args.credential_file.parent.mkdir(parents=True, exist_ok=True)
         fd = args.credential_file.open("x", encoding="ascii")
@@ -1292,6 +1318,8 @@ def main():
         if hasattr(args.credential_file, "chmod"):
             args.credential_file.chmod(0o600)
         return
+    if args.config is None:
+        parser.error("--config is required")
     broker = Broker(config_path=args.config, credential_path=args.credential_file,
                     db_path=args.db)
     server = BrokerHTTPServer(broker, args.port)
