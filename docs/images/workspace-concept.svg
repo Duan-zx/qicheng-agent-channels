@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" role="img" aria-labelledby="title desc">
+  <title id="title">Qicheng AI workspace concept</title>
+  <desc id="desc">A conceptual diagram of the host and three independent channels, switched with Alt and a number. This original vector is not a product screenshot.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#091725"/><stop offset="0.58" stop-color="#0b1e30"/><stop offset="1" stop-color="#14253a"/></linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#233449"/><stop offset="1" stop-color="#15283c"/></linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#84e6d1"/><stop offset="1" stop-color="#92bbfa"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#54a9c0" stop-opacity=".2"/><stop offset="1" stop-color="#54a9c0" stop-opacity="0"/></radialGradient>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M36 0H0V36" fill="none" stroke="#8cb3c4" stroke-opacity=".055"/></pattern>
+    <filter id="shadow" x="-30%" y="-40%" width="160%" height="190%"><feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#020916" flood-opacity=".4"/></filter>
+  </defs>
+  <rect width="1200" height="600" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="600" rx="28" fill="url(#grid)"/>
+  <circle cx="935" cy="275" r="370" fill="url(#glow)"/>
+  <g fill="none" stroke="url(#accent)" stroke-width="3"><path d="M68 65h23l17 17-17 17H68L51 82z"/><path d="M92 65h23l17 17-17 17H92" opacity=".7"/></g>
+  <text x="155" y="88" fill="#eaf7f8" font-family="Arial,'Microsoft YaHei',sans-serif" font-size="23" font-weight="700" letter-spacing="2">QICHENG</text>
+  <text x="66" y="174" fill="#f3f8fb" font-family="Arial,sans-serif" font-size="45" font-weight="700">AI tasks, in their</text>
+  <text x="66" y="223" fill="#f3f8fb" font-family="Arial,sans-serif" font-size="45" font-weight="700">own space.</text>
+  <text x="67" y="266" fill="#a9c0ce" font-family="Arial,sans-serif" font-size="19">Switch, take over, or return home.</text>
+  <g font-family="Arial,'Microsoft YaHei',sans-serif" font-size="16" font-weight="600">
+    <rect x="66" y="303" width="188" height="49" rx="13" fill="#18384a" stroke="#427a84"/><text x="88" y="334" fill="#aeefe1">Alt + 1  Host</text>
+    <rect x="266" y="303" width="180" height="49" rx="13" fill="#19344e" stroke="#426483"/><text x="288" y="334" fill="#c3dbfb">Alt + 2/3/4  Switch</text>
+  </g>
+  <path d="M68 391h451" stroke="#57778b" stroke-opacity=".45"/>
+  <circle cx="79" cy="428" r="7" fill="#78decb"/><text x="101" y="435" fill="#d6e9ee" font-family="Arial,sans-serif" font-size="18">AI active</text>
+  <circle cx="249" cy="428" r="7" fill="#f3ba7e"/><text x="271" y="435" fill="#d6e9ee" font-family="Arial,sans-serif" font-size="18">Human control</text>
+  <text x="67" y="548" fill="#7c99a9" font-family="Arial,sans-serif" font-size="15">PRODUCT CONCEPT · NOT A SCREENSHOT</text>
+  <g filter="url(#shadow)" font-family="Arial,'Microsoft YaHei',sans-serif">
+    <rect x="598" y="120" width="528" height="105" rx="19" fill="url(#card)" stroke="#466878"/><rect x="598" y="120" width="7" height="105" rx="3" fill="#7ce3ce"/>
+    <rect x="623" y="145" width="82" height="33" rx="9" fill="#25554f"/><text x="638" y="167" fill="#b5f3e5" font-size="17" font-weight="700">Alt + 2</text>
+    <text x="727" y="166" fill="#eef8f8" font-size="22" font-weight="700">Web workspace 1</text><text x="727" y="195" fill="#a8c4d1" font-size="16">Separate browser and downloads</text>
+    <circle cx="1081" cy="163" r="8" fill="#80e6d1"/><text x="1010" y="197" fill="#8fe6d4" font-size="15">AI active</text>
+    <rect x="631" y="244" width="528" height="105" rx="19" fill="url(#card)" stroke="#466878"/><rect x="631" y="244" width="7" height="105" rx="3" fill="#8ebff8"/>
+    <rect x="656" y="269" width="82" height="33" rx="9" fill="#294968"/><text x="671" y="291" fill="#cce2ff" font-size="17" font-weight="700">Alt + 3</text>
+    <text x="760" y="290" fill="#eef8f8" font-size="22" font-weight="700">Web workspace 2</text><text x="760" y="319" fill="#a8c4d1" font-size="16">Another independent task</text>
+    <circle cx="1114" cy="287" r="8" fill="#80e6d1"/><text x="1043" y="321" fill="#8fe6d4" font-size="15">AI active</text>
+    <rect x="598" y="368" width="528" height="105" rx="19" fill="url(#card)" stroke="#466878"/><rect x="598" y="368" width="7" height="105" rx="3" fill="#f3ba7e"/>
+    <rect x="623" y="393" width="82" height="33" rx="9" fill="#624b3a"/><text x="638" y="415" fill="#ffdab6" font-size="17" font-weight="700">Alt + 4</text>
+    <text x="727" y="414" fill="#eef8f8" font-size="22" font-weight="700">Native Windows</text><text x="727" y="443" fill="#a8c4d1" font-size="16">Desktop apps when you need them</text>
+    <circle cx="1081" cy="411" r="8" fill="#f3ba7e"/><text x="1010" y="445" fill="#f7c898" font-size="15">Human</text>
+  </g>
+</svg>

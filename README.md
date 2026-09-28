@@ -1,7 +1,7 @@
 # 启程 · AI 工作区
 
 
-![Qicheng Lite on Windows](docs/images/lite-workspace.png)
+![启程 AI 工作区产品结构示意，非实机截图](docs/images/workspace-concept.svg)
 
 给 AI 独立的工作区，随时查看、接管，或回到自己的电脑。
 
