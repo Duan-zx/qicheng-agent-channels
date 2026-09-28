@@ -36,13 +36,13 @@
     },
     {
       "path": "tools/agent-channels/Dockerfile",
-      "bytes": 1129,
-      "sha256": "e10e7be507d75c82eafd27e2850b916f85402b53d3104f54cea1cab8e5af653e"
+      "bytes": 1152,
+      "sha256": "75a39adf3c6c189352e083241fefc2c6e62e1fe5a9ab09741d4988b41600bab8"
     },
     {
       "path": "tools/agent-channels/compose.yaml",
-      "bytes": 886,
-      "sha256": "6efc9768fc18cca2dab95ac9f947a342f570d765da6189aae27073a2abe06269"
+      "bytes": 940,
+      "sha256": "33b11eb5bc5abaf6707ff4d8085b95a58958128ead48e9cb89f457e89e17e273"
     },
     {
       "path": "tools/agent-channels/compose.broker.yaml",

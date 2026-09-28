@@ -17,5 +17,5 @@ RUN mkdir -p /etc/firefox/policies \
 RUN apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends fonts-wqy-microhei xclip && rm -rf /var/lib/apt/lists/*
 RUN chmod 755 /app/start.sh
 USER channel
-ENV DISPLAY=:99 SCREEN_WIDTH=1600 SCREEN_HEIGHT=900
+ENV DISPLAY=:99 SCREEN_WIDTH=1600 SCREEN_HEIGHT=900 GTK_THEME=Adwaita:dark
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/start.sh"]

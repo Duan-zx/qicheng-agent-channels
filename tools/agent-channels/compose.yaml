@@ -16,13 +16,13 @@ x-channel: &channel
 services:
   channel1:
     <<: *channel
-    environment: {CHANNEL_ID: "1"}
+    environment: {CHANNEL_ID: "1", GTK_THEME: "Adwaita:dark"}
     volumes:
       - channel1-home:/home/channel
     ports: ["127.0.0.1:18761:8080"] # fixed Lite host-port contract
   channel2:
     <<: *channel
-    environment: {CHANNEL_ID: "2"}
+    environment: {CHANNEL_ID: "2", GTK_THEME: "Adwaita:dark"}
     volumes:
       - channel2-home:/home/channel
     profiles: [second]

@@ -20,9 +20,11 @@ The optional **Task Lease** broker lets explicitly connected Codex MCP and n8n j
 ## Try Lite
 
 1. Download a matching Lite Release, verify its hash, extract it and run the installer included in the package. Docker's Linux engine must be available.
-2. In the alpha.13 source candidate, first installation can choose one or two Lite channels; one is the default. The viewer stays in the tray. Use **Alt+2** for channel one, **Alt+3** when channel two is enabled, and **Alt+1** for your own desktop.
+2. In the alpha.14 local source candidate, first installation can choose one or two Lite channels; one is the default. The viewer stays in the tray. Use **Alt+2** for channel one, **Alt+3** when channel two is enabled, and **Alt+1** for your own desktop.
 3. Choose **Take control** to use a channel yourself. Choose **Give to AI** before a connected client sends input. Each channel keeps its own browser profile and Downloads volume.
 4. Run the installed diagnostics if a channel is unavailable. The package quickstart lists data locations and AI connection steps.
+
+The alpha.14 source sets a dark Firefox chrome by default, both in the image and the two-channel Compose environment. It does not suppress Firefox security or session-recovery notices. The 01 host still runs alpha.13; alpha.14 has no matching public installer or live upgrade acceptance yet.
 
 When both editions are installed, Lite uses Alt+1/2 and optionally Alt+3; native Windows channels start at Alt+4. The Windows setup wizard limits its count accordingly. Hotkey conflicts are reported by diagnostics; available keys depend on the installed version.
 
