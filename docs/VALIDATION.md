@@ -18,6 +18,10 @@ Windows alpha.18 私有试用 ZIP 缺少三凭据客体的离线安装脚本，�
 
 01 从私有提交 `2ee8b3b` 构建的 alpha.19 ZIP 在独立目录解压、逐项核 91 个文件哈希，并完成不导入既有配置、不启动 Viewer 的用户级首次安装；首次设置 Inspect 如实返回 `setup-required`，未创建 VM。离线安装模拟只覆盖计划、拒绝路径和启动参数检查，**未运行 `-Apply`、未挂载真实 VHDX、未确认真实客体用户资料或代理启动**。01 正在运行的 Windows 客体与查看器未用此包热升级，DELL 首装和真实 Broker 门禁仍待验证。该 ZIP 仅在私有产品交付仓，不是公开下载资产。旧截图与主题素材的发布范围问题仍未解决。
 
+后续 01 本机从最终 alpha.19 ZIP 侧装 Host，保留正在运行的旧 Viewer 与现有三凭据客体。两个独立 MCP 进程分别读到 A/B 的 agent 状态、桌面截图和 `begin/finish` 工具 schema，并各完成一次 `begin(wait=0) → 合成鼠标移动 → finish`；两客体动作计数各增加 1，Broker 四频道末态无租约或 dirty。旧直连 MCP 对两客体的无租约输入均被客体拒绝，动作计数不变。本机 Codex 配置已指向 alpha.19 租约入口、停用旧直连，但修改前已加载的客户端还需重载才可宣称其原生工具生效。Lite 两 MCP 也已配置 Broker 参数并从独立进程读到新 schema；两频道仍暂停，实际输入待人工交接。
+
+登录预检发现 01 的 Lite 启动器原本只能在默认目录找到旧版 Windows 安装，实际运行的新版 Viewer 位于另一个目录，且用户 Startup 原无 Windows 入口。现从 alpha.19 包在独立目录注册 Windows 登录启动项并导入现有 A/B 身份及三凭据；Lite 14/14、Windows 16/16、Task Lease ready、两 VM 与两 Lite 容器运行、共享 n8n 健康检查 200。alpha.19 Viewer 自退出自检为 exit 0、两频道 Alt+4/5 映射有效，但自检明确 `gui_tested=false`；下一次真实登录、热键注册和宿主冷启动仍未验。01 无可用微信小程序项目/AppID；DELL 首装、真实客体离线 `-Apply` 及有效项目编译仍待验证。
+
 ## 2026-09-28 Lite alpha.11 / Task Lease alpha.20 本地候选（未公开发行）
 
 01 本机已安装 Lite `0.2.0-alpha.11` 与 Task Lease `0.1.0-alpha.20`。Lite 的两套 Linux 浏览器容器在升级后保持原有持久卷，安装诊断 14/14 项通过；Task Lease 由登录任务运行，安装诊断显示服务进程属于新版安装。Broker 识别四个固定频道：两套 Windows 客体和两套 Lite 浏览器频道。检查时四个频道均无活动租约或待确认输入，原有 n8n 健康检查返回 200，两台 Windows 客体运行中。这些是 01 的本机状态，不等于 DELL 首次安装或公开 Release。
