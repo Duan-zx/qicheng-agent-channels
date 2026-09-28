@@ -1,7 +1,8 @@
-"""Fixed, read-only WeChat DevTools CLI probe for a trusted Windows guest.
+"""Fixed WeChat DevTools CLI adapter for a trusted Windows guest.
 
 The host must load the configuration from a protected local source. Request data
-may select only the configured project ID and the ``check-login`` action.
+may select only the configured project ID and a fixed action. This module is not
+itself a remote entry point; a future transport must enforce a guest lease.
 """
 
 from dataclasses import dataclass
@@ -96,22 +97,75 @@ def _kill_tree(process):
 
 def check_login(config, request):
     """Return only login status or a fixed error code; never CLI output."""
+    failure = _validate(config, request, "check-login")
+    if failure:
+        return failure
+    output, failure = _run_cli(config, ["islogin", "--port", str(config.service_port)])
+    if failure:
+        return failure
+    try:
+        # The official CLI may print fixed startup lines before its JSON result.
+        lines = output.decode("utf-8").splitlines()
+        matches = [json.loads(line) for line in lines if line.lstrip().startswith("{")]
+        values = [item["login"] for item in matches
+                  if isinstance(item, dict) and set(item) == {"login"}
+                  and type(item["login"]) is bool]
+    except (UnicodeError, json.JSONDecodeError):
+        return _error("invalid_output")
+    if len(values) != 1:
+        return _error("invalid_output")
+    return {"ok": True, "result": {"login": values[0]}}
+
+
+def open_project(config, request):
+    """Attempt the configured project; require verified CLI receipt for success."""
+    failure = _validate(config, request, "open")
+    if failure:
+        return failure
+    _, failure = _run_cli(config, ["open", "--project", config.guest_project_path,
+                                   "--port", str(config.service_port)])
+    if failure:
+        return failure
+    # The observed installation has supplied only a failure response so far.
+    # A zero exit (including empty output or an unverified "success" string)
+    # cannot establish that the IDE accepted the project. Add an allowlisted
+    # success parser only after a real CLI receipt has been retained and tested.
+    return _error("indeterminate_output")
+
+
+def _validate(config, request, action):
     if not isinstance(config, TrustedWechatConfig):
         return _error("invalid_config")
     if (not isinstance(request, dict) or set(request) != {"project_id", "action"}
             or request.get("project_id") != config.project_id
-            or request.get("action") != "check-login"):
+            or request.get("action") != action):
         return _error("invalid_request")
+    return None
 
-    argv = [config.cli_bat_path, "islogin", "--port", str(config.service_port)]
+
+def _reported_cli_error(output):
+    for line in output.splitlines():
+        if re.search(rb"(?i)^\s*\[error\](?:\s|$)", line):
+            return True
+        stripped = line.strip()
+        if stripped.startswith(b"{"):
+            code = re.search(rb"(?:^|[,\s{])(?:[\"']?code[\"']?)\s*:\s*[\"']?([0-9]+)[\"']?",
+                             stripped, re.IGNORECASE)
+            if code and int(code.group(1)) != 0:
+                return True
+    return False
+
+
+def _run_cli(config, arguments):
+    argv = [config.cli_bat_path, *arguments]
     try:
         process = subprocess.Popen(
             argv, cwd=config.guest_project_path, shell=False,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
         )
     except OSError:
-        return _error("start_failed")
+        return None, _error("start_failed")
 
     output = bytearray()
     overflow = threading.Event()
@@ -137,19 +191,19 @@ def check_login(config, request):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _kill_tree(process)
-                return _error("timeout")
+                return None, _error("timeout")
             reader.join(min(remaining, 0.05))
         if overflow.is_set():
             _kill_tree(process)
-            return _error("output_too_large")
+            return None, _error("output_too_large")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _kill_tree(process)
-            return _error("timeout")
+            return None, _error("timeout")
         exit_code = process.wait(timeout=remaining)
     except (OSError, subprocess.TimeoutExpired):
         _kill_tree(process)
-        return _error("timeout")
+        return None, _error("timeout")
     finally:
         # Closing a pipe while a descendant still owns its write handle may
         # block. The daemon reader is intentionally left alone in that case.
@@ -157,16 +211,9 @@ def check_login(config, request):
             process.stdout.close()
 
     if exit_code != 0:
-        return _error("cli_failed")
-    try:
-        # The official CLI may print fixed startup lines before its JSON result.
-        lines = bytes(output).decode("utf-8").splitlines()
-        matches = [json.loads(line) for line in lines if line.lstrip().startswith("{")]
-        values = [item["login"] for item in matches
-                  if isinstance(item, dict) and set(item) == {"login"}
-                  and type(item["login"]) is bool]
-    except (UnicodeError, json.JSONDecodeError):
-        return _error("invalid_output")
-    if len(values) != 1:
-        return _error("invalid_output")
-    return {"ok": True, "result": {"login": values[0]}}
+        return None, _error("cli_failed")
+    # cli.bat can exit 0 even when its own response starts with
+    # "[error] {code:10,...}". Keep diagnostics fixed; never return CLI text.
+    if _reported_cli_error(output):
+        return None, _error("cli_reported_error")
+    return bytes(output), None

@@ -19,6 +19,7 @@ CONFIG = {
     "service_port": 36635,
 }
 REQUEST = {"project_id": "guest-a", "action": "check-login"}
+OPEN_REQUEST = {"project_id": "guest-a", "action": "open"}
 
 
 class FakeProcess:
@@ -95,6 +96,18 @@ class WechatCliTests(unittest.TestCase):
                                  {"ok": False, "error": {"code": "invalid_request"}})
             popen.assert_not_called()
 
+        with patch.object(wechat_cli.subprocess, "Popen") as popen:
+            for request in (
+                OPEN_REQUEST | {"project_path": r"C:\Other"},
+                OPEN_REQUEST | {"port": 1},
+                OPEN_REQUEST | {"argv": ["upload"]},
+                OPEN_REQUEST | {"action": "preview"},
+                OPEN_REQUEST | {"project_id": "guest-b"},
+            ):
+                self.assertEqual(wechat_cli.open_project(self.config, request),
+                                 {"ok": False, "error": {"code": "invalid_request"}})
+            popen.assert_not_called()
+
     def test_fixed_command_and_boolean_only(self):
         with patch.object(wechat_cli.subprocess, "Popen", return_value=FakeProcess(
             b'IDE server listening on 127.0.0.1\n{"login":true}\n')) as popen:
@@ -104,7 +117,56 @@ class WechatCliTests(unittest.TestCase):
         self.assertEqual(args[0], [CONFIG["cli_bat_path"], "islogin", "--port", "36635"])
         self.assertEqual(kwargs["cwd"], CONFIG["guest_project_path"])
         self.assertIs(kwargs["shell"], False)
-        self.assertEqual(kwargs["stderr"], wechat_cli.subprocess.DEVNULL)
+        self.assertEqual(kwargs["stderr"], wechat_cli.subprocess.STDOUT)
+
+    def test_open_uses_only_configured_project_but_requires_verified_receipt(self):
+        with patch.object(wechat_cli.subprocess, "Popen", return_value=FakeProcess(
+            b"[success] IDE request accepted\n")) as popen:
+            result = wechat_cli.open_project(self.config, OPEN_REQUEST)
+        self.assertEqual(result, {"ok": False,
+                                  "error": {"code": "indeterminate_output"}})
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0], [CONFIG["cli_bat_path"], "open", "--project",
+                                   CONFIG["guest_project_path"], "--port", "36635"])
+        self.assertEqual(kwargs["cwd"], CONFIG["guest_project_path"])
+        self.assertIs(kwargs["shell"], False)
+        self.assertEqual(kwargs["stderr"], wechat_cli.subprocess.STDOUT)
+
+    def test_cli_error_with_zero_exit_is_failure_and_redacted(self):
+        for output in (b"[error] {code:10, message:'SECRET AppID'}\n",
+                       b'{"code":10,"message":"SECRET AppID"}\n',
+                       b'{"code":"10","message":"SECRET AppID"}\n'):
+            for action, operation in ((REQUEST, wechat_cli.check_login),
+                                      (OPEN_REQUEST, wechat_cli.open_project)):
+                with self.subTest(action=action["action"], output=output):
+                    with patch.object(wechat_cli.subprocess, "Popen",
+                                      return_value=FakeProcess(output, exit_code=0)):
+                        result = operation(self.config, action)
+                    self.assertEqual(result, {"ok": False,
+                                              "error": {"code": "cli_reported_error"}})
+                    self.assertNotIn("SECRET", str(result))
+
+    def test_open_unknown_zero_exit_output_never_reports_submission(self):
+        for output in (b"", b"failed to open project\n", b"[success]\n",
+                       b'{"code":0}\n', b'{"code":"0"}\n'):
+            with self.subTest(output=output):
+                with patch.object(wechat_cli.subprocess, "Popen",
+                                  return_value=FakeProcess(output, exit_code=0)):
+                    result = wechat_cli.open_project(self.config, OPEN_REQUEST)
+                self.assertEqual(result, {"ok": False,
+                                          "error": {"code": "indeterminate_output"}})
+
+    def test_check_login_observed_boolean_false_is_a_valid_result(self):
+        with patch.object(wechat_cli.subprocess, "Popen", return_value=FakeProcess(
+            b'{"login":false}\n', exit_code=0)):
+            self.assertEqual(wechat_cli.check_login(self.config, REQUEST),
+                             {"ok": True, "result": {"login": False}})
+
+    def test_nonzero_exit_is_failure_even_with_success_text(self):
+        with patch.object(wechat_cli.subprocess, "Popen", return_value=FakeProcess(
+            b"[success]\n", exit_code=1)):
+            self.assertEqual(wechat_cli.open_project(self.config, OPEN_REQUEST),
+                             {"ok": False, "error": {"code": "cli_failed"}})
 
     def test_output_limit_and_no_raw_diagnostics(self):
         with patch.object(wechat_cli.subprocess, "Popen", return_value=FakeProcess(

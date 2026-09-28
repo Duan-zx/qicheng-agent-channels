@@ -159,14 +159,14 @@
     {
       "path": "tools/windows-channels/guest/wechat_cli.py",
       "kind": "source",
-      "bytes": 6177,
-      "sha256": "07aaeff37e0aa1f26ca9bbb01aa9e1f44d5219b2e912adb1d173a6e65de71777"
+      "bytes": 8034,
+      "sha256": "ceac662721f889f5e03637fb1c7c09431b28b839b1c30850ddc0f0842db87b84"
     },
     {
       "path": "tools/windows-channels/guest/README.md",
       "kind": "source",
-      "bytes": 8535,
-      "sha256": "75bc7186f96a87ec581ad01494e057b236d7c53e40c64f37329ad49de0711df8"
+      "bytes": 9435,
+      "sha256": "82fa61565e1893a56ad08dd78de95497eec253eccf872c80386137c35df2422e"
     },
     {
       "path": "tools/windows-channels/viewer/Viewer.cs",
@@ -249,8 +249,8 @@
     {
       "path": "tools/windows-channels/tests/test_wechat_cli.py",
       "kind": "source",
-      "bytes": 4970,
-      "sha256": "8434fe4637864f2bcf5305f48805e41557104e754ef8d8c7c7e08a2933d7ac95"
+      "bytes": 8696,
+      "sha256": "78dbe742d3ef23834db88e9227605c39cecaa67bbf23cd5f1fa953989bacb973"
     },
     {
       "path": "tools/windows-channels/tests/Test-PlanSafety.ps1",
