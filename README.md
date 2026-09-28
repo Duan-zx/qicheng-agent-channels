@@ -1,34 +1,33 @@
-# 启程 · AI 工作区
+# Qicheng · AI Workspaces
 
+[简体中文](README.zh-CN.md) · Apache-2.0 · Alpha
 
-![启程 AI 工作区产品结构示意，非实机截图](docs/images/workspace-concept.svg)
+![Concept diagram of Qicheng workspaces; not a product screenshot](docs/images/workspace-concept.svg)
 
-给 AI 独立的工作区，随时查看、接管，或回到自己的电脑。
+**Give each computer-using AI task its own workspace.** Run two browser jobs in separate Linux desktops while you keep using your Windows PC. Press **Alt+2** or **Alt+3** to look in; press **Alt+1** to return home. Take control of one channel, hand it back to a connected AI client, or pause it without changing the other channel.
 
-启程提供两种 Windows 主机安装包：默认使用轻量版；需要 Windows 原生应用时选择兼容版。AI 模型由你已有的客户端提供，安装包不包含模型订阅或 API 密钥。
+Qicheng has two installation paths. Start with Lite for browser work. Add native Windows channels only when a task needs a Windows desktop application, such as WeChat Developer Tools. Qicheng provides the workspace and controls; bring your own AI client. No model subscription or API key is included.
 
-仓库还提供可选的 Task Lease 源码与独立包构建脚本。它让显式接入的 Codex MCP 与 n8n 任务在同一原生频道上排队、在不同频道并行；安装轻量版无需它。当前公开 Release 仍是旧 Alpha，下面的新增源码属于本地待发布候选，尚无对应公开下载资产。
+| Package | Use it for | You need |
+| --- | --- | --- |
+| **Qicheng Lite** | Isolated browser profiles, web workflows and downloads | Windows host, Docker Desktop with a Linux engine; internet for the first image build |
+| **Qicheng Windows Channels** | Native desktop tools in separate Windows guests | Hyper-V capable Windows host, Python 3.12+, and your own licensed Windows guest installations |
 
-| 下载类别 | 适合的任务 | 需要的环境 |
-|---|---|---|
-| **Qicheng-Lite.zip · 轻量版** | 浏览器、网页后台、独立浏览器资料与下载文件 | Windows 主机、可用的 Docker Linux engine；首次构建需要联网 |
-| **Qicheng-Windows-Channels.zip · Windows 兼容版** | 必须在 Windows 客体里运行的原生工具 | 支持 Hyper-V 的 Windows、Python 3.12+、独立准备并获授权的 Windows 客体 |
+The optional **Task Lease** broker lets explicitly connected Codex MCP and n8n jobs queue for the same native channel and run on different channels at once. Lite does not require it. The broker does not automatically intercept other Computer Use, CLI or n8n actions.
 
-发布资产见 [Releases](https://github.com/Duan-zx/qicheng-agent-channels/releases)。尚未发布的构建不在此承诺为可下载版本。
+**Download status:** [public Releases](https://github.com/Duan-zx/qicheng-agent-channels/releases) currently contain earlier Alpha builds. This candidate branch includes newer source, but matching public installers have not been released. Check a Release's version and package hash before installing; do not assume the latest source is already in a download.
 
-## 轻量版使用
+## Try Lite
 
-1. 解压轻量安装包，运行包内安装入口；已有 Docker Linux engine 才能启动工作区。
-2. 安装后后台驻留。按 **Alt+2 / Alt+3** 进入两个工作区，**Alt+1** 回本机。
-3. 选择“我来接管”后使用浏览器；选择“交给 AI”后，已连接的 AI 客户端才可以输入。
-4. 浏览器资料与 Downloads 分别保存在两个独立 Docker 数据卷中，更新程序不删除它们。
+1. Download a matching Lite Release, verify its hash, extract it and run the installer included in the package. Docker's Linux engine must be available.
+2. The viewer stays in the tray. Use **Alt+2 / Alt+3** for the two workspaces and **Alt+1** for your own desktop.
+3. Choose **Take control** to use a channel yourself. Choose **Give to AI** before a connected client sends input. Each channel keeps its own browser profile and Downloads volume.
+4. Run the installed diagnostics if a channel is unavailable. The package quickstart lists data locations and AI connection steps.
 
-安装包内的快速说明提供诊断、AI 接入与数据位置。两版新查看器共存时，轻量版使用 Alt+1/2/3，Windows 兼容版从 Alt+4 起；旧安装版需要升级后才具备运行中改键能力。实际热键冲突会显示在诊断与状态回执中。
+When both editions are installed, Lite keeps Alt+1/2/3 and native Windows channels start at Alt+4. The Windows setup wizard limits its count accordingly. Hotkey conflicts are reported by diagnostics; available keys depend on the installed version.
 
-## 开源范围
+## What is open source
 
-本仓只包含产品源码、安装构建脚本、公开说明及脱敏验证记录；Windows Channels 与 Task Lease 分别有显式白名单和 SHA-256 源码清单。不包含内部协作库、用户浏览器资料、访问 token、Windows 镜像或第三方商业软件。
+This repository contains product source, package builders, public documentation and sanitized validation records. Windows Channels and Task Lease use explicit source allowlists and SHA-256 manifests. It does not include private product memory, browser data, tokens, Windows images, guest accounts or third-party commercial applications.
 
-启程自有代码使用 Apache-2.0。第三方运行时与容器内软件保留各自许可证，见轻量包内 THIRD-PARTY-NOTICES.md；不能将所有依赖重标为 Apache-2.0。Docker Desktop 不是本产品捆绑的软件，其使用条款需要单独遵循。
-
-实际验证范围与限制见 [验证记录](docs/VALIDATION.md)。本项目目前为 Alpha，不将自动测试通过等同于所有网站、登录流程或 Windows 软件均兼容。
+Qicheng's own code is offered under Apache-2.0. Included third-party software keeps its own licenses; see the Lite package's `THIRD-PARTY-NOTICES.md`. Docker Desktop and Windows guest licenses are separate. See [validation and known limits](docs/VALIDATION.md) and [asset provenance](docs/ASSET-PROVENANCE.md). This is an Alpha product: automated tests and synthetic input do not prove every site, login flow or Windows app works. DELL independent installation and real WeChat project compilation remain unverified.
