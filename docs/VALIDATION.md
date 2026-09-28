@@ -1,5 +1,9 @@
 # 验证范围与限制
 
+## 2026-09-28 Lite Viewer 可见退出入口源码候选
+
+展开和迷你控制条加入可访问的“⋯”菜单入口，复用托盘菜单已有的“退出并暂停输入”和逐频道暂停流程。私有 csc 构建、非 GUI 自测与独立静态布局审查通过；真实窗口点击、高 DPI、键盘与暂停失败路径未验。此文件仅在公开候选源码树中，尚未进入 01 已安装 Viewer、alpha.14 ZIP 或公开 Release。
+
 ## 2026-09-28 Lite alpha.14 外观与离线升级源码候选（未公开发行）
 
 新增显式 `-ReuseExistingBackendImage` 离线升级入口：只对已有 Lite 安装开放，预览阶段核对本机 Docker Linux engine、旧安装后端文件、镜像、Compose 容器和持久卷归属；执行前再核对镜像内后端文件。使用本地镜像时不构建或拉取镜像，数据卷继续保留。默认安装流程仍构建新版镜像。此路径不适用首次安装，也不证明新版 Dockerfile 镜像已构建；正式 01 安装和真实容器升级尚未验收，没有对应公开 Release。
@@ -8,7 +12,7 @@
 
 01 当前 Codex 会话已通过原生 MCP 实际只读调用 Lite 两频道的状态与截图，以及 Windows A/B 租约频道状态，目标分别是不同私有显示/客体；Lite 仍 paused、零输入，这不证明 AI 写入闭环。现行 Lite alpha.13、Windows alpha.20、Task Lease alpha.23 的本机只读诊断分别为 15/15、16/16、ready；DELL 尚未首装。
 
-当前 Firefox ESR 报创建非特权 user namespace `EPERM`。Docker 默认 seccomp 是可能的拒绝层，但没有受控对照证明唯一根因；现有其他过滤仍在运行。alpha.14 在 Dockerfile 及双频道 Compose 环境设置 `GTK_THEME=Adwaita:dark`，不关闭或隐藏任何安全提示。独立新 profile 临时容器截图证实 Firefox 标签栏、地址栏和提示条转为深色，安全警告仍可见；正常/异常退出的会话恢复问题没有因此解决。Compose 解析确认两频道接收该变量并继续引用本机已有镜像；backend 合同测试 6/6、产品恢复专项通过，私有候选 ZIP 70 文件已构建。完整产品测试需占用正式 Lite 使用的 18761/18762，未停正式服务为测试让路。Docker Hub 基础镜像下载失败，新 Dockerfile 镜像和 01 实装仍未验；正式容器仍为 alpha.13，不能以 Compose 配置推断外观已升级。没有 alpha.14 公开 Release 或对外可用性声明。
+当前 Firefox ESR 报创建非特权 user namespace `EPERM`。隔离临时容器的默认 seccomp/临时移除该层对照已确认 Docker 默认策略直接阻止该探针；没有测试完整浏览沙箱。正式产品未放宽 seccomp，也不隐藏安全提示。alpha.14 在 Dockerfile 及双频道 Compose 环境设置 `GTK_THEME=Adwaita:dark`。独立新 profile 临时容器截图证实 Firefox 标签栏、地址栏和提示条转为深色，安全警告仍可见；正常/异常退出的会话恢复问题没有因此解决。Compose 解析确认两频道接收该变量并继续引用本机已有镜像；backend 合同测试 6/6、产品恢复专项通过，私有候选 ZIP 70 文件已构建。完整产品测试需占用正式 Lite 使用的 18761/18762，未停正式服务为测试让路。Docker Hub 基础镜像下载失败，新 Dockerfile 镜像和 01 实装仍未验；正式容器仍为 alpha.13，不能以 Compose 配置推断外观已升级。没有 alpha.14 公开 Release 或对外可用性声明。
 
 上游依据：[Mozilla Linux 安全提示](https://support.mozilla.org/en-US/kb/linux-security-warning)、[Docker seccomp 说明](https://docs.docker.com/engine/security/seccomp/)。
 

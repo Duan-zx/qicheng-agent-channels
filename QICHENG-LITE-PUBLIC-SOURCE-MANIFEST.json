@@ -121,8 +121,8 @@
     },
     {
       "path": "tools/agent-channels/windows/Channels.cs",
-      "bytes": 40478,
-      "sha256": "af867c03a0d7857b61faa7c5a4bea52b5e1997bcb4c73e916b5b50556f79f1f7"
+      "bytes": 41288,
+      "sha256": "b34de5f1257a050cc229248498c512ab1f18a49af64a4255cf271de28b4633e4"
     },
     {
       "path": "tools/agent-channels/windows/Skin.cs",

@@ -28,6 +28,8 @@ The alpha.14 source sets a dark Firefox chrome by default, both in the image and
 
 The alpha.14 local source candidate also adds an explicit offline upgrade option for an existing Lite installation when Docker Hub is unavailable. Its preview checks the local Linux engine, installed backend files, Compose ownership, and persistent volumes; applying the upgrade also checks image content before reuse. The default installer still builds the new image. This path does not cover first installation or prove that the new Dockerfile image was built. See the package quickstart for the preview and apply commands. The offline upgrade has not been installed on the 01 host or published as a Release.
 
+A later local Viewer source candidate adds a visible overflow menu to both the expanded and compact bars, including the existing graceful **Exit and pause input** action. It has compiled and passed non-GUI checks; it is absent from the installed alpha.13 Viewer and the built alpha.14 ZIP. Its menu interaction and DPI rendering still need GUI acceptance.
+
 When both editions are installed, Lite uses Alt+1/2 and optionally Alt+3; native Windows channels start at Alt+4. The Windows setup wizard limits its count accordingly. Hotkey conflicts are reported by diagnostics; available keys depend on the installed version.
 
 ## What is open source

@@ -60,10 +60,11 @@ sealed class Channels : Form {
     readonly Label identity = new Label(), status = new Label();
     readonly TextBox address = new TextBox();
     readonly SignalButton[] channelButtons = new SignalButton[3];
-    SignalButton humanButton, agentButton, pauseButton, navigateButton, collapseButton, miniHumanButton, miniAgentButton, miniPauseButton;
+    SignalButton humanButton, agentButton, pauseButton, navigateButton, moreButton, collapseButton, miniMoreButton, miniHumanButton, miniAgentButton, miniPauseButton;
     readonly bool[] pngFallback = new bool[3];
     readonly System.Windows.Forms.Timer pollTimer = new System.Windows.Forms.Timer(), textTimer = new System.Windows.Forms.Timer();
     readonly NotifyIcon tray = new NotifyIcon();
+    readonly ContextMenuStrip viewerMenu = new ContextMenuStrip();
     readonly ToolTip tips = new ToolTip();
     readonly StringBuilder pendingText = new StringBuilder();
     readonly int channelCount;
@@ -196,13 +197,12 @@ sealed class Channels : Form {
         http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
         screen.SizeMode = PictureBoxSizeMode.Zoom; Controls.Add(screen); BuildBar(); BuildMiniBar();
         Resize += delegate { LayoutSurface(); }; LayoutSurface(); WireInput();
-        ContextMenuStrip menu = new ContextMenuStrip();
-        menu.Items.Add("打开频道一 · Alt+2", null, delegate { OpenChannel(1); });
-        if (channelCount == 2) menu.Items.Add("打开频道二 · Alt+3", null, delegate { OpenChannel(2); });
-        menu.Items.Add("回到本机 · Alt+1", null, delegate { ReturnToHost(); });
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("退出并暂停输入", null, async delegate { await ExitViewer(); });
-        tray.Icon = SystemIcons.Application; tray.Text = "启程 · AI 频道"; tray.ContextMenuStrip = menu;
+        viewerMenu.Items.Add("打开频道一 · Alt+2", null, delegate { OpenChannel(1); });
+        if (channelCount == 2) viewerMenu.Items.Add("打开频道二 · Alt+3", null, delegate { OpenChannel(2); });
+        viewerMenu.Items.Add("回到本机 · Alt+1", null, delegate { ReturnToHost(); });
+        viewerMenu.Items.Add(new ToolStripSeparator());
+        viewerMenu.Items.Add("退出并暂停输入", null, async delegate { await ExitViewer(); });
+        tray.Icon = SystemIcons.Application; tray.Text = "启程 · AI 频道"; tray.ContextMenuStrip = viewerMenu;
         tray.DoubleClick += delegate { OpenChannel(channel); }; tray.Visible = true;
         pollTimer.Interval = 700; pollTimer.Tick += async delegate { await Poll(); };
         textTimer.Interval = 55; textTimer.Tick += async delegate { textTimer.Stop(); await FlushText(); };
@@ -228,7 +228,10 @@ sealed class Channels : Form {
         address.HandleCreated += delegate { SetAddressCue("接管后可输入网址"); };
         address.KeyDown += async delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await NavigateAddress(); } }; addressShell.Controls.Add(address); bar.Controls.Add(addressShell);
         navigateButton = AddButton(bar, "打开", 54, ButtonTone.Quiet, async delegate { await NavigateAddress(); });
+        moreButton = AddButton(bar, "⋯", 42, ButtonTone.Quiet, ShowViewerMenu);
         collapseButton = AddButton(bar, "⌃", 42, ButtonTone.Icon, delegate { SetCollapsed(true); }); collapseButton.AccessibleName = "收起频道控制";
+        moreButton.AccessibleName = "更多频道操作"; moreButton.AccessibleDescription = "打开频道菜单，包含退出并暂停输入";
+        tips.SetToolTip(moreButton, "更多频道操作 · 退出并暂停输入");
         LayoutBar();
     }
 
@@ -236,6 +239,9 @@ sealed class Channels : Form {
         miniBar.Size = new Size(320, 44); miniBar.Fill = Theme.Panel; miniBar.Edge = Theme.Edge; miniBar.Radius = 20; Controls.Add(miniBar);
         SignalButton expand = new SignalButton { Text = "频道 1 · 输入已暂停    展开", Bounds = new Rectangle(6, 5, 308, 34), Font = Font, AccessibleName = "展开频道控制" };
         expand.Click += delegate { SetCollapsed(false); }; miniBar.Controls.Add(expand); miniBar.Tag = expand;
+        miniMoreButton = AddButton(miniBar, "⋯", 42, ButtonTone.Quiet, ShowViewerMenu);
+        miniMoreButton.AccessibleName = "更多频道操作"; miniMoreButton.AccessibleDescription = "打开频道菜单，包含退出并暂停输入";
+        tips.SetToolTip(miniMoreButton, "更多频道操作 · 退出并暂停输入");
         miniHumanButton = AddButton(miniBar, "我来接管", 0, ButtonTone.Human, async delegate { await SetMode("human"); });
         miniAgentButton = AddButton(miniBar, "交给 AI", 0, ButtonTone.Agent, async delegate { await SetMode("agent"); });
         miniPauseButton = AddButton(miniBar, "暂停", 0, ButtonTone.Pause, async delegate { await SetMode("paused"); });
@@ -245,6 +251,11 @@ sealed class Channels : Form {
     SignalButton AddButton(Control parent, string title, int width, ButtonTone tone, EventHandler click) {
         SignalButton button = new SignalButton { Text = title, Signal = Color.Empty, Font = Font, AccessibleName = title, Tone = tone };
         button.Click += click; parent.Controls.Add(button); return button;
+    }
+
+    void ShowViewerMenu(object sender, EventArgs e) {
+        Control button = sender as Control;
+        if (button != null) viewerMenu.Show(button, new Point(0, button.Height));
     }
 
     void WireInput() {
@@ -313,29 +324,31 @@ sealed class Channels : Form {
             int miniWidth = Math.Min(420, Math.Max(1, available)), miniHeight = forcedMini ? 88 : 44;
             miniBar.Size = new Size(miniWidth, miniHeight); SignalButton expand = miniBar.Tag as SignalButton;
             string compactText = !stateKnown ? (connected ? "正在读取状态" : "频道未连接") : mode == "agent" ? "AI 已接管" : mode == "human" ? "你正在操作" : "输入已暂停";
-            if (expand != null) { expand.Text = "频道 " + channel + " · " + compactText + (forcedMini ? "" : "    展开"); expand.Enabled = !forcedMini; expand.Bounds = new Rectangle(6, 5, Math.Max(1, miniWidth - 12), 34); }
+            if (expand != null) { expand.Text = "频道 " + channel + " · " + compactText + (forcedMini ? "" : "    展开"); expand.Enabled = !forcedMini; expand.Bounds = new Rectangle(6, 5, Math.Max(1, miniWidth - 60), 34); }
+            if (miniMoreButton != null) miniMoreButton.Bounds = new Rectangle(Math.Max(6, miniWidth - 48), 5, 42, 34);
             if (miniHumanButton != null) {
                 miniHumanButton.Visible = miniAgentButton.Visible = miniPauseButton.Visible = forcedMini;
                 if (forcedMini) { int gap = 4, actionWidth = Math.Max(1, (miniWidth - 12 - gap * 2) / 3), actionY = 48, actionHeight = 34, actionX = 6; miniHumanButton.Bounds = new Rectangle(actionX, actionY, actionWidth, actionHeight); actionX += actionWidth + gap; miniAgentButton.Bounds = new Rectangle(actionX, actionY, actionWidth, actionHeight); actionX += actionWidth + gap; miniPauseButton.Bounds = new Rectangle(actionX, actionY, Math.Max(1, miniWidth - 6 - actionX), actionHeight); }
             }
             miniBar.Location = new Point(Math.Max(0, (ClientSize.Width - miniBar.Width) / 2), 10); miniBar.BringToFront(); return;
         }
-        int width = Math.Min(1184, available), y = 8, height = 42, x = 10, channelWidth = width >= 1120 ? 110 : 72;
+        int width = Math.Min(1184, available), y = 8, height = 42, x = 10, channelWidth = width >= 1152 ? 110 : 66;
         bar.Width = width;
-        for (int i = 0; i <= channelCount; i++) { channelButtons[i].Shortcut = width >= 1120 ? "Alt+" + (i + 1) : ""; channelButtons[i].Bounds = new Rectangle(x, y, channelWidth, height); x += channelWidth + 2; }
-        x += 6; int identityWidth = width >= 1120 ? 86 : 70; identity.Bounds = new Rectangle(x, y, identityWidth, height); x += identityWidth + 8;
-        int statusWidth = width >= 1120 ? 126 : 92; statusShell.Bounds = new Rectangle(x, y, statusWidth, height); status.Bounds = new Rectangle(8, 2, Math.Max(1, statusWidth - 16), height - 4); x += statusWidth + 8;
-        int humanWidth = width >= 1120 ? 90 : 74, agentWidth = width >= 1120 ? 88 : 72, pauseWidth = width >= 1120 ? 68 : 60;
+        for (int i = 0; i <= channelCount; i++) { channelButtons[i].Shortcut = width >= 1152 ? "Alt+" + (i + 1) : ""; channelButtons[i].Bounds = new Rectangle(x, y, channelWidth, height); x += channelWidth + 2; }
+        x += 6; int identityWidth = width >= 1152 ? 86 : 64; identity.Bounds = new Rectangle(x, y, identityWidth, height); x += identityWidth + 8;
+        int statusWidth = width >= 1152 ? 126 : 88; statusShell.Bounds = new Rectangle(x, y, statusWidth, height); status.Bounds = new Rectangle(8, 2, Math.Max(1, statusWidth - 16), height - 4); x += statusWidth + (width >= 1152 ? 8 : 4);
+        int humanWidth = width >= 1152 ? 90 : 74, agentWidth = width >= 1152 ? 88 : 72, pauseWidth = width >= 1152 ? 68 : 60;
         humanButton.Bounds = new Rectangle(x, y, humanWidth, height); x += humanWidth + 4;
         agentButton.Bounds = new Rectangle(x, y, agentWidth, height); x += agentWidth + 4;
-        pauseButton.Bounds = new Rectangle(x, y, pauseWidth, height); x += pauseWidth + 10;
+        pauseButton.Bounds = new Rectangle(x, y, pauseWidth, height); x += pauseWidth + (width >= 1152 ? 10 : 2);
         bool showAddress = width >= 1050; addressShell.Visible = showAddress; navigateButton.Visible = showAddress;
         if (showAddress) {
-            int addressWidth = Math.Min(260, Math.Max(146, width - x - 54 - 4 - 42 - 10)); addressShell.Bounds = new Rectangle(x, y, addressWidth, height);
+            int addressWidth = Math.Min(260, Math.Max(146, width - x - 54 - 4 - 100 - 4)); addressShell.Bounds = new Rectangle(x, y, addressWidth, height);
             address.Bounds = new Rectangle(11, 11, Math.Max(1, addressWidth - 22), height - 22); x += addressWidth + 4;
             navigateButton.Bounds = new Rectangle(x, y, 54, height); x += 58;
         }
-        collapseButton.Bounds = new Rectangle(Math.Min(width - 52, x), y, 42, height);
+        moreButton.Bounds = new Rectangle(width - 100, y, 42, height);
+        collapseButton.Bounds = new Rectangle(width - 52, y, 42, height);
         bar.Location = new Point(Math.Max(0, (ClientSize.Width - bar.Width) / 2), 10); bar.BringToFront();
     }
     void LayoutSurface() { screen.Bounds = ClientRectangle; LayoutBar(); }
@@ -501,7 +514,7 @@ sealed class Channels : Form {
         if (miniHumanButton != null) { miniHumanButton.Tone = mode == "human" && connected ? ButtonTone.HumanActive : ButtonTone.Human; miniHumanButton.Invalidate(); }
         if (miniAgentButton != null) { miniAgentButton.Tone = mode == "agent" && connected ? ButtonTone.AgentActive : ButtonTone.Agent; miniAgentButton.Invalidate(); }
         if (miniPauseButton != null) { miniPauseButton.Tone = mode == "paused" && connected ? ButtonTone.PauseActive : ButtonTone.Pause; miniPauseButton.Invalidate(); }
-        SignalButton mini = miniBar.Tag as SignalButton; if (mini != null) { mini.Text = "频道 " + channel + " · " + modeText + "    展开"; mini.Signal = color; mini.Invalidate(); }
+        SignalButton mini = miniBar.Tag as SignalButton; if (mini != null) { mini.Text = "频道 " + channel + " · " + modeText + (mini.Enabled ? "    展开" : ""); mini.Signal = color; mini.Invalidate(); }
         bool canNavigate = stateKnown && connected && mode == "human"; address.ReadOnly = !canNavigate; address.TabStop = canNavigate; address.ForeColor = canNavigate ? Theme.Text : Theme.Muted; addressShell.Fill = canNavigate ? Theme.Input : Theme.Panel; addressShell.Edge = canNavigate ? Color.FromArgb(92, Theme.Human) : Theme.Edge; address.BackColor = addressShell.Fill; address.AccessibleDescription = canNavigate ? "输入网址后按 Enter" : "当前不可输入网址。"; navigateButton.Enabled = canNavigate; tips.SetToolTip(navigateButton, canNavigate ? "打开输入的网址" : "接管频道后才能输入网址"); SetAddressCue(canNavigate ? "输入网址并按 Enter" : mode == "agent" ? "AI 正在操作，接管后可输入" : "选择“我来接管”后可输入网址"); addressShell.Invalidate();
     }
 
@@ -513,7 +526,7 @@ sealed class Channels : Form {
     }
 
     protected override void Dispose(bool disposing) {
-        if (disposing) { pollTimer.Dispose(); textTimer.Dispose(); tray.Dispose(); if (showSignal != null) showSignal.Dispose(); inputGate.Dispose(); http.Dispose(); ReplaceImage(null); }
+        if (disposing) { pollTimer.Dispose(); textTimer.Dispose(); tray.Dispose(); viewerMenu.Dispose(); if (showSignal != null) showSignal.Dispose(); inputGate.Dispose(); http.Dispose(); ReplaceImage(null); }
         base.Dispose(disposing);
     }
 
