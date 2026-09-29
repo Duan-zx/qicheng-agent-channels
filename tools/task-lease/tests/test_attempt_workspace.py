@@ -88,7 +88,8 @@ class AttemptWorkspaceTests(unittest.TestCase):
 
     def test_failure_after_git_add_removes_only_clean_new_worktree(self):
         original_mkdir = Path.mkdir
-        target = self.builds / "task1" / "a1"
+        # Production canonicalizes roots; Windows temp paths may use 8.3 aliases.
+        target = self.builds.resolve() / "task1" / "a1"
         def fail_build(path, *args, **kwargs):
             if path == target:
                 raise OSError("simulated build directory failure")
