@@ -65,15 +65,24 @@ xsetroot -solid '#142235'
 export DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --fork --print-address)"
 printf '%s' "$DBUS_SESSION_BUS_ADDRESS" > /tmp/qicheng-dbus-address
 mkdir -p "$HOME/.mozilla" "$HOME/Downloads"
-# Let Firefox use profiles.ini/default profile so migrated browser state remains usable.
-firefox-esr --new-instance "file:///app/welcome.html#${CHANNEL_ID:-1}" >/tmp/browser.log 2>&1 &
+# Keep the normal Lite browser as the default. The optional WeChat image uses
+# the same private display and backend, with each channel's HOME on its volume.
+case "${QICHENG_DESKTOP_APP:-firefox}" in
+  firefox)
+    firefox-esr --new-instance "file:///app/welcome.html#${CHANNEL_ID:-1}" >/tmp/browser.log 2>&1 &
+    window_class=firefox ;;
+  wechat)
+    /opt/apps/io.github.msojocs.wechat-devtools-linux/files/bin/bin/wechat-devtools >/tmp/wechat-devtools.log 2>&1 &
+    window_class=wechat ;;
+  *) echo 'Unsupported QICHENG_DESKTOP_APP.' >&2; exit 2 ;;
+esac
 browser_pid=$!
 (
   count=0
   window_id=""
   while [ "$count" -lt 100 ]; do
     window_id="$(xdotool search --onlyvisible --pid "$browser_pid" 2>/dev/null | head -n 1 || true)"
-    [ -n "$window_id" ] || window_id="$(xdotool search --onlyvisible --class firefox 2>/dev/null | head -n 1 || true)"
+    [ -n "$window_id" ] || window_id="$(xdotool search --onlyvisible --class "$window_class" 2>/dev/null | head -n 1 || true)"
     [ -n "$window_id" ] && break
     count=$((count + 1))
     sleep 0.1

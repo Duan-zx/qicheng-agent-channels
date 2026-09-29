@@ -8,11 +8,14 @@ $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
 $record=Read-QichengLiteInstallRecord -InstallRoot $installRoot
 if(-not $record){throw '安装记录缺失；未启动容器或查看器。'}
 $channelCount=Get-QichengLiteChannelCount -Record $record
+$desktopApp=if($record.PSObject.Properties['desktopApp']){[string]$record.desktopApp}else{'firefox'}
+if($desktopApp -cnotin @('firefox','wechat')){throw '安装记录中的 desktopApp 无效；未启动容器或查看器。'}
 $token=Join-Path $installRoot '.local\channel.token'
 $compose=Join-Path $installRoot 'compose.yaml'
 $brokerToken=Join-Path $installRoot '.local\broker.token'
 $viewerToken=Join-Path $installRoot '.local\viewer.token'
 $brokerCompose=Join-Path $installRoot 'compose.broker.yaml'
+$wechatCompose=Join-Path $installRoot 'compose.wechat.yaml'
 $viewer=Join-Path $installRoot 'dist\AgentChannels.exe'
 foreach($required in @($token,$compose,$viewer)){if(-not(Test-Path -LiteralPath $required -PathType Leaf)){throw "运行文件缺失：$required。请重新安装或导入 token。"}}
 $tokenValue=(Get-Content -LiteralPath $token -Raw).Trim()
@@ -103,6 +106,12 @@ if(-not $dockerReady){
     throw 'Docker Linux engine 不可用。轻量版不捆绑 Docker Desktop；请先启动已获准的 Docker Linux 环境。'
 }
 $dockerComposeArguments=@('compose','--project-name','qicheng-agent-channels','--project-directory',$installRoot,'-f',$compose)
+if($desktopApp -eq 'wechat'){
+    foreach($required in @($wechatCompose,(Join-Path $installRoot 'Dockerfile.wechat'),(Join-Path $installRoot 'wechat-devtools-cli'),(Join-Path $installRoot 'wechat-cli-result.py'))){
+        if(-not(Test-Path -LiteralPath $required -PathType Leaf)){throw "微信可选镜像运行文件缺失：$required；未启动容器。"}
+    }
+    $dockerComposeArguments+=@('-f',$wechatCompose)
+}
 if($brokerEnabled){$dockerComposeArguments+=@('-f',$brokerCompose)}
 $services=@('channel1');$ports=@(18761)
 if($channelCount -eq 2){$services+= 'channel2';$ports+=18762}
@@ -118,7 +127,13 @@ if($channelCount -eq 1){
     }
 }
 $dockerArguments=@($dockerComposeArguments)+@('--profile','second','up','-d')
-if($BuildBackend){$dockerArguments+='--build'}else{$dockerArguments+=@('--no-build','--pull','never')}
+if($BuildBackend -and $desktopApp -eq 'wechat'){
+    & $DockerPath build --tag 'qicheng-agent-channels:0.1-local' --file (Join-Path $installRoot 'Dockerfile') $installRoot
+    if($LASTEXITCODE -ne 0){throw '微信可选镜像的 Lite 底座构建失败；未启动容器或查看器。'}
+    & $DockerPath build --tag 'qicheng-agent-channels-wechat:2.02.2608070-2-local' --file (Join-Path $installRoot 'Dockerfile.wechat') $installRoot
+    if($LASTEXITCODE -ne 0){throw '微信可选镜像构建失败（检查下载和 SHA-256）；未启动容器或查看器。'}
+}
+if($BuildBackend -and $desktopApp -eq 'firefox'){$dockerArguments+='--build'}else{$dockerArguments+=@('--no-build','--pull','never')}
 $dockerArguments+=$services
 & $DockerPath @dockerArguments
 if($LASTEXITCODE -ne 0){
@@ -142,7 +157,9 @@ foreach($attempt in 1..$HealthAttempts){
         if(-not $ready[$port]){
             try{
                 $state=Invoke-RestMethod -Uri ("http://127.0.0.1:$port/api/state") -Headers $headers -TimeoutSec 2
-                $ready[$port]=($state.input_target -eq 'private-linux-display' -and [int]$state.width -gt 0 -and [int]$state.height -gt 0 -and (-not $brokerEnabled -or ($state.input_auth -ceq 'broker-v2' -and [string]$state.channel_id -eq [string]($port-18760))))
+                $ready[$port]=($state.input_target -eq 'private-linux-display' -and [int]$state.width -gt 0 -and [int]$state.height -gt 0 -and
+                    (Test-QichengLiteDesktopState -DesktopApp $desktopApp -State $state) -and
+                    (-not $brokerEnabled -or ($state.input_auth -ceq 'broker-v2' -and [string]$state.channel_id -eq [string]($port-18760))))
             }catch{}
         }
     }
@@ -154,7 +171,7 @@ if(@($ports|Where-Object{-not $ready[$_]}).Count -gt 0){
         & $DockerPath @dockerComposeArguments stop @services|Out-Null
         if($LASTEXITCODE -ne 0){throw 'Broker 模式健康检查失败，且无法停止已选频道容器。请立即手动检查；未启动查看器。'}
     }
-    throw "容器已请求启动，但已选端口 $($ports -join '/') 健康检查未全部通过（Broker 模式要求 input_auth=broker-v2，旧镜像需用 -BuildBackend 重建）。Broker 模式下已停止已选频道；未启动查看器，未删除 volume。"
+    throw "容器已请求启动，但已选端口 $($ports -join '/') 健康检查未全部通过（微信模式要求 GUI 可见且存活；Broker 模式要求 input_auth=broker-v2）。Broker 模式下已停止已选频道；未启动查看器，未删除 volume。"
 }
 $windowsViewerStartRequested=$false
 $windowsHotkeysConfirmed=$false
@@ -185,4 +202,4 @@ if(-not $NoWindowsChannels -and -not[string]::IsNullOrWhiteSpace($env:LOCALAPPDA
 }
 $viewerArguments=if($Background){@('--background')}else{@('--show')}
 Start-Process -FilePath $viewer -ArgumentList $viewerArguments -WorkingDirectory $installRoot -WindowStyle Hidden|Out-Null
-[ordered]@{schemaVersion=1;status='started';installRoot=$installRoot;composeProject='qicheng-agent-channels';channelCount=$channelCount;services=$services;ports=$ports;backendBuilt=[bool]$BuildBackend;viewerMode=if($Background){'background'}else{'visible'};windowsViewerStartRequested=$windowsViewerStartRequested;windowsViewerStatus=$windowsViewerStatus;windowsHotkeysConfirmed=$windowsHotkeysConfirmed;tokenDisplayed=$false;volumesRemoved=$false}|ConvertTo-Json -Depth 4
+[ordered]@{schemaVersion=1;status='started';installRoot=$installRoot;composeProject='qicheng-agent-channels';channelCount=$channelCount;desktopApp=$desktopApp;services=$services;ports=$ports;backendBuilt=[bool]$BuildBackend;viewerMode=if($Background){'background'}else{'visible'};windowsViewerStartRequested=$windowsViewerStartRequested;windowsViewerStatus=$windowsViewerStatus;windowsHotkeysConfirmed=$windowsHotkeysConfirmed;tokenDisplayed=$false;volumesRemoved=$false}|ConvertTo-Json -Depth 4

@@ -16,6 +16,21 @@ function Get-QichengLiteSha256 {
     try{[BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose();$stream.Dispose()}
 }
 
+function Resolve-QichengLiteRegularFile {
+    param([Parameter(Mandatory=$true)][string]$Path,[Parameter(Mandatory=$true)][string]$Label)
+    $resolved=Resolve-QichengLitePath -Path $Path -Label $Label
+    if(-not(Test-Path -LiteralPath $resolved -PathType Leaf)){throw "$Label 文件不存在。"}
+    $cursor=$resolved
+    while($cursor){
+        $item=Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+        if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "$Label 路径含重解析点；拒绝使用。"}
+        $parent=[IO.Path]::GetDirectoryName($cursor)
+        if([string]::IsNullOrEmpty($parent) -or $parent -eq $cursor){break}
+        $cursor=$parent
+    }
+    return $resolved
+}
+
 function Set-QichengLitePrivateAcl {
     param([Parameter(Mandatory=$true)][string]$Path,[switch]$File)
     if (-not (Test-Path -LiteralPath $Path)) { throw "ACL 目标不存在：$Path" }
@@ -57,4 +72,11 @@ function Get-QichengLiteChannelCount {
 function Test-QichengLiteTokenValue {
     param([Parameter(Mandatory=$true)][string]$Value)
     $Value -cmatch '^[a-f0-9]{64}$'
+}
+
+function Test-QichengLiteDesktopState {
+    param([Parameter(Mandatory=$true)][ValidateSet('firefox','wechat')][string]$DesktopApp,[Parameter(Mandatory=$true)]$State)
+    if($DesktopApp -eq 'firefox'){return $true}
+    if(-not $State.PSObject.Properties['desktop_app'] -or -not $State.PSObject.Properties['gui_alive']){return $false}
+    return ([string]$State.desktop_app -ceq 'wechat' -and $State.gui_alive -eq $true)
 }

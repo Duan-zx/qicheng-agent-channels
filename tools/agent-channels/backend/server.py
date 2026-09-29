@@ -138,6 +138,17 @@ class XDisplay:
     def frame_jpeg(self):
         return self._capture("jpeg", b"\xff\xd8\xff")
 
+def wechat_gui_alive():
+    try:
+        result = subprocess.run(
+            ["xdotool", "search", "--onlyvisible", "--class", "wechat"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=1,
+            check=False)
+        return result.returncode == 0 and bool(result.stdout.strip())
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 class Channel:
     def __init__(self, display, width=1600, height=900, *, broker_enabled=False, channel_id=None):
         self.display, self.width, self.height = display, width, height
@@ -153,7 +164,11 @@ class Channel:
     def status(self):
         with self.lock:
             self._expire_locked()
-            return self._status_locked()
+            result = self._status_locked()
+        result["desktop_app"] = os.environ.get("QICHENG_DESKTOP_APP", "firefox")
+        if result["desktop_app"] == "wechat":
+            result["gui_alive"] = wechat_gui_alive()
+        return result
     def _status_locked(self):
         lease = self.lease
         return {"channel_id": self.channel_id,
@@ -259,7 +274,10 @@ def handler_for(channel, token, broker_token=None, viewer_token=None):
             return not self.headers.get("Origin") and hmac.compare_digest(
                 supplied.encode(), ("Bearer " + expected).encode())
         def do_GET(self):
-            if self.path == "/health": return self.send(200, {"service": "agent-channels", "version": "0.1"})
+            if self.path == "/health":
+                if os.environ.get("QICHENG_DESKTOP_APP") == "wechat" and not wechat_gui_alive():
+                    return self.send(503, {"error": "WeChat desktop GUI unavailable"})
+                return self.send(200, {"service": "agent-channels", "version": "0.1"})
             if self.path == "/api/lease/inspect":
                 if broker_token is None or not self.authorized(broker_token):
                     return self.send(401, {"error": "Authentication required"})
@@ -269,7 +287,11 @@ def handler_for(channel, token, broker_token=None, viewer_token=None):
                     return self.send(401, {"error": "Authentication required"})
             elif not self.authorized(): return self.send(401, {"error": "Authentication required"})
             try:
-                if self.path == "/api/state": return self.send(200, channel.status())
+                if self.path == "/api/state":
+                    state = channel.status()
+                    if state.get("desktop_app") == "wechat" and not state.get("gui_alive"):
+                        return self.send(503, {"error": "WeChat desktop GUI unavailable", "desktop_app": "wechat", "gui_alive": False})
+                    return self.send(200, state)
                 if self.path == "/api/screenshot": return self.send(200, channel.screenshot(), "image/png")
                 if self.path == "/api/frame.jpg": return self.send(200, channel.frame_jpeg(), "image/jpeg")
                 self.send(404, {"error": "Not found"})

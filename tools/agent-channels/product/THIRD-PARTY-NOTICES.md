@@ -24,4 +24,6 @@ Docker is an external prerequisite. Qicheng Lite does not bundle Docker Desktop 
 
 The Windows viewer uses the locally installed Microsoft .NET Framework compiler and runtime; these Microsoft components are not redistributed in this package. Refer to Microsoft's applicable license terms.
 
+The optional `Dockerfile.wechat` downloads a pinned third-party WeChat DevTools Linux DEB only during an explicit image build, verifies its SHA-256, and installs it in the locally built image. The DEB and its Tencent components are not included in this source package or the Qicheng Lite ZIP, and the Qicheng Apache-2.0 license does not cover them. Consult the software's own terms before use or redistribution. See `docs/WECHAT-LINUX-OPTION.md`.
+
 This notice is informational and does not replace any upstream license text. When distributing a built image, retain the license/copyright material installed by the upstream image and Debian packages.

@@ -31,7 +31,7 @@ function Copy-File([string]$Source,[string]$Root,[string]$Relative,[string]$Kind
     $List.Add([ordered]@{path=$Relative.Replace('\','/');kind=$Kind;bytes=$item.Length;sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()})
 }
 function Add-CommonRuntime([string]$Root,[System.Collections.Generic.List[object]]$List){
-    foreach($relative in @('.dockerignore','Dockerfile','compose.yaml','compose.broker.yaml','bridge.py','broker_client.py','backend/forward.py','backend/README.md','backend/firefox-policies.json','backend/server.py','backend/start.sh','backend/welcome.html','backend/theme/ai-space.png')){
+    foreach($relative in @('.dockerignore','Dockerfile','Dockerfile.wechat','Dockerfile.wechat.offline','compose.yaml','compose.wechat.yaml','compose.broker.yaml','wechat-devtools-cli','wechat-cli-result.py','bridge.py','broker_client.py','backend/forward.py','backend/README.md','backend/firefox-policies.json','backend/server.py','backend/start.sh','backend/welcome.html','backend/theme/ai-space.png','docs/WECHAT-LINUX-OPTION.md')){
         Copy-File (Join-Path $moduleRoot $relative) $Root $relative 'runtime' $List
     }
     Copy-File (Join-Path $productRoot 'LICENSE') $Root 'LICENSE' 'license' $List

@@ -12,11 +12,13 @@ param(
     [switch]$DisableLegacyWindowsChannelsStartup,
     [switch]$LaunchAfterInstall,
     [switch]$ReuseExistingBackendImage,
+    [string]$WechatDebPath,
     [string]$DockerPath='docker',
     [ValidateRange(1,45)][int]$HealthAttempts=45,
     [int]$Port1=18761,
     [int]$Port2=18762,
     [ValidateSet(1,2)][int]$ChannelCount=0,
+    [ValidateSet('firefox','wechat')][string]$DesktopApp,
     [switch]$NonInteractive,
     [switch]$Apply
 )
@@ -31,6 +33,21 @@ $packageRoot=Resolve-QichengLitePath -Path $PackageRoot -Label 'PackageRoot'
 $installRoot=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
 $existingRecord=Read-QichengLiteInstallRecord -InstallRoot $installRoot
 if($ChannelCount -eq 0){$ChannelCount=if($existingRecord){Get-QichengLiteChannelCount -Record $existingRecord}else{1}}
+if(-not $PSBoundParameters.ContainsKey('DesktopApp')){
+    $DesktopApp=if($existingRecord -and $existingRecord.PSObject.Properties['desktopApp']){[string]$existingRecord.desktopApp}else{'firefox'}
+}
+if($DesktopApp -cnotin @('firefox','wechat')){throw '安装记录中的 desktopApp 无效；拒绝猜测桌面应用。'}
+if($WechatDebPath -and ($DesktopApp -ne 'wechat' -or -not $ReuseExistingBackendImage)){throw '-WechatDebPath 仅用于微信模式且需同时指定 -ReuseExistingBackendImage。'}
+if($DesktopApp -eq 'wechat' -and $ReuseExistingBackendImage -and -not $WechatDebPath){throw '本机微信 DEB 路径缺失；请指定 -WechatDebPath。'}
+$wechatDeb=$null
+if($WechatDebPath){
+    $wechatDeb=Resolve-QichengLiteRegularFile -Path $WechatDebPath -Label 'WechatDebPath'
+    if($wechatDeb.StartsWith($packageRoot.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -or $wechatDeb.StartsWith($installRoot.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)){
+        throw '微信 DEB 必须放在安装包和安装目录以外。'
+    }
+    if([IO.Path]::GetExtension($wechatDeb) -cne '.deb'){throw 'WechatDebPath 必须是 .deb 普通文件。'}
+    if((Get-QichengLiteSha256 -Path $wechatDeb) -cne 'c5246f3f7548905a8e768ed464d9f6400e3a59d0cd539f1fe6a85dde29860457'){throw '微信 DEB SHA-256 不匹配；未进行安装。'}
+}
 if([string]::IsNullOrWhiteSpace($DataRoot)){
     $DataRoot=if($existingRecord -and -not[string]::IsNullOrWhiteSpace([string]$existingRecord.dataRoot)){[string]$existingRecord.dataRoot}else{Get-QichengLiteDataRoot}
 }
@@ -77,14 +94,18 @@ if($ReuseExistingBackendImage){
     if(-not(Test-Path -LiteralPath $oldManifestPath -PathType Leaf)){throw '旧安装缺少 package-manifest.json；无法核验镜像来源。'}
     $oldManifest=Get-Content -LiteralPath $oldManifestPath -Raw -Encoding UTF8|ConvertFrom-Json -ErrorAction Stop
     if($oldManifest.schemaVersion -ne 1 -or $oldManifest.product -ne 'Qicheng Lite'){throw '旧安装 manifest 无效；拒绝复用镜像。'}
-    $buildInputs=@('.dockerignore','Dockerfile')+@(Get-ChildItem -LiteralPath (Join-Path $packageRoot 'backend') -File -Recurse|ForEach-Object{$_.FullName.Substring($packageRoot.Length).TrimStart('\')})
+    $buildSourceRoot=if($DesktopApp -eq 'wechat'){$installRoot}else{$packageRoot}
+    $buildInputs=@('.dockerignore','Dockerfile')+@(Get-ChildItem -LiteralPath (Join-Path $buildSourceRoot 'backend') -File -Recurse|ForEach-Object{$_.FullName.Substring($buildSourceRoot.Length).TrimStart('\')})
     foreach($relative in $buildInputs){
         $oldPath=Join-Path $installRoot $relative
         $newPath=Join-Path $packageRoot $relative
         if(-not(Test-Path -LiteralPath $oldPath -PathType Leaf)){throw "旧安装缺少后端构建文件 $relative；拒绝复用镜像。"}
         $oldEntry=@($oldManifest.files|Where-Object{[string]$_.path -ieq $relative.Replace('\','/')})
         if($oldEntry.Count -ne 1 -or (Get-QichengLiteSha256 -Path $oldPath) -ine [string]$oldEntry[0].sha256){throw "旧安装后端文件未通过原 manifest 校验：$relative。"}
-        if($relative -eq 'Dockerfile'){
+        if($DesktopApp -eq 'wechat'){
+            # The old base is checked against its own signed package; the derived
+            # WeChat image copies the current package's backend over /app.
+        }elseif($relative -eq 'Dockerfile'){
             $oldText=[IO.File]::ReadAllText($oldPath).Replace("`r`n","`n")
             $newText=[IO.File]::ReadAllText($newPath).Replace("`r`n","`n")
             # The alpha.14 browser chrome change is supplied by Compose as well.
@@ -205,7 +226,7 @@ if($brokerTokenValue -and $existingRecord -and (Test-Path -LiteralPath (Join-Pat
 $legacyLink=Join-Path $legacyStartupRoot '启程 Windows 频道.lnk'
 $legacyBackup=Join-Path $dataRoot 'compatibility-backup\启程 Windows 频道.lnk'
 $selectedPorts=@(18761);if($ChannelCount -eq 2){$selectedPorts+=18762}
-$plan=[ordered]@{schemaVersion=1;status=if($existingRecord){'upgrade-preview'}else{'not-installed'};version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;files=$expected.Count;tokenAction=if($ImportTokenPath){'import'}elseif($tokenValue){'preserve'}else{'generate'};composeProject='qicheng-agent-channels';channelCount=$ChannelCount;ports=$selectedPorts;defaultViewerMode='background';backendImageAction=if($ReuseExistingBackendImage){'reuse-local-image'}else{'build'};imageContentVerified=$imageContentVerified;disableLegacyWindowsChannelsStartup=[bool]$DisableLegacyWindowsChannelsStartup;legacyShortcutPresent=(Test-Path -LiteralPath $legacyLink -PathType Leaf);volumesRemoved=$false;applyRequested=[bool]$Apply;hostChangesMade=$false}
+$plan=[ordered]@{schemaVersion=1;status=if($existingRecord){'upgrade-preview'}else{'not-installed'};version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;files=$expected.Count;tokenAction=if($ImportTokenPath){'import'}elseif($tokenValue){'preserve'}else{'generate'};composeProject='qicheng-agent-channels';channelCount=$ChannelCount;desktopApp=$DesktopApp;ports=$selectedPorts;defaultViewerMode='background';backendImageAction=if($ReuseExistingBackendImage){'reuse-local-image'}else{'build'};imageContentVerified=$imageContentVerified;disableLegacyWindowsChannelsStartup=[bool]$DisableLegacyWindowsChannelsStartup;legacyShortcutPresent=(Test-Path -LiteralPath $legacyLink -PathType Leaf);volumesRemoved=$false;applyRequested=[bool]$Apply;hostChangesMade=$false}
 if(-not $Apply){$plan|ConvertTo-Json -Depth 5;return}
 
 $viewerPath=Join-Path $installRoot 'dist\AgentChannels.exe'
@@ -221,9 +242,81 @@ $stage=Join-Path $parent ('.QichengLite.stage.'+[guid]::NewGuid().ToString('N'))
 $backup=$null
 $activated=$false
 $legacyRemoved=$false
+$wechatImagePrepared=$false
+$wechatImageAttempted=$false
+$wechatImagePromoted=$false
+$imageNonce=[guid]::NewGuid().ToString('N')
+$candidateBase="qicheng-agent-channels:preflight-$imageNonce"
+$candidateWechat="qicheng-agent-channels-wechat:preflight-$imageNonce"
+$backupBase="qicheng-agent-channels:backup-$imageNonce"
+$backupWechat="qicheng-agent-channels-wechat:backup-$imageNonce"
+$finalBase='qicheng-agent-channels:0.1-local'
+$finalWechat='qicheng-agent-channels-wechat:2.02.2608070-2-local'
+$oldBasePresent=$false
+$oldWechatPresent=$false
+$offlineContext=$null
+function Remove-QichengWechatOfflineContext([string]$Path){
+    if(-not $Path -or -not(Test-Path -LiteralPath $Path)){return}
+    $resolved=[IO.Path]::GetFullPath($Path)
+    $tempBase=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+    if(-not([IO.Path]::GetDirectoryName($resolved).Equals($tempBase,[StringComparison]::OrdinalIgnoreCase)) -or
+       [IO.Path]::GetFileName($resolved) -notmatch '^qicheng-wechat-offline-[0-9a-f]{32}$' -or
+       ((Get-Item -LiteralPath $resolved -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+        throw '微信 DEB 临时构建目录不在预期位置；拒绝递归清理。'
+    }
+    Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction Stop
+    if(Test-Path -LiteralPath $resolved){throw '微信 DEB 临时构建目录清理失败。'}
+}
 $shortcutSnapshotRoot=Join-Path $parent ('.QichengLite.shortcuts.'+[guid]::NewGuid().ToString('N'))
 $shortcutSnapshot=New-Object 'System.Collections.Generic.List[object]'
 try{
+    if($DesktopApp -eq 'wechat'){
+        $wechatImageAttempted=$true
+        if(-not[string]::IsNullOrWhiteSpace($env:DOCKER_HOST) -and $env:DOCKER_HOST -notmatch '(?i)^npipe:////\./pipe/(docker_engine|dockerDesktopLinuxEngine)$'){
+            throw '当前 Docker endpoint 不是本机 Linux engine；拒绝构建微信镜像。'
+        }
+        $endpoint=@(& $DockerPath context inspect --format '{{.Endpoints.docker.Host}}' 2>$null)
+        if($LASTEXITCODE -ne 0 -or $endpoint.Count -ne 1 -or [string]$endpoint[0] -notmatch '(?i)^npipe:////\./pipe/(docker_engine|dockerDesktopLinuxEngine)$'){
+            throw '无法核实本机 Docker endpoint；拒绝构建微信镜像。'
+        }
+        $osType=@(& $DockerPath info --format '{{.OSType}}' 2>$null)
+        if($LASTEXITCODE -ne 0 -or $osType.Count -ne 1 -or [string]$osType[0] -cne 'linux'){
+            throw 'Docker Linux engine 不可用；拒绝构建微信镜像。'
+        }
+        if($ReuseExistingBackendImage){
+            $tempBase=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+            $offlineContext=Join-Path $tempBase ('qicheng-wechat-offline-'+$imageNonce)
+            New-Item -ItemType Directory -Path $offlineContext|Out-Null
+            Copy-Item -LiteralPath (Join-Path $packageRoot 'backend') -Destination (Join-Path $offlineContext 'backend') -Recurse
+            foreach($relative in @('Dockerfile.wechat.offline','wechat-devtools-cli','wechat-cli-result.py')){
+                Copy-Item -LiteralPath (Join-Path $packageRoot $relative) -Destination (Join-Path $offlineContext $relative)
+            }
+            $contextSources=@('Dockerfile.wechat.offline','wechat-devtools-cli','wechat-cli-result.py')+
+                @(Get-ChildItem -LiteralPath (Join-Path $packageRoot 'backend') -File -Recurse|ForEach-Object{$_.FullName.Substring($packageRoot.Length).TrimStart('\')})
+            foreach($relative in $contextSources){
+                $entry=@($manifest.files|Where-Object{[string]$_.path -ieq $relative.Replace('\','/')})
+                if($entry.Count -ne 1 -or (Get-QichengLiteSha256 -Path (Join-Path $offlineContext $relative)) -ine [string]$entry[0].sha256){
+                    throw "本机镜像构建上下文文件校验失败：$relative。"
+                }
+            }
+            Copy-Item -LiteralPath $wechatDeb -Destination (Join-Path $offlineContext 'wechat-devtools.deb')
+            if((Get-QichengLiteSha256 -Path (Join-Path $offlineContext 'wechat-devtools.deb')) -cne 'c5246f3f7548905a8e768ed464d9f6400e3a59d0cd539f1fe6a85dde29860457'){
+                throw '暂存微信 DEB SHA-256 不匹配；旧安装保持不变。'
+            }
+            & $DockerPath build --pull=false --build-arg ("BASE_IMAGE=$finalBase") --tag $candidateWechat --file (Join-Path $offlineContext 'Dockerfile.wechat.offline') $offlineContext
+        }else{
+            & $DockerPath build --tag $candidateBase --file (Join-Path $packageRoot 'Dockerfile') $packageRoot
+            if($LASTEXITCODE -ne 0){throw 'Lite 底座预构建失败；旧安装和桌面应用选择保持不变。'}
+            & $DockerPath build --build-arg ("BASE_IMAGE=$candidateBase") --tag $candidateWechat --file (Join-Path $packageRoot 'Dockerfile.wechat') $packageRoot
+        }
+        if($LASTEXITCODE -ne 0){throw '微信镜像下载、SHA-256 校验或预构建失败；旧安装和桌面应用选择保持不变。'}
+        $builtImages=if($ReuseExistingBackendImage){@($candidateWechat)}else{@($candidateBase,$candidateWechat)}
+        foreach($image in $builtImages){
+            $id=@(& $DockerPath image inspect --format '{{.Id}}' $image 2>$null)
+            if($LASTEXITCODE -ne 0 -or $id.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$id[0])){throw "预构建镜像无法核实：$image；旧安装保持不变。"}
+        }
+        $wechatImagePrepared=$true
+    }
     New-Item -ItemType Directory -Path $stage|Out-Null
     foreach($entry in $manifest.files){
         $relative=([string]$entry.path).Replace('/','\')
@@ -252,8 +345,26 @@ try{
         }
         [IO.File]::WriteAllText((Join-Path $tokenDirectory 'viewer.token'),$viewerTokenValue,[Text.UTF8Encoding]::new($false))
     }
-    $record=[ordered]@{schemaVersion=1;product='Qicheng Lite';version=[string]$manifest.version;installedAt=(Get-Date).ToUniversalTime().ToString('o');dataRoot=$dataRoot;composeProject='qicheng-agent-channels';channelCount=$ChannelCount;tokenPath='.local/channel.token';startupLink=(Join-Path $startupRoot '启程轻量工作台.lnk');startMenuRoot=$startMenuRoot;desktopLink=(Join-Path $desktopRoot '启程轻量工作台.lnk')}
+    $record=[ordered]@{schemaVersion=1;product='Qicheng Lite';version=[string]$manifest.version;installedAt=(Get-Date).ToUniversalTime().ToString('o');dataRoot=$dataRoot;composeProject='qicheng-agent-channels';channelCount=$ChannelCount;desktopApp=$DesktopApp;tokenPath='.local/channel.token';startupLink=(Join-Path $startupRoot '启程轻量工作台.lnk');startMenuRoot=$startMenuRoot;desktopLink=(Join-Path $desktopRoot '启程轻量工作台.lnk')}
     $record|ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $stage '.qicheng-lite-install.json') -Encoding UTF8
+    if($wechatImagePrepared){
+        $finalPairs=if($ReuseExistingBackendImage){,@($finalWechat,$backupWechat)}else{@(@($finalBase,$backupBase),@($finalWechat,$backupWechat))}
+        foreach($pair in $finalPairs){
+            $oldId=@(& $DockerPath image inspect --format '{{.Id}}' $pair[0] 2>$null)
+            if($LASTEXITCODE -eq 0 -and $oldId.Count -eq 1 -and -not[string]::IsNullOrWhiteSpace([string]$oldId[0])){
+                & $DockerPath image tag $pair[0] $pair[1]
+                if($LASTEXITCODE -ne 0){throw "旧镜像备份标签创建失败：$($pair[0])；旧安装保持不变。"}
+                if($pair[0] -eq $finalBase){$oldBasePresent=$true}else{$oldWechatPresent=$true}
+            }
+        }
+        $wechatImagePromoted=$true
+        if(-not $ReuseExistingBackendImage){
+            & $DockerPath image tag $candidateBase $finalBase
+            if($LASTEXITCODE -ne 0){throw 'Lite 底座镜像切换失败；旧安装保持不变。'}
+        }
+        & $DockerPath image tag $candidateWechat $finalWechat
+        if($LASTEXITCODE -ne 0){throw '微信镜像切换失败；旧安装保持不变。'}
+    }
     if(Test-Path -LiteralPath $installRoot){$backup=Join-Path $parent ('.QichengLite.backup.'+[guid]::NewGuid().ToString('N'));Move-Item -LiteralPath $installRoot -Destination $backup}
     Move-Item -LiteralPath $stage -Destination $installRoot
     $activated=$true
@@ -323,9 +434,22 @@ try{
         $legacyRemoved=$true
         $legacyDisabled=$true
     }
+    Remove-QichengWechatOfflineContext -Path $offlineContext
     if($backup){Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue}
     if(Test-Path -LiteralPath $shortcutSnapshotRoot){Remove-Item -LiteralPath $shortcutSnapshotRoot -Recurse -Force -ErrorAction SilentlyContinue}
+    if($wechatImageAttempted){foreach($tag in @($candidateBase,$candidateWechat,$backupBase,$backupWechat)){& $DockerPath image rm $tag 2>$null|Out-Null}}
 }catch{
+    $installError=$_
+    $imageRestoreErrors=New-Object 'System.Collections.Generic.List[string]'
+    if($wechatImagePromoted){
+        $restoreTriples=if($ReuseExistingBackendImage){,@($finalWechat,$backupWechat,$oldWechatPresent)}else{@(@($finalBase,$backupBase,$oldBasePresent),@($finalWechat,$backupWechat,$oldWechatPresent))}
+        foreach($triple in $restoreTriples){
+            if($triple[2]){& $DockerPath image tag $triple[1] $triple[0] 2>$null|Out-Null}
+            else{& $DockerPath image rm $triple[0] 2>$null|Out-Null}
+            if($LASTEXITCODE -ne 0){$imageRestoreErrors.Add([string]$triple[0])}
+        }
+    }
+    if($wechatImageAttempted){foreach($tag in @($candidateBase,$candidateWechat,$backupBase,$backupWechat)){& $DockerPath image rm $tag 2>$null|Out-Null}}
     if($activated -and (Test-Path -LiteralPath $installRoot)){Remove-Item -LiteralPath $installRoot -Recurse -Force}
     if($backup -and (Test-Path -LiteralPath $backup)){Move-Item -LiteralPath $backup -Destination $installRoot}
     if($legacyRemoved -and -not(Test-Path -LiteralPath $legacyLink) -and (Test-Path -LiteralPath $legacyBackup -PathType Leaf)){Copy-Item -LiteralPath $legacyBackup -Destination $legacyLink -Force -ErrorAction SilentlyContinue}
@@ -336,12 +460,14 @@ try{
         }elseif(Test-Path -LiteralPath $shortcut.Path){Remove-Item -LiteralPath $shortcut.Path -Force -ErrorAction SilentlyContinue}
     }
     if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force}
+    Remove-QichengWechatOfflineContext -Path $offlineContext
     if(Test-Path -LiteralPath $shortcutSnapshotRoot){Remove-Item -LiteralPath $shortcutSnapshotRoot -Recurse -Force -ErrorAction SilentlyContinue}
-    throw
+    if($imageRestoreErrors.Count){throw "安装失败且镜像标签回滚未核实：$($imageRestoreErrors -join ', ')。原错误：$($installError.Exception.Message)"}
+    throw $installError
 }
 
 $startStatus=$null
 if($LaunchAfterInstall){
-    try{$startStatus=(& (Join-Path $installRoot 'Start-Qicheng-Lite.ps1') -Background -BuildBackend:(!$ReuseExistingBackendImage) -DockerPath $DockerPath -HealthAttempts $HealthAttempts|Out-String|ConvertFrom-Json).status}catch{$startStatus='start-failed';$startError=$_.Exception.Message}
+    try{$startStatus=(& (Join-Path $installRoot 'Start-Qicheng-Lite.ps1') -Background -BuildBackend:($DesktopApp -eq 'firefox' -and !$ReuseExistingBackendImage) -DockerPath $DockerPath -HealthAttempts $HealthAttempts|Out-String|ConvertFrom-Json).status}catch{$startStatus='start-failed';$startError=$_.Exception.Message}
 }
-[ordered]@{schemaVersion=1;status=if($startStatus -eq 'start-failed'){'installed-start-failed'}else{'installed'};version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;tokenImported=[bool]$ImportTokenPath;tokenDisplayed=$false;composeProject='qicheng-agent-channels';channelCount=$ChannelCount;ports=$selectedPorts;viewerMode='background';backendImageAction=if($ReuseExistingBackendImage){'reuse-local-image'}else{'build'};imageContentVerified=$imageContentVerified;legacyStartupDisabled=$legacyDisabled;legacyBackup=if($legacyDisabled){$legacyBackup}else{$null};startStatus=$startStatus;startError=if($startStatus -eq 'start-failed'){$startError}else{$null};volumesRemoved=$false;hostChangesMade=$true}|ConvertTo-Json -Depth 5
+[ordered]@{schemaVersion=1;status=if($startStatus -eq 'start-failed'){'installed-start-failed'}else{'installed'};version=[string]$manifest.version;installRoot=$installRoot;dataRoot=$dataRoot;tokenImported=[bool]$ImportTokenPath;tokenDisplayed=$false;composeProject='qicheng-agent-channels';channelCount=$ChannelCount;desktopApp=$DesktopApp;ports=$selectedPorts;viewerMode='background';backendImageAction=if($ReuseExistingBackendImage){'reuse-local-image'}else{'build'};imageContentVerified=$imageContentVerified;legacyStartupDisabled=$legacyDisabled;legacyBackup=if($legacyDisabled){$legacyBackup}else{$null};startStatus=$startStatus;startError=if($startStatus -eq 'start-failed'){$startError}else{$null};volumesRemoved=$false;hostChangesMade=$true}|ConvertTo-Json -Depth 5

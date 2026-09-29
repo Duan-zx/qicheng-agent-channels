@@ -1,0 +1,21 @@
+#!/bin/sh
+# Call the Electron CLI JS directly: the upstream bin wrapper prints help for islogin.
+set -eu
+electron=/opt/apps/io.github.msojocs.wechat-devtools-linux/files/bin/electron/electron
+cli=/opt/apps/io.github.msojocs.wechat-devtools-linux/files/bin/resources/app.asar.unpacked/js/common/cli/index.js
+[ -x "$electron" ] && [ -f "$cli" ] || { echo 'WeChat DevTools CLI is missing.' >&2; exit 127; }
+command -v timeout >/dev/null 2>&1 || { echo 'timeout is required for bounded CLI execution.' >&2; exit 127; }
+output=$(ELECTRON_RUN_AS_NODE=1 timeout --signal=TERM --kill-after=3s 30s "$electron" "$cli" "$@" 2>&1) || {
+  status=$?
+  printf '%s\n' "$output"
+  [ "$status" -ne 124 ] || echo 'WeChat DevTools CLI timed out after 30 seconds.' >&2
+  exit "$status"
+}
+printf '%s\n' "$output"
+# Some upstream operations report [error] or a nonzero JSON code while exiting 0.
+if printf '%s\n' "$output" | python3 /usr/local/libexec/wechat-cli-result.py; then
+  :
+else
+  echo 'WeChat DevTools CLI reported an error despite exit status 0.' >&2
+  exit 1
+fi

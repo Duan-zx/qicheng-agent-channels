@@ -26,8 +26,8 @@
     },
     {
       "path": "tools/agent-channels/README.md",
-      "bytes": 2826,
-      "sha256": "9c330e581b23eb429315e39d722a8378845bf036244c4d194a511d46705ce62e"
+      "bytes": 2926,
+      "sha256": "ad16062a04965506f99e1709bc84b16bbbc67d49616741a48866aa20e1178c11"
     },
     {
       "path": "tools/agent-channels/Build.ps1",
@@ -40,9 +40,24 @@
       "sha256": "75a39adf3c6c189352e083241fefc2c6e62e1fe5a9ab09741d4988b41600bab8"
     },
     {
+      "path": "tools/agent-channels/Dockerfile.wechat",
+      "bytes": 1366,
+      "sha256": "98ac93059d4edd88aa861a37af9c96b819ed9c89f546811e02b374c0ba609022"
+    },
+    {
+      "path": "tools/agent-channels/Dockerfile.wechat.offline",
+      "bytes": 1173,
+      "sha256": "cceb49500c5cc063c044cd9f430779621a1ec7b16155630a19fbaf7588064c81"
+    },
+    {
       "path": "tools/agent-channels/compose.yaml",
       "bytes": 940,
       "sha256": "33b11eb5bc5abaf6707ff4d8085b95a58958128ead48e9cb89f457e89e17e273"
+    },
+    {
+      "path": "tools/agent-channels/compose.wechat.yaml",
+      "bytes": 658,
+      "sha256": "71594628666e622ff37be5958031877b94f64694158bd50c52c28c806ae0f86a"
     },
     {
       "path": "tools/agent-channels/compose.broker.yaml",
@@ -91,18 +106,28 @@
     },
     {
       "path": "tools/agent-channels/backend/server.py",
-      "bytes": 18088,
-      "sha256": "cd5c2ac87f5841154d28c03fa16a081be4bbb9a5c973558400fff42e477b3c42"
+      "bytes": 19154,
+      "sha256": "c830997a47b85cb9d31eca5264e22c14989c975f1671d0bda2782eb0c7c96013"
     },
     {
       "path": "tools/agent-channels/backend/start.sh",
-      "bytes": 2701,
-      "sha256": "4a8b11987c63fc2db7536733031a5682880c24bec4cbc4fd6e5c22cff2aa0bd7"
+      "bytes": 3082,
+      "sha256": "1a73060d4b7715b4044867368466c15f8946cc40be0fe0e02a86581b74e6b23e"
     },
     {
       "path": "tools/agent-channels/backend/welcome.html",
       "bytes": 9038,
       "sha256": "6b49a5f69c71d966a216db3e784890b5f3315cd14ff3eb213bdb276bc0835ea4"
+    },
+    {
+      "path": "tools/agent-channels/wechat-devtools-cli",
+      "bytes": 1051,
+      "sha256": "eaf3aa65606911276f26ae01a554bb815ed078933f687884499871878c1b6c0c"
+    },
+    {
+      "path": "tools/agent-channels/wechat-cli-result.py",
+      "bytes": 568,
+      "sha256": "1fe8ea7ce20738a3ea88722f7268bf8677c9c6fcb1ebadf177f3cfa3c8d85bc3"
     },
     {
       "path": "tools/agent-channels/backend/theme/ai-space.png",
@@ -118,6 +143,11 @@
       "path": "tools/agent-channels/docs/RELEASE-0.2.0-alpha.1-local.md",
       "bytes": 2207,
       "sha256": "7783c4ea901db9aa69e816746d175c98268632b17b247de0cb2d12bb1db5df08"
+    },
+    {
+      "path": "tools/agent-channels/docs/WECHAT-LINUX-OPTION.md",
+      "bytes": 6490,
+      "sha256": "a8bbd0af1bb2e99f29f62c5bd5e973f7cff11ae35a57603a001df950942d5ffd"
     },
     {
       "path": "tools/agent-channels/windows/Channels.cs",
@@ -150,29 +180,34 @@
       "sha256": "1a0025539f51780e74b98a4d36968616e0026a5d76eed0874ba2a71c2742b019"
     },
     {
+      "path": "tools/agent-channels/tests/test_wechat_option.py",
+      "bytes": 3549,
+      "sha256": "9096868e07cc38ae9173748f569ced327825f4b3bfd5c570f04ac35e4828598a"
+    },
+    {
       "path": "tools/agent-channels/product/LICENSE",
       "bytes": 11558,
       "sha256": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6"
     },
     {
       "path": "tools/agent-channels/product/THIRD-PARTY-NOTICES.md",
-      "bytes": 2437,
-      "sha256": "ec2c79af9b39208cd8f74a41fa6b78c2b857dc3e7409332dee70d1fa8501e970"
+      "bytes": 2885,
+      "sha256": "1e7e77b9f4321aab735dca1e784a83269eb3a8d3648cabcc63b4cfde023ecc05"
     },
     {
       "path": "tools/agent-channels/product/QUICKSTART.zh-CN.md",
-      "bytes": 9007,
-      "sha256": "851ddd723cc2377d5fc0855883e2421f1875b414fe0a756bd8603c5846b4c10d"
+      "bytes": 9222,
+      "sha256": "e18e3329270263ab313ec4a561e9832b00576d181c040bdc601f30a241a21bde"
     },
     {
       "path": "tools/agent-channels/product/Source-Allowlist.psd1",
-      "bytes": 1629,
-      "sha256": "5406fc08ad5643ba0d8817eb9c96301531eb924fc7837808143febcb752a3909"
+      "bytes": 1907,
+      "sha256": "3783fd9b2b735299593fcb43a0219afca23dbcb4f3623ff9d58c8821465ddaf4"
     },
     {
       "path": "tools/agent-channels/product/Build-Package.ps1",
-      "bytes": 5593,
-      "sha256": "eaebcdc73ca6d8848ea1af785b8b0b82e97fd6a6b232ae5d11fd4da88115a179"
+      "bytes": 5738,
+      "sha256": "b74dad74d555b6f97ba926fdfafe7f500e3e1441cdaddc50dac4b73ec454dbca"
     },
     {
       "path": "tools/agent-channels/product/Export-PublicSource.ps1",
@@ -181,23 +216,23 @@
     },
     {
       "path": "tools/agent-channels/product/runtime/Product.Common.ps1",
-      "bytes": 3283,
-      "sha256": "3fa73156350abe63c29084b06f8abf830af201640f00fcb17d69ca41c6165044"
+      "bytes": 4432,
+      "sha256": "c52cc445bfeb7680fa77828daaed325d5caaed6c956da3be5597b9f456bc6caa"
     },
     {
       "path": "tools/agent-channels/product/runtime/Install-Qicheng-Lite.ps1",
-      "bytes": 29681,
-      "sha256": "555e030defe34a04522b8d7da7292800b2bb336b8d362bf450e09285efc80ddb"
+      "bytes": 39177,
+      "sha256": "94cc8f53caf1cf5e34f16519706262a432a6d6bbf28d38bd34f9cfc3176cf499"
     },
     {
       "path": "tools/agent-channels/product/runtime/Start-Qicheng-Lite.ps1",
-      "bytes": 13737,
-      "sha256": "83200fffcad20273d545cad5e75cd51075cd7b7e6dd102f540812a0f3b579051"
+      "bytes": 15181,
+      "sha256": "f66638f800287fcb892f72ad6a24477afe84667c3fd3271acf478fc33c681eae"
     },
     {
       "path": "tools/agent-channels/product/runtime/Diagnose-Qicheng-Lite.ps1",
-      "bytes": 9962,
-      "sha256": "9ed9a0137306507c3260257f464634516982be8b524536440736e6a6590530af"
+      "bytes": 11458,
+      "sha256": "9ebdeea6b0b324f1d14369f7ca37a267e3bcbd105350b05bd33521d503845aa5"
     },
     {
       "path": "tools/agent-channels/product/runtime/Export-Downloads.ps1",
@@ -233,6 +268,11 @@
       "path": "tools/agent-channels/product/tests/Test-ProductPackage.ps1",
       "bytes": 67681,
       "sha256": "b9a2b096329846285b1513533c82576f1844ebc26e1a05400071c29403356d6c"
+    },
+    {
+      "path": "tools/agent-channels/product/tests/Test-WechatInstall.ps1",
+      "bytes": 11026,
+      "sha256": "4413a2c19e137e824b2254154dc006bfa3a71763bf6643d8ed4e7e4fed11ab6f"
     },
     {
       "path": "tools/agent-channels/product/tests/Test-LegacyStartupDiagnosis.ps1",

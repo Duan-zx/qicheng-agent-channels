@@ -10,6 +10,8 @@
 
 ## MCP 接入
 
+可选 Linux 微信开发者工具镜像及 CLI 见 [构建说明](docs/WECHAT-LINUX-OPTION.md)。
+
 stdio 桥启动命令：`python <当前克隆目录>/tools/agent-channels/bridge.py --channel 1`。频道二用 `--channel 2`。Python 及桥脚本最好使用接手机器的绝对路径；不要依赖另一台机器的盘符。
 
 Codex 片段见 [codex.example.toml](integrations/codex.example.toml)。它是模板，不是已经加载的连接。默认读取本模块 `.local/channel.token`，由 `Start-Backend.ps1` 生成，不应写进配置、聊天或 Git。

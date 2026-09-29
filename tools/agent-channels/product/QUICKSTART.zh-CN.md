@@ -48,6 +48,8 @@
 
 ## 开发者 Linux 后端脚本
 
+可选 Linux 微信开发者工具镜像的构建、资源、许可与双频道切换说明见 `docs/WECHAT-LINUX-OPTION.md`。它需要单独构建，普通 Lite 安装不会下载或启动微信开发者工具。
+
 源码白名单保留 `product/runtime/linux/` 下的用户目录安装和后端启动脚本，便于开发者验证 Compose 后端。当前版本不生成 Linux 主机发行资产，也不提供兼容的 Linux 查看器；这些脚本不是普通用户下载入口。
 
 ```sh

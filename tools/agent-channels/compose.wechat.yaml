@@ -1,0 +1,21 @@
+# Add to compose.yaml only after building the ordinary Lite base image.
+# The original services, ports, security settings and named home volumes remain in force.
+services:
+  channel1:
+    build:
+      context: .
+      dockerfile: Dockerfile.wechat
+    image: qicheng-agent-channels-wechat:2.02.2608070-2-local
+    environment:
+      CHANNEL_ID: "1"
+      GTK_THEME: "Adwaita:dark"
+      QICHENG_DESKTOP_APP: wechat
+  channel2:
+    build:
+      context: .
+      dockerfile: Dockerfile.wechat
+    image: qicheng-agent-channels-wechat:2.02.2608070-2-local
+    environment:
+      CHANNEL_ID: "2"
+      GTK_THEME: "Adwaita:dark"
+      QICHENG_DESKTOP_APP: wechat
