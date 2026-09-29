@@ -141,6 +141,7 @@ exit $LASTEXITCODE
     $source=Get-Content -LiteralPath $scriptPath -Raw
     $match=[regex]::Match($source,'\$lnk\.Arguments=(?<expression>.*?);\$lnk\.WorkingDirectory',[Text.RegularExpressions.RegexOptions]::Singleline)
     Assert-True $match.Success 'Startup argument expression must be present.'
+    $wechatConfigured=$false
     $arguments=Invoke-Expression $match.Groups['expression'].Value
     $expected='-B -m guest.agent --expected-bios-uuid "11111111-2222-4333-8444-555555555555" --token-file "'+$guestInstall+'\.local\channel.token" --broker-token-file "'+$guestInstall+'\.local\broker.token" --human-token-file "'+$guestInstall+'\.local\human.token"'
     Assert-True ($arguments -ceq $expected) "Startup must pass all three credential paths: $arguments"

@@ -106,10 +106,11 @@ class AgentTests(unittest.TestCase):
                     with patch.object(agent.os.path, "isfile", return_value=True), patch.object(
                             agent.os.path, "isdir", return_value=True), patch.object(
                             agent.os.path, "islink", return_value=False), patch.object(
-                            agent, "load_trusted_config", return_value=config):
+                            agent, "load_trusted_config_and_digest",
+                            return_value=(config, "d" * 64)):
                         self.assertEqual(agent.load_fixed_wechat_sidecar(
                             r"C:\private\.local\wechat.json",
-                            r"C:\private\.local\token.txt"), config)
+                            r"C:\private\.local\token.txt"), (config, "d" * 64))
             with self.assertRaisesRegex(RuntimeError, "Fixed WeChat CLI sidecar unavailable"):
                 agent.load_fixed_wechat_sidecar(r"C:\other\wechat.json",
                                                    r"C:\private\.local\token.txt")

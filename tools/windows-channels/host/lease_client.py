@@ -13,6 +13,7 @@ from .client import GuestClient
 
 _OWNER = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 _NONCE = re.compile(r"[a-f0-9]{64}\Z")
+_SHA256 = re.compile(r"[a-f0-9]{64}\Z")
 _ACTIONS = {
     "click": frozenset(("x", "y", "button")),
     "move": frozenset(("x", "y")),
@@ -120,7 +121,7 @@ class LeaseClient:
             raise RuntimeError("No guest lease is held")
         return dict(self._claim)
 
-    def _check_occupancy(self):
+    def _check_occupancy(self, return_state=False):
         claim = self._held()
         try:
             state = self._state()
@@ -135,7 +136,7 @@ class LeaseClient:
             self._claim = None
             self._uncertain = False
             raise RuntimeError("Guest lease is no longer held")
-        return claim
+        return (claim, state) if return_state else claim
 
     def renew(self, ttl_seconds):
         _ttl(ttl_seconds)
@@ -192,3 +193,36 @@ class LeaseClient:
             if self._claim is not None:
                 self._uncertain = True
             raise RuntimeError("Guest agent input failed") from None
+
+    def wechat(self, action, *, project_id, config_digest):
+        """Run the fixed read-only CLI query under this guest's held lease."""
+        if action != "check-login":
+            raise ValueError("Unsupported WeChat action")
+        if not isinstance(project_id, str) or not _OWNER.fullmatch(project_id):
+            raise ValueError("Invalid WeChat project")
+        if not isinstance(config_digest, str) or not _SHA256.fullmatch(config_digest):
+            raise ValueError("Invalid WeChat configuration digest")
+        self._held()
+        if self._uncertain:
+            raise RuntimeError("Guest lease outcome is uncertain; release or recheck it")
+        claim, state = self._check_occupancy(return_state=True)
+        # _check_occupancy verifies the pinned VM identity, current mode and
+        # claim; this state also binds the startup sidecar used by the guest.
+        if state.get("desktop_ready") is not True:
+            raise RuntimeError("Guest desktop is unavailable")
+        actual = state.get("wechat_config_digest")
+        if (not isinstance(actual, str) or not _SHA256.fullmatch(actual)
+                or not hmac.compare_digest(actual, config_digest)):
+            raise RuntimeError("Guest WeChat configuration mismatch")
+        try:
+            result = self._channel.operation(
+                "wechat_cli", action="check-login", project_id=project_id,
+                lease_owner=claim["owner"], lease_generation=claim["generation"],
+                lease_nonce=claim["nonce"], config_digest=config_digest)
+            if type(result) is not dict or set(result) != {"login"} or type(result["login"]) is not bool:
+                raise ValueError("Invalid WeChat guest result")
+            return result
+        except Exception:
+            if self._claim is not None:
+                self._uncertain = True
+            raise RuntimeError("Guest WeChat operation failed") from None

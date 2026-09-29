@@ -26,14 +26,14 @@
                   {
                       "path":  "tools/task-lease/README.md",
                       "kind":  "source",
-                      "bytes":  20703,
-                      "sha256":  "a84b7eabadb70844add286e1acb8e0fefb941405cb0f43abab54b954fbcdf4e9"
+                      "bytes":  21955,
+                      "sha256":  "49a76f70f4abe74f97d7c6175588b1c73a193d0b9e93fe1e8685d8a139ebabe7"
                   },
                   {
                       "path":  "tools/task-lease/broker.py",
                       "kind":  "source",
-                      "bytes":  75137,
-                      "sha256":  "18b7b9cdcf252b0a8483c326a6f5c55ca0d6b5aadd82428ce9e9e921052c8dac"
+                      "bytes":  79743,
+                      "sha256":  "71b8feb88ae9e3ef7169d068d441290f43836035c41d49ae5b46b1af2461acd9"
                   },
                   {
                       "path":  "tools/task-lease/lease.py",
@@ -80,8 +80,8 @@
                   {
                       "path":  "tools/task-lease/tests/test_broker.py",
                       "kind":  "source",
-                      "bytes":  106103,
-                      "sha256":  "17a210f63de3ffb97f9be6bd3212f72fcc3832e1617909813e0530265c1b814b"
+                      "bytes":  115416,
+                      "sha256":  "e48d2722ec9a877c30eb98ca707f1554df2c2042fe724c3106c81de97169b8e5"
                   },
                   {
                       "path":  "tools/task-lease/tests/test_attempt_workspace.py",
@@ -200,14 +200,14 @@
                   {
                       "path":  "tools/windows-channels/host/client.py",
                       "kind":  "source-dependency",
-                      "bytes":  9736,
-                      "sha256":  "774f4a59af48d7e8fd75d233ed743e5fa0b8ab61a4742ef10cb864deed9d3c59"
+                      "bytes":  11300,
+                      "sha256":  "74df8edf5c773ae7aa6090a41e65ee02a61f235de69362b184badd3e2ae26918"
                   },
                   {
                       "path":  "tools/windows-channels/host/lease_client.py",
                       "kind":  "source-dependency",
-                      "bytes":  8015,
-                      "sha256":  "161c9ab22d4891433ec6a9011b2be98656dbccebd01cf61f3c47275d68fa3f7d"
+                      "bytes":  10033,
+                      "sha256":  "8920a492e33c0dfeeddf7e23af91da53ab602e927198c85d083f1d31785fe5bb"
                   }
               ]
 }

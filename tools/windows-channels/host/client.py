@@ -20,6 +20,8 @@ KEY_NAMES = (
 )
 KEY_ALIASES = {name.casefold(): name for name in KEY_NAMES}
 KEY_ALIASES.update({'enter': 'Return', 'esc': 'Escape', 'spacebar': 'space'})
+_PROJECT_ID = re.compile(r'[A-Za-z0-9._-]{1,64}\Z')
+_SHA256 = re.compile(r'[a-f0-9]{64}\Z')
 
 
 def normalize_key(value):
@@ -146,8 +148,23 @@ class GuestClient:
         return result
 
     def operation(self, op, **fields):
-        if op not in ('state', 'screenshot', 'control', 'input'):
+        if op not in ('state', 'screenshot', 'control', 'input', 'wechat_cli'):
             raise ValueError('Unsupported guest operation')
+        if op == 'wechat_cli':
+            if (set(fields) != {'action', 'project_id', 'lease_owner',
+                                'lease_generation', 'lease_nonce', 'config_digest'}
+                    or fields['action'] != 'check-login'
+                    or not isinstance(fields['project_id'], str)
+                    or not _PROJECT_ID.fullmatch(fields['project_id'])
+                    or not isinstance(fields['lease_owner'], str)
+                    or not _PROJECT_ID.fullmatch(fields['lease_owner'])
+                    or type(fields['lease_generation']) is not int
+                    or fields['lease_generation'] < 1
+                    or not isinstance(fields['lease_nonce'], str)
+                    or not _SHA256.fullmatch(fields['lease_nonce'])
+                    or not isinstance(fields['config_digest'], str)
+                    or not _SHA256.fullmatch(fields['config_digest'])):
+                raise ValueError('Invalid WeChat guest operation')
         state = self.state()
         if op == 'state':
             return state
@@ -155,6 +172,13 @@ class GuestClient:
             raise RuntimeError('Human takeover retained; enable locally after handoff')
         if op == 'input' and state.get('mode') != fields.get('actor'):
             raise RuntimeError('Input is paused or controlled by another actor')
+        if op == 'wechat_cli':
+            if state.get('mode') != 'agent' or state.get('desktop_ready') is not True:
+                raise RuntimeError('Guest agent desktop is unavailable')
+            actual = state.get('wechat_config_digest')
+            if (not isinstance(actual, str) or not _SHA256.fullmatch(actual)
+                    or not hmac.compare_digest(actual, fields['config_digest'])):
+                raise RuntimeError('Guest WeChat configuration mismatch')
         if op == 'input' and fields.get('action') == 'key' and 'key' in fields:
             fields['key'] = normalize_key(fields['key'])
         return self.exchange(op, **fields)

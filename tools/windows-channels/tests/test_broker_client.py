@@ -56,6 +56,8 @@ class Connection:
             raise ConnectionError('release response lost')
         if self.owner.fail_ack and path == '/v1/ack':
             raise ConnectionError('ack response lost')
+        if self.owner.fail_wechat and path == '/v1/wechat-cli':
+            raise ConnectionError('wechat response lost')
         if self.owner.reject_input and path == '/v1/input':
             return Response({'ok': False, 'error': 'guest_dirty'}, status=409)
         if path == '/v1/acquire':
@@ -84,6 +86,8 @@ class Connection:
             return Response(self.owner.stale_renew_response or renewed)
         if path == '/v1/input':
             return Response({'ok': True, 'action': body['action']})
+        if path == '/v1/wechat-cli':
+            return Response(self.owner.wechat_response)
         if path == '/v1/ack':
             return Response({'ok': True, 'action_id': body['action_id']})
         if self.owner.lease is None or body['token'] != self.owner.lease['token']:
@@ -122,6 +126,8 @@ class BrokerClientTests(unittest.TestCase):
         self.stale_release_response = None
         self.fail = False
         self.fail_ack = False
+        self.fail_wechat = False
+        self.wechat_response = {'ok': True, 'action': 'check-login', 'login': False}
         self.reject_input = False
         self.renew_sent = threading.Event()
         self.renew_release = threading.Event()
@@ -567,6 +573,60 @@ class BrokerClientTests(unittest.TestCase):
         self.assertEqual(['/v1/acquire', '/v1/input', '/v1/ack'],
                          [path for path, _ in self.calls])
         self.assertEqual('active', self.client.phase)
+
+    def test_wechat_requires_held_lease_and_is_terminal_before_begin(self):
+        with self.assertRaises(RuntimeError):
+            self.client.wechat_check_login()
+        self.assertEqual('dead', self.client.phase)
+        self.assertEqual([], self.calls)
+
+    def test_wechat_boolean_action_ack_then_confirmed_release(self):
+        self.client.begin()
+        for login in (False, True):
+            self.wechat_response = {'ok': True, 'action': 'check-login', 'login': login}
+            self.assertIs(self.client.wechat_check_login(), login)
+        self.assertEqual(['/v1/acquire', '/v1/wechat-cli', '/v1/ack',
+                          '/v1/wechat-cli', '/v1/ack'],
+                         [path for path, _ in self.calls])
+        attempts = [body for path, body in self.calls if path == '/v1/wechat-cli']
+        self.assertEqual(2, len({body['action_id'] for body in attempts}))
+        for body in attempts:
+            self.assertEqual({'channel_id', 'token', 'action_id', 'action'}, set(body))
+            self.assertEqual('check-login', body['action'])
+            self.assertEqual(self.client.channel_id, body['channel_id'])
+        acks = [body for path, body in self.calls if path == '/v1/ack']
+        self.assertEqual([body['action_id'] for body in attempts],
+                         [body['action_id'] for body in acks])
+        self.client.finish()
+        self.assertEqual('/v1/release', self.calls[-1][0])
+
+    def test_wechat_uncertain_response_ack_and_invalid_boolean_never_retry(self):
+        for failure in ('response', 'ack', 'invalid'):
+            with self.subTest(failure=failure):
+                self.fail_wechat = False
+                self.fail_ack = False
+                self.wechat_response = {'ok': True, 'action': 'check-login', 'login': True}
+                client = BrokerClient('http://127.0.0.1:18770', self.token_file,
+                                      'channel-A', self.identity,
+                                      connection_factory=lambda host, port, timeout:
+                                      Connection(self, host, port, timeout),
+                                      monotonic=lambda: self.now[0],
+                                      wall_clock=lambda: self.now[0])
+                self.addCleanup(client._kill)
+                client.begin()
+                if failure == 'response':
+                    self.fail_wechat = True
+                elif failure == 'ack':
+                    self.fail_ack = True
+                else:
+                    self.wechat_response['login'] = 1
+                before = len(self.calls)
+                with self.assertRaises(RuntimeError): client.wechat_check_login()
+                self.assertEqual('dead', client.phase)
+                self.fail_wechat = self.fail_ack = False
+                with self.assertRaises(RuntimeError): client.wechat_check_login()
+                with self.assertRaises(RuntimeError): client.begin()
+                self.assertEqual(before + (2 if failure == 'ack' else 1), len(self.calls))
 
 
 if __name__ == '__main__': unittest.main()

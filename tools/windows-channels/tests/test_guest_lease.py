@@ -13,6 +13,7 @@ from guest.wechat_cli import TrustedWechatConfig
 CHANNEL_TOKEN = "a" * 64
 BROKER_TOKEN = "b" * 64
 HUMAN_TOKEN = "c" * 64
+CONFIG_DIGEST = "d" * 64
 IDENTITY = {"bios_uuid": "11111111-2222-3333-4444-555555555555"}
 
 
@@ -293,12 +294,14 @@ class WechatLeaseTests(unittest.TestCase):
         self.channel = protocol.GuestChannel(
             self.backend, IDENTITY, broker_token=BROKER_TOKEN,
             human_token=HUMAN_TOKEN, wechat_config=self.config,
+            wechat_config_digest=CONFIG_DIGEST,
             wechat_check_login=check)
         self.channel.control("agent")
 
     def call(self, token=CHANNEL_TOKEN, **fields):
         request = {"id": "wc1", "token": token, "op": "wechat_cli",
-                   "action": "check-login", "project_id": "project-a"}
+                   "action": "check-login", "project_id": "project-a",
+                   "config_digest": CONFIG_DIGEST}
         request.update(fields)
         return protocol.dispatch(request, CHANNEL_TOKEN, self.channel)
 
@@ -322,6 +325,20 @@ class WechatLeaseTests(unittest.TestCase):
         self.assertEqual(response["result"], {"login": False})
         self.assertEqual(self.calls, [(self.config, {"project_id": "project-a",
                                                "action": "check-login"})])
+        self.assertEqual(self.channel.state()["wechat_config_digest"], CONFIG_DIGEST)
+
+    def test_missing_invalid_or_changed_digest_never_starts_cli(self):
+        lease = self.claim()
+        for bad_digest in (None, "D" * 64, "x" * 64, "0" * 64, [], True):
+            response = self.call(**lease, config_digest=bad_digest)
+            self.assertFalse(response["ok"])
+            self.assertIn(response["error"]["code"],
+                          {"invalid_config_digest", "config_mismatch"})
+        request = {"id": "missing", "token": CHANNEL_TOKEN, "op": "wechat_cli",
+                   "action": "check-login", "project_id": "project-a", **lease}
+        response = protocol.dispatch(request, CHANNEL_TOKEN, self.channel)
+        self.assertEqual(response["error"]["code"], "unexpected_field")
+        self.assertEqual(self.calls, [])
 
     def test_missing_wrong_and_expired_lease_never_start_cli(self):
         self.assertEqual(self.call()["error"]["code"], "unexpected_field")
@@ -385,7 +402,8 @@ class WechatLeaseTests(unittest.TestCase):
         broker.control("agent")
         denied = protocol.dispatch({"id": "x", "token": CHANNEL_TOKEN,
                                     "op": "wechat_cli", "action": "check-login",
-                                    "project_id": "project-a", "lease_owner": "owner-a",
+                                    "project_id": "project-a", "config_digest": CONFIG_DIGEST,
+                                    "lease_owner": "owner-a",
                                     "lease_generation": 1, "lease_nonce": "0" * 64},
                                    CHANNEL_TOKEN, broker)
         self.assertEqual(denied["error"]["code"], "wechat_unavailable")

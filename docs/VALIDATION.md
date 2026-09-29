@@ -1,5 +1,11 @@
 # 验证范围与限制
 
+## 2026-09-28 微信固定查询跨模块源码候选（本地，未公开发行）
+
+此仓本地候选已将固定 `check-login` 接到 Guest、Host、Broker 和 Broker 模式 MCP 源码。可选客体 sidecar 的原始字节 SHA-256 与频道项目绑定；查询只能在持有对应频道租约后发起，Broker 对动作持久记账、保存布尔结果供同 ID 重放，并要求 ACK。MCP 新工具零参数，只返回 `{"login":true|false}`；未知响应或 ACK 状态时停止会话，不自动重试。旧三个 Windows 工具及无微信配置的旧频道仍按原路径工作；`open`、编译、上传和页面自动化均未接入此工具。
+
+独立检查在私有源码核 Windows Python 136/136、Task Lease Python 119/119；隔离 Broker HTTP→Host→模拟 Hyper-V→Guest 的真假结果、重放、ACK、释放和 Broker 重启后的 SQLite 结果重放通过。Windows 与 Task Lease 的 PowerShell 5.1 包内测试通过；这些只证明源码与替身环境。01 正式 A/B 客体仍运行旧 agent，正式 Broker 未升级，新增 MCP 工具未注册，也未用真实微信 CLI 走新路径。当前无合法小程序项目/AppID，真实导入和编译未验；对真实微信账号使用新工具需用户另行授权。此处不表示可下载安装使用或已取得商业/开源发布批准。以下较早小节保留历史阶段信息，以本节的源码范围为当前准则。
+
 ## 2026-09-28 Windows 微信 CLI 只读查询源码候选（未公开发行）
 
 本地候选新增客体内固定 `check-login`：只有可选的私有 sidecar 已配置、项目 ID 匹配、频道令牌与当前客体租约有效、agent 模式和桌面就绪时才执行；CLI 返回后重查租约与桌面。`open`、host 客户端、Broker 持久动作确认和 MCP 均未接入。无 sidecar 的旧安装路径保持原行为。构包、离线安装、Stage/Switch 用清单、固定启动参数和受保护 ACL 约束 sidecar；私有配置、令牌与项目路径不在此源码仓。

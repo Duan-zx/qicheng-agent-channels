@@ -9,7 +9,7 @@ import sys
 from .protocol import (GuestChannel, RequestError, TOKEN_RE, dispatch,
                        receive_request, response_error, send_response)
 from .windows import Win32Desktop, verify_this_guest
-from .wechat_cli import load_trusted_config
+from .wechat_cli import load_trusted_config_and_digest
 
 SERVICE_ID = "6f3bbd64-8b13-4f20-a1c6-93f77f6ab20e"
 CONNECTION_TIMEOUT_SECONDS = 5
@@ -40,12 +40,12 @@ def load_fixed_wechat_sidecar(path, token_file):
                 raise ValueError("reparse point or unsupported filesystem")
         if not os.path.isfile(raw_path):
             raise ValueError("not a file")
-        config = load_trusted_config(raw_path)
+        config, digest = load_trusted_config_and_digest(raw_path)
         if not os.path.isdir(config.guest_project_path):
             raise ValueError("project missing")
         if not os.path.isfile(config.cli_bat_path):
             raise ValueError("CLI missing")
-        return config
+        return config, digest
     except Exception:
         raise RuntimeError("Fixed WeChat CLI sidecar unavailable") from None
 
@@ -137,12 +137,13 @@ def main(argv=None):
         raise RuntimeError("Channel, broker, and human tokens must differ")
     if args.wechat_config_file and broker_token is None:
         raise RuntimeError("WeChat CLI requires broker leases")
-    wechat_config = (load_fixed_wechat_sidecar(args.wechat_config_file,
-                                               args.token_file)
-                     if args.wechat_config_file else None)
+    wechat_config, wechat_digest = (load_fixed_wechat_sidecar(args.wechat_config_file,
+                                                              args.token_file)
+                                    if args.wechat_config_file else (None, None))
     backend = Win32Desktop()
     channel = GuestChannel(backend, identity, broker_token=broker_token,
-                           human_token=human_token, wechat_config=wechat_config)
+                           human_token=human_token, wechat_config=wechat_config,
+                           wechat_config_digest=wechat_digest)
     listener = create_hyperv_listener()
     with listener:
         serve(listener, token, channel)

@@ -1166,6 +1166,9 @@ class GuestInputTests(unittest.TestCase):
                 "guest": {"host_config_path": str(self.root / "host.json"),
                           "project": f"guest-{letter.lower()}",
                           "broker_token_file": str(self.root / f"guest-broker-{letter}.token")}})
+            if letter == "A" and self._testMethodName.startswith("test_wechat_"):
+                channels[-1]["wechat"] = {"project_id": "project-A",
+                                           "config_digest": "a" * 64}
         (self.root / "host.json").write_text(json.dumps({
             "schema_version": 1, "projects": projects}), encoding="utf-8")
         self.config_path = self.root / "config.json"
@@ -1173,6 +1176,9 @@ class GuestInputTests(unittest.TestCase):
         self.events = []
         self.events_lock = threading.Lock()
         self.input_failure = False
+        self.wechat_result = {"login": True}
+        self.wechat_failure = False
+        self.wechat_state_digest = "a" * 64
         self.claim_failure = False
         self.guest_mode = "agent"
         self.release_failure = False
@@ -1189,7 +1195,8 @@ class GuestInputTests(unittest.TestCase):
                 outer.record((self.letter, "init"))
 
             def state(self):
-                return {"mode": outer.guest_mode}
+                return {"mode": outer.guest_mode,
+                        "wechat_config_digest": outer.wechat_state_digest}
 
             def claim(self, owner, ttl_seconds):
                 outer.record((self.letter, "claim", owner, ttl_seconds))
@@ -1206,6 +1213,12 @@ class GuestInputTests(unittest.TestCase):
                         raise TimeoutError("test input wait expired")
                 if outer.input_failure:
                     raise RuntimeError("raw text and token must be redacted")
+
+            def wechat(self, action, *, project_id, config_digest):
+                outer.record((self.letter, "wechat", action, project_id, config_digest))
+                if outer.wechat_failure:
+                    raise RuntimeError("sensitive CLI output must be redacted")
+                return outer.wechat_result
 
             def release(self):
                 outer.record((self.letter, "release"))
@@ -1709,6 +1722,152 @@ class GuestInputTests(unittest.TestCase):
                    credential_path=self.root / "broker.token",
                    db_path=self.root / "leases.db",
                    guest_client_factory=self.broker.guest_client_factory)
+
+    def wechat_body(self, token, action_id="action-1"):
+        return {"channel_id": "channel-A", "token": token,
+                "action_id": action_id, "action": "check-login"}
+
+    def test_wechat_config_and_binding_validation(self):
+        config = json.loads(self.config_path.read_text(encoding="utf-8"))
+        original = config["channels"][0]["wechat"]
+        for invalid in ({"project_id": "other", "config_digest": "a" * 64},
+                        {"project_id": "project-A", "config_digest": "bad"},
+                        {"project_id": "project-A", "config_digest": "a" * 64,
+                         "argv": ["anything"]}):
+            config["channels"][0]["wechat"] = invalid
+            self.config_path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "wechat requires"):
+                Broker(config_path=self.config_path,
+                       credential_path=self.root / "broker.token",
+                       db_path=self.root / "other.db",
+                       guest_client_factory=self.broker.guest_client_factory)
+        config["channels"][0]["wechat"] = original
+        config["channels"][0]["wechat"]["config_digest"] = "b" * 64
+        self.config_path.write_text(json.dumps(config), encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "registered guest binding changed"):
+            Broker(config_path=self.config_path,
+                   credential_path=self.root / "broker.token",
+                   db_path=self.root / "leases.db",
+                   guest_client_factory=self.broker.guest_client_factory)
+
+    def test_wechat_requires_lease_and_fixed_payload(self):
+        body = self.wechat_body(secrets.token_hex(32))
+        self.assertEqual(410, self.call("/v1/wechat-cli", body)[0])
+        _, lease = self.acquire("A", "wechat-A")
+        body = self.wechat_body(lease["token"])
+        self.assertEqual(401, self.call("/v1/wechat-cli", body, credential=False)[0])
+        self.assertEqual(403, self.call("/v1/wechat-cli", {
+            **body, "token": secrets.token_hex(32)})[0])
+        for changed in ({"action": "open"}, {"argv": ["cmd.exe"]},
+                        {"project_id": "other"}, {"config_digest": "b" * 64},
+                        {"port": 80}):
+            self.assertEqual(400, self.call("/v1/wechat-cli", {**body, **changed})[0])
+        self.assertEqual([], self.events)
+
+    def test_wechat_missing_or_wrong_state_digest_rejects_before_attempt(self):
+        _, lease = self.acquire("A", "wechat-A")
+        body = self.wechat_body(lease["token"])
+        for digest in (None, "b" * 64):
+            self.wechat_state_digest = digest
+            self.assertEqual((503, {"ok": False, "error": "wechat_config_mismatch"}),
+                             self.call("/v1/wechat-cli", body))
+        with closing(sqlite3.connect(self.root / "leases.db")) as db:
+            self.assertEqual(0, db.execute(
+                "SELECT COUNT(*) FROM guest_input_attempts").fetchone()[0])
+            self.assertEqual(0, db.execute("SELECT COUNT(*) FROM guest_dirty").fetchone()[0])
+        self.assertFalse(any(event[1] in {"claim", "wechat"} for event in self.events))
+        self.wechat_state_digest = "a" * 64
+        self.assertEqual(200, self.call("/v1/wechat-cli", body)[0])
+
+    def test_wechat_boolean_replay_ack_and_release(self):
+        _, lease = self.acquire("A", "wechat-A")
+        body = self.wechat_body(lease["token"])
+        for index, login in enumerate((True, False)):
+            self.wechat_result = {"login": login}
+            expected = {"ok": True, "action": "check-login", "login": login}
+            self.assertEqual((200, expected), self.call("/v1/wechat-cli", body))
+            self.wechat_result = {"login": not login}
+            self.assertEqual((200, expected), self.call("/v1/wechat-cli", body))
+            self.assertEqual(409, self.call("/v1/wechat-cli", {
+                **body, "action_id": f"next-{index}"})[0])
+            self.assertEqual((200, {"ok": True, "action_id": body["action_id"]}),
+                             self.call("/v1/ack", {"channel_id": "channel-A",
+                                                   "token": lease["token"],
+                                                   "action_id": body["action_id"]}))
+            body = self.wechat_body(lease["token"], f"action-{index + 2}")
+        self.assertEqual(2, sum(event[1] == "wechat" for event in self.events))
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        self.assertEqual(200, self.acquire("A", "successor")[0])
+
+    def test_wechat_untrusted_result_and_exception_stay_dirty(self):
+        self.wechat_result = {"login": True, "stdout": "secret"}
+        _, lease = self.acquire("A", "wechat-A")
+        body = self.wechat_body(lease["token"])
+        self.assertEqual((502, {"ok": False, "error": "wechat_failed"}),
+                         self.call("/v1/wechat-cli", body))
+        self.assertEqual(409, self.call("/v1/wechat-cli", body)[0])
+        self.assertEqual(409, self.call("/v1/ack", {
+            "channel_id": "channel-A", "token": lease["token"],
+            "action_id": "action-1"})[0])
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        self.assertEqual((409, {"ok": False, "error": "guest_dirty"}),
+                         self.acquire("A", "successor"))
+
+    def test_wechat_exception_stays_dirty(self):
+        self.wechat_failure = True
+        _, lease = self.acquire("A", "wechat-A")
+        body = self.wechat_body(lease["token"])
+        self.assertEqual((502, {"ok": False, "error": "wechat_failed"}),
+                         self.call("/v1/wechat-cli", body))
+        self.assertEqual(409, self.call("/v1/wechat-cli", body)[0])
+        self.assertEqual(1, sum(event[1] == "wechat" for event in self.events))
+
+    def test_wechat_success_without_ack_stays_dirty_after_release(self):
+        _, lease = self.acquire("A", "wechat-A")
+        body = self.wechat_body(lease["token"])
+        self.assertEqual(200, self.call("/v1/wechat-cli", body)[0])
+        self.assertEqual(200, self.call("/v1/release", {
+            "channel_id": "channel-A", "token": lease["token"]})[0])
+        self.assertEqual((409, {"ok": False, "error": "guest_dirty"}),
+                         self.acquire("A", "successor"))
+
+    def test_wechat_legacy_channel_and_input_unchanged(self):
+        _, lease = self.acquire("C", "legacy-C")
+        self.assertEqual((403, {"ok": False, "error": "wechat_unavailable"}),
+                         self.call("/v1/wechat-cli", {
+                             "channel_id": "channel-C", "token": lease["token"],
+                             "action_id": "action-1", "action": "check-login"}))
+        self.assertEqual((200, {"ok": True, "action": "key"}),
+                         self.call("/v1/input", self.payload(
+                             "C", lease["token"], action="key", key="Return")))
+
+    def test_wechat_action_id_conflicts_with_input_and_tombstone_precedes_call(self):
+        _, lease = self.acquire("A", "wechat-A")
+        body = self.wechat_body(lease["token"])
+        original = self.broker.guest_client_factory
+        outer = self
+
+        class CheckingGuest(original):
+            def wechat(self, action, *, project_id, config_digest):
+                with closing(sqlite3.connect(outer.root / "leases.db")) as db:
+                    attempt = db.execute("""SELECT status FROM guest_input_attempts
+                        WHERE channel_id='channel-A' AND request_id='wechat-A'
+                        AND action_id='action-1'""").fetchone()
+                    dirty = db.execute("SELECT COUNT(*) FROM guest_dirty").fetchone()[0]
+                outer.assertEqual(("uncertain",), attempt)
+                outer.assertEqual(1, dirty)
+                return super().wechat(action, project_id=project_id,
+                                      config_digest=config_digest)
+
+        self.broker.guest_client_factory = CheckingGuest
+        self.assertEqual(200, self.call("/v1/wechat-cli", body)[0])
+        self.assertEqual((409, {"ok": False, "error": "action_conflict"}),
+                         self.call("/v1/input", self.payload(
+                             "A", lease["token"], action="key", key="Return")))
+        self.assertEqual(1, sum(event[1] == "wechat" for event in self.events))
+        self.assertFalse(any(event[1] == "input" for event in self.events))
 
 
 class BrokerLiteTests(unittest.TestCase):

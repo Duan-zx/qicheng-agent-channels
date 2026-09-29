@@ -68,7 +68,7 @@ try {
     }
     $offlineTestJson = & (Join-Path $packageRoot 'source\tests\InstallGuestPayloadOffline.Tests.ps1') | Out-String
     $offlineTest = $offlineTestJson | ConvertFrom-Json
-    Assert-True ($offlineTest.passed -eq 14 -and $offlineTest.failed -eq 0 -and $offlineTest.vmMounts -eq 0 -and $offlineTest.agentStarts -eq 0) 'Packaged offline installer failed the simulated three-credential plan and rejection tests.'
+    Assert-True ($offlineTest.passed -eq 18 -and $offlineTest.failed -eq 0 -and $offlineTest.vmMounts -eq 0 -and $offlineTest.agentStarts -eq 0) 'Packaged offline installer failed the simulated three-credential plan and rejection tests.'
     $installRoot = Join-Path $temporaryRoot 'install'
     $dataRoot = Join-Path $temporaryRoot 'data'
     $startMenu = Join-Path $temporaryRoot 'start-menu'

@@ -15,6 +15,8 @@ from guest import protocol
 
 VM = 'ca6d2942-6d2c-4050-9ba5-b9bca1754b28'
 BIOS = '5a73f8d6-cf5b-41c2-a423-989a8772a9cb'
+DIGEST = 'd' * 64
+NONCE = 'c' * 64
 
 
 class Stream:
@@ -113,6 +115,36 @@ class HostTests(unittest.TestCase):
     def test_mismatched_response_id_rejected(self):
         client = self.client([dict(id=99, ok=True, result=state())])
         with self.assertRaises(ValueError): client.state()
+
+    def test_wechat_operation_checks_identity_mode_and_startup_digest(self):
+        fields = dict(action='check-login', project_id='qicheng',
+                      lease_owner='worker-a', lease_generation=1,
+                      lease_nonce=NONCE, config_digest=DIGEST)
+        for observed in (state(VM), state(mode='human'), state(),
+                         dict(state(), desktop_ready=True, wechat_config_digest='e' * 64)):
+            with self.subTest(observed=observed):
+                client = self.client([dict(id='1', ok=True, result=observed)])
+                with self.assertRaises(RuntimeError):
+                    client.operation('wechat_cli', **fields)
+                self.assertEqual([r['op'] for r in self.stream.sent], ['state'])
+        ready = dict(state(), desktop_ready=True, wechat_config_digest=DIGEST)
+        client = self.client([dict(id='1', ok=True, result=ready),
+                              dict(id='2', ok=True, result={'login': False})])
+        self.assertEqual(client.operation('wechat_cli', **fields), {'login': False})
+        self.assertEqual([r['op'] for r in self.stream.sent], ['state', 'wechat_cli'])
+        self.assertEqual({k: v for k, v in self.stream.sent[-1].items()
+                          if k not in {'id', 'token', 'op'}}, fields)
+
+    def test_wechat_operation_rejects_extra_fields_and_unfixed_action(self):
+        client = self.client([])
+        fields = dict(action='check-login', project_id='qicheng',
+                      lease_owner='worker-a', lease_generation=1,
+                      lease_nonce=NONCE, config_digest=DIGEST)
+        for changed in (dict(action='open'), dict(argv=['anything']),
+                        dict(config_digest='D' * 64), dict(lease_generation=True)):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                client.operation('wechat_cli', **(fields | changed))
+        self.assertEqual(self.stream.sent, [])
 
     def test_distinct_human_token_routes_viewer_handback(self):
         client = self.leased_client()

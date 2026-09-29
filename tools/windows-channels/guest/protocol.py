@@ -97,13 +97,16 @@ def validate_request(request, width, height, lease_enabled=False):
         raise RequestError("unsupported_operation")
     if op == "wechat_cli":
         allowed = common | {"action", "project_id", "lease_owner",
-                            "lease_generation", "lease_nonce"}
+                            "lease_generation", "lease_nonce", "config_digest"}
         if set(request) != allowed:
             raise RequestError("unexpected_field")
         if request.get("action") != "check-login":
             raise RequestError("unsupported_action")
         project, owner = request.get("project_id"), request.get("lease_owner")
         generation, nonce = request.get("lease_generation"), request.get("lease_nonce")
+        digest = request.get("config_digest")
+        if not isinstance(digest, str) or not TOKEN_RE.fullmatch(digest):
+            raise RequestError("invalid_config_digest")
         if not isinstance(project, str) or not ID_RE.fullmatch(project):
             raise RequestError("invalid_project")
         if (not lease_enabled or not isinstance(owner, str) or not ID_RE.fullmatch(owner)
@@ -237,7 +240,8 @@ def send_response(connection, response):
 
 class GuestChannel:
     def __init__(self, backend, identity, broker_token=None, human_token=None,
-                 wechat_config=None, wechat_check_login=check_login):
+                 wechat_config=None, wechat_config_digest=None,
+                 wechat_check_login=check_login):
         if broker_token is not None and (not isinstance(broker_token, str)
                                          or not TOKEN_RE.fullmatch(broker_token)):
             raise ValueError("Invalid broker token")
@@ -250,11 +254,17 @@ class GuestChannel:
         if wechat_config is not None and (broker_token is None
                                           or not isinstance(wechat_config, TrustedWechatConfig)):
             raise ValueError("WeChat CLI requires broker leases and trusted configuration")
+        if (wechat_config is None and wechat_config_digest is not None
+                or wechat_config is not None and
+                (not isinstance(wechat_config_digest, str)
+                 or not TOKEN_RE.fullmatch(wechat_config_digest))):
+            raise ValueError("WeChat CLI requires a startup configuration digest")
         self.backend = backend
         self.identity = dict(identity)
         self.broker_token = broker_token
         self.human_token = human_token
         self.wechat_config = wechat_config
+        self.wechat_config_digest = wechat_config_digest
         self._wechat_check_login = wechat_check_login
         self.lock = threading.RLock()
         self.mode = "paused"
@@ -367,7 +377,7 @@ class GuestChannel:
                 self._revoke_lease_locked()
                 self.last_error = diagnostic_for(exc, "desktop_dimensions", started)
                 raise OperationFailure(self.last_error) from exc
-            return {
+            result = {
                 "identity": dict(self.identity),
                 "mode": self.mode,
                 "width": width,
@@ -381,6 +391,9 @@ class GuestChannel:
                 "input_target": "private-windows-guest",
                 "host_input_supported": False,
             }
+            if self.wechat_config_digest is not None:
+                result["wechat_config_digest"] = self.wechat_config_digest
+            return result
 
     def control(self, mode):
         with self.lock:
@@ -462,6 +475,9 @@ class GuestChannel:
             validate_request(request, 0, 0, self.broker_token is not None)
             if self.wechat_config is None:
                 raise RequestError("wechat_unavailable", "WeChat CLI unavailable")
+            if not hmac.compare_digest(request["config_digest"],
+                                       self.wechat_config_digest):
+                raise RequestError("config_mismatch", "WeChat configuration mismatch")
             if request["project_id"] != self.wechat_config.project_id:
                 raise RequestError("invalid_project", "Invalid project")
             self._expire_lease_locked()

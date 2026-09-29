@@ -1,8 +1,11 @@
 """Host-independent tests for the bounded guest WeChat CLI probe."""
 
 import io
+import hashlib
+import json
 from pathlib import Path
 import sys
+import tempfile
 import threading
 import unittest
 from unittest.mock import patch
@@ -69,6 +72,20 @@ class BlockingProcess(FakeProcess):
 class WechatCliTests(unittest.TestCase):
     def setUp(self):
         self.config = wechat_cli.TrustedWechatConfig.from_mapping(CONFIG)
+
+    def test_startup_digest_hashes_exact_raw_bytes_from_one_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "wechat.json"
+            raw = json.dumps(CONFIG, separators=(",", ":")).encode("utf-8")
+            path.write_bytes(raw)
+            first, digest = wechat_cli.load_trusted_config_and_digest(path)
+            self.assertEqual(first, self.config)
+            self.assertEqual(digest, hashlib.sha256(raw).hexdigest())
+            changed = json.dumps(CONFIG, indent=2).encode("utf-8")
+            path.write_bytes(changed)
+            second, changed_digest = wechat_cli.load_trusted_config_and_digest(path)
+            self.assertEqual(second, first)
+            self.assertNotEqual(changed_digest, digest)
 
     def test_rejects_untrusted_configuration(self):
         for change in (

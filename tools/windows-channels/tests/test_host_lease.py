@@ -18,6 +18,7 @@ BIOS = "5a73f8d6-cf5b-41c2-a423-989a8772a9cb"
 CHANNEL = "a" * 64
 BROKER = "b" * 64
 NONCE = "c" * 64
+DIGEST = "d" * 64
 
 
 class Socket:
@@ -61,6 +62,9 @@ class Transport:
         self.claim = None
         self.generation = 0
         self.answer_override = None
+        self.digest = DIGEST
+        self.desktop_ready = True
+        self.login = True
 
     def __call__(self, *args):
         return Socket(self)
@@ -77,14 +81,15 @@ class Transport:
             if override is not None:
                 return override
         op = request["op"]
-        if op in {"state", "input"}:
+        if op in {"state", "input", "wechat_cli"}:
             assert request["token"] == CHANNEL
         else:
             assert request["token"] == BROKER
         if op == "state":
             return dict(identity=dict(bios_uuid=self.bios), mode=self.mode,
                         lease=self.lease(), input_target="private-windows-guest",
-                        host_input_supported=False)
+                        host_input_supported=False, desktop_ready=self.desktop_ready,
+                        wechat_config_digest=self.digest)
         if op == "lease_claim":
             self.generation += 1
             self.claim = dict(owner=request["owner"], generation=self.generation,
@@ -99,6 +104,8 @@ class Transport:
             return self.lease()
         if op == "input":
             return {"actions": 1}
+        if op == "wechat_cli":
+            return {"login": self.login}
         raise AssertionError("Unexpected operation")
 
 
@@ -318,6 +325,88 @@ class HostLeaseTests(unittest.TestCase):
         self.assertFalse(hasattr(client, "operation"))
         self.assertFalse(hasattr(client, "exchange"))
         self.assertEqual(self.transport.requests, [])
+
+    def test_wechat_wire_request_and_both_boolean_results(self):
+        client = self.client()
+        client.claim("worker-a", 30)
+        for value in (True, False):
+            self.transport.login = value
+            self.assertEqual(client.wechat("check-login", project_id="qicheng",
+                                           config_digest=DIGEST), {"login": value})
+        sent = [r for r in self.transport.requests if r["op"] == "wechat_cli"]
+        self.assertEqual(len(sent), 2)
+        for request in sent:
+            self.assertEqual({k: v for k, v in request.items() if k not in {"id", "token", "op"}},
+                             dict(action="check-login", project_id="qicheng",
+                                  lease_owner="worker-a", lease_generation=1,
+                                  lease_nonce=NONCE, config_digest=DIGEST))
+            self.assertEqual(request["token"], CHANNEL)
+        self.assertTrue(all(endpoint == (VM, SERVICE_ID) for endpoint in self.transport.endpoints))
+
+    def test_wechat_refuses_missing_legacy_digest_wrong_vm_and_config(self):
+        for name, value in (("digest", None), ("digest", "e" * 64),
+                            ("bios", VM), ("desktop_ready", False)):
+            with self.subTest(name=name, value=value):
+                transport = Transport()
+                client = LeaseClient(self.binding, self.broker_path, transport)
+                client.claim("worker-a", 30)
+                setattr(transport, name, value)
+                with self.assertRaises(RuntimeError):
+                    client.wechat("check-login", project_id="qicheng",
+                                  config_digest=DIGEST)
+                self.assertNotIn("wechat_cli", [r["op"] for r in transport.requests])
+
+    def test_wechat_refuses_lost_lease_and_human_takeover(self):
+        for changed in ("owner", "generation", "human"):
+            with self.subTest(changed=changed):
+                transport = Transport()
+                client = LeaseClient(self.binding, self.broker_path, transport)
+                client.claim("worker-a", 30)
+                if changed == "human":
+                    transport.mode = "human"
+                    transport.claim = None
+                else:
+                    transport.claim[changed] = "other" if changed == "owner" else 2
+                with self.assertRaisesRegex(RuntimeError, "no longer held"):
+                    client.wechat("check-login", project_id="qicheng",
+                                  config_digest=DIGEST)
+                self.assertNotIn("wechat_cli", [r["op"] for r in transport.requests])
+
+    def test_wechat_validates_fixed_parameters_before_wire(self):
+        client = self.client()
+        client.claim("worker-a", 30)
+        for action, project, digest in (("open", "qicheng", DIGEST),
+                                        ("check-login", "other project", DIGEST),
+                                        ("check-login", "qicheng", "D" * 64)):
+            with self.assertRaises(ValueError):
+                client.wechat(action, project_id=project, config_digest=digest)
+        self.assertNotIn("wechat_cli", [r["op"] for r in self.transport.requests])
+
+    def test_wechat_bad_result_or_lost_response_blocks_reuse(self):
+        for result in ({"login": 1}, {"login": "true"}, {"login": True, "extra": 1},
+                       {}, OSError("lost response " + NONCE)):
+            with self.subTest(result=result):
+                transport = Transport()
+                client = LeaseClient(self.binding, self.broker_path, transport)
+                client.claim("worker-a", 30)
+                def answer(request):
+                    if request["op"] == "wechat_cli":
+                        if isinstance(result, Exception):
+                            raise result
+                        return result
+                    return None
+                transport.answer_override = answer
+                with self.assertRaisesRegex(RuntimeError, "WeChat operation failed") as raised:
+                    client.wechat("check-login", project_id="qicheng",
+                                  config_digest=DIGEST)
+                self.assertNotIn(NONCE, str(raised.exception))
+                count = len(transport.requests)
+                with self.assertRaisesRegex(RuntimeError, "uncertain"):
+                    client.wechat("check-login", project_id="qicheng",
+                                  config_digest=DIGEST)
+                self.assertEqual(len(transport.requests), count)
+                transport.answer_override = None
+                self.assertFalse(client.release()["active"])
 
     def test_transport_error_does_not_echo_credentials(self):
         class FailingSocket(Socket):

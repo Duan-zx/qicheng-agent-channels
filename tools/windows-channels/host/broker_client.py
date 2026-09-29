@@ -244,6 +244,33 @@ class BrokerClient:
                 self._kill()
                 raise RuntimeError('Broker input failed; session ended') from None
 
+    def wechat_check_login(self):
+        """Query the configured guest through the held channel lease once."""
+        with self._lock:
+            self._active()
+            action_id = 'a-' + secrets.token_hex(16)
+            try:
+                self._renew_if_needed()
+                result = self._post('/v1/wechat-cli', dict(
+                    channel_id=self.channel_id, token=self.lease_token,
+                    action_id=action_id, action='check-login'))
+                if (type(result) is not dict or set(result) != {'ok', 'action', 'login'}
+                        or result['ok'] is not True
+                        or result['action'] != 'check-login'
+                        or type(result['login']) is not bool):
+                    raise RuntimeError('Invalid broker WeChat response')
+                acknowledged = self._post('/v1/ack', dict(
+                    channel_id=self.channel_id, token=self.lease_token,
+                    action_id=action_id))
+                if acknowledged != {'ok': True, 'action_id': action_id}:
+                    raise RuntimeError('Broker WeChat acknowledgement failed')
+                return result['login']
+            except Exception:
+                # The guest may have acted even if the response or ACK was lost.
+                # Never retry this action or begin a new session in this process.
+                self._kill()
+                raise RuntimeError('Broker WeChat query failed; session ended') from None
+
     def finish(self):
         with self._lock:
             self._active()

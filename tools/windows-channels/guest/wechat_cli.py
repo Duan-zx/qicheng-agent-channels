@@ -6,6 +6,7 @@ itself a remote entry point; a future transport must enforce a guest lease.
 """
 
 from dataclasses import dataclass
+import hashlib
 import json
 import ntpath
 import re
@@ -60,14 +61,20 @@ class TrustedWechatConfig:
 
 def load_trusted_config(path):
     """Load one startup-only config path supplied by the guest operator."""
+    return load_trusted_config_and_digest(path)[0]
+
+
+def load_trusted_config_and_digest(path):
+    """Parse and hash the same bounded raw JSON bytes in one startup read."""
     with open(path, "rb") as source:
         raw = source.read(4097)
     if len(raw) > 4096:
         raise ValueError("invalid_config")
     try:
-        return TrustedWechatConfig.from_mapping(json.loads(raw.decode("utf-8")))
+        config = TrustedWechatConfig.from_mapping(json.loads(raw.decode("utf-8")))
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid_config") from exc
+    return config, hashlib.sha256(raw).hexdigest()
 
 
 def _error(code):

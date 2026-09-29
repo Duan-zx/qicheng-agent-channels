@@ -318,6 +318,23 @@ unacknowledged prior attempt; 409 `ack_unavailable` means the action was not
 confirmed successful. Broker bearer authentication never grants permission to
 clear the dirty gate.
 
+An optional `wechat` block on a guest channel enables only `POST /v1/wechat-cli`
+with `{"channel_id":"...","token":"...","action_id":"...","action":"check-login"}`.
+The block has exactly `project_id` (equal to the channel's `project_id`) and
+`config_digest` (lowercase SHA-256 hex of the protected guest CLI configuration).
+No request path, argv, port or project override is accepted. The fixed
+project/digest join the pinned guest binding. The host adapter must implement
+`wechat("check-login", project_id=..., config_digest=...)` and return exactly
+`{"login": true}` or `{"login": false}` after verifying the guest result.
+Before claiming a guest lease, the broker requires the guest state to report
+the same `wechat_config_digest`; missing or mismatched state fails without an
+attempt or dirty marker. The guest must check the digest again before CLI execution.
+Both booleans are successful reads; malformed results and transport errors leave
+the attempt uncertain and the endpoint dirty. A successful boolean is saved in
+`guest_input_attempts` for safe replay, then needs the same `/v1/ack` and release
+as input. The table name is historical and covers both guest input and CLI
+attempts. This route does not expose `open` or any other CLI action.
+
 There is no automated dirty reconciliation. For an uncertain attempt, stop the
 broker and all guest clients, verify the target guest and application outcome
 through independent evidence, and wait until both local and guest leases have

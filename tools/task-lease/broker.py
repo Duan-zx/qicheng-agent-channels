@@ -31,6 +31,7 @@ from lease import (ChannelBusy, EndpointBusy, InvalidToken, LeaseGone, Maintenan
 _GUEST_TTL_SECONDS = 30
 _GUEST_OWNER = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 _ACTION_ID = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _N8N_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 
 
@@ -89,6 +90,7 @@ class Channel:
     actions: dict
     exclusive_ports: tuple[int, ...]
     guest: dict | None
+    wechat: dict | None
     lite: dict | None
     workspace: dict | None
 
@@ -118,7 +120,7 @@ class Broker:
         self.channels = {}
         for entry in config["channels"]:
             required = {"channel_id", "endpoint_id", "tool_id", "project_id", "project_path"}
-            if not isinstance(entry, dict) or not required <= set(entry) or set(entry) - required - {"actions", "exclusive_ports", "guest", "lite", "workspace"}:
+            if not isinstance(entry, dict) or not required <= set(entry) or set(entry) - required - {"actions", "exclusive_ports", "guest", "wechat", "lite", "workspace"}:
                 raise ValueError("each channel needs binding fields and optional actions")
             for key in ("channel_id", "endpoint_id", "tool_id", "project_id"):
                 LeaseStore._id(entry[key], key)
@@ -131,10 +133,18 @@ class Broker:
             actions = entry.get("actions", {})
             ports = entry.get("exclusive_ports", [])
             guest = entry.get("guest")
+            wechat = entry.get("wechat")
             lite = entry.get("lite")
             workspace = entry.get("workspace")
             if sum(item is not None for item in (guest, lite, workspace)) > 1:
                 raise ValueError("guest, lite and workspace are mutually exclusive")
+            if wechat is not None:
+                if (guest is None or not isinstance(wechat, dict)
+                        or set(wechat) != {"project_id", "config_digest"}
+                        or wechat["project_id"] != entry["project_id"]
+                        or not isinstance(wechat["config_digest"], str)
+                        or not _SHA256.fullmatch(wechat["config_digest"])):
+                    raise ValueError("wechat requires a guest, matching project_id and SHA-256 config_digest")
             if workspace is not None:
                 if guest is not None:
                     raise ValueError("guest and workspace cannot share a channel")
@@ -227,7 +237,8 @@ class Broker:
                             raise ValueError("CLI port must be an exclusive_port")
             channel = Channel(**{**entry, "project_path": str(project_path),
                                  "actions": actions, "exclusive_ports": tuple(ports),
-                                 "guest": guest, "lite": lite, "workspace": workspace})
+                                 "guest": guest, "wechat": wechat,
+                                 "lite": lite, "workspace": workspace})
             if channel.channel_id in self.channels:
                 raise ValueError("duplicate channel_id")
             for existing in self.channels.values():
@@ -322,7 +333,7 @@ class Broker:
                 raise RuntimeError("guest binding credentials are invalid")
         if hmac.compare_digest(channel_token, broker_token):
             raise RuntimeError("guest channel and broker credentials must differ")
-        return self._digest({
+        details = {
             "channel_id": channel.channel_id, "endpoint_id": channel.endpoint_id,
             "tool_id": channel.tool_id, "project_id": channel.project_id,
             "project_path": channel.project_path,
@@ -333,7 +344,11 @@ class Broker:
             "channel_token_file": str(guest["binding"]["token_file"]),
             "channel_token": channel_token,
             "broker_token_file": str(guest["broker_token_file"]),
-            "broker_token": broker_token})
+            "broker_token": broker_token}
+        # Preserve existing fingerprints when the optional route is absent.
+        if channel.wechat is not None:
+            details["wechat"] = channel.wechat
+        return self._digest(details)
 
     def _lite_fingerprint(self, channel: Channel) -> str:
         lite = channel.lite
@@ -375,6 +390,7 @@ class Broker:
                 action_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
                 status TEXT NOT NULL CHECK(status IN ('uncertain', 'success')),
                 acked INTEGER NOT NULL DEFAULT 0 CHECK(acked IN (0, 1)),
+                result_json TEXT,
                 PRIMARY KEY(channel_id, request_id, action_id))""")
             dirty_exists = db.execute("""SELECT 1 FROM sqlite_master
                 WHERE type='table' AND name='guest_dirty'""").fetchone() is not None
@@ -393,8 +409,10 @@ class Broker:
                     raise RuntimeError("legacy guest attempts require offline reconciliation")
                 db.execute("""ALTER TABLE guest_input_attempts ADD COLUMN
                     acked INTEGER NOT NULL DEFAULT 0 CHECK(acked IN (0, 1))""")
+            if "result_json" not in attempt_columns:
+                db.execute("ALTER TABLE guest_input_attempts ADD COLUMN result_json TEXT")
             if not {"channel_id", "request_id", "action_id", "fingerprint",
-                    "status", "acked"} <= {row["name"] for row in
+                    "status", "acked", "result_json"} <= {row["name"] for row in
                         db.execute("PRAGMA table_info(guest_input_attempts)")}:
                 raise RuntimeError("guest attempt schema is unsupported")
             if {row["name"] for row in db.execute("PRAGMA table_info(guest_dirty)")} != {
@@ -647,12 +665,13 @@ class Broker:
                 (channel_id, request_id, action_id, fingerprint))
             return "new"
 
-    def _complete_input_attempt(self, channel_id, request_id, action_id):
+    def _complete_input_attempt(self, channel_id, request_id, action_id, result=None):
         with self.store._transaction() as db:
             db.execute("BEGIN IMMEDIATE")
-            changed = db.execute("""UPDATE guest_input_attempts SET status='success'
+            changed = db.execute("""UPDATE guest_input_attempts SET status='success', result_json=?
                 WHERE channel_id=? AND request_id=? AND action_id=? AND status='uncertain'""",
-                (channel_id, request_id, action_id)).rowcount
+                (json.dumps(result) if result is not None else None,
+                 channel_id, request_id, action_id)).rowcount
             if changed != 1:
                 raise RuntimeError("input attempt could not be completed")
 
@@ -1058,18 +1077,9 @@ class Broker:
         return {"ok": True, "cancelled": self._cancel_queued_run(request_id, fingerprint),
                 "request_id": request_id}
 
-    def input(self, payload: dict) -> dict:
-        """Send exactly one bounded action while holding the local endpoint fence."""
-        if not {"channel_id", "token", "action", "action_id"} <= set(payload):
-            raise ValueError("input requires channel_id, token, action and action_id")
+    def _send_guest_attempt(self, payload, channel, action, fields, send, failure_error):
+        """Fence, persist, send once and settle a guest action with shared ACK state."""
         action_id = payload["action_id"]
-        if not isinstance(action_id, str) or not _ACTION_ID.fullmatch(action_id):
-            raise ValueError("action_id must be 1..64 safe characters")
-        channel = self._channel(payload["channel_id"])
-        if channel.guest is None and channel.lite is None:
-            raise ValueError("input is not configured for this channel")
-        action, fields = _input_fields(payload)
-
         def run(active):
             if (active.endpoint_id != channel.endpoint_id or
                     active.project_id != channel.project_id or
@@ -1085,6 +1095,19 @@ class Broker:
             except Exception:
                 return {"ok": False, "error": "attempt_unavailable"}
             if attempt == "success":
+                if action == "wechat:check-login":
+                    with self.store._transaction() as db:
+                        row = db.execute("""SELECT result_json FROM guest_input_attempts
+                            WHERE channel_id=? AND request_id=? AND action_id=?""",
+                            (channel.channel_id, active.request_id, action_id)).fetchone()
+                    try:
+                        result = json.loads(row["result_json"])
+                        if (type(result) is not dict or set(result) != {"login"}
+                                or type(result["login"]) is not bool):
+                            raise ValueError("invalid persisted result")
+                    except (TypeError, ValueError, KeyError):
+                        return {"ok": False, "error": "attempt_unavailable"}
+                    return {"ok": True, "action": "check-login", **result}
                 return {"ok": True, "action": action}
             if attempt == "conflict":
                 return {"ok": False, "error": "action_conflict"}
@@ -1106,8 +1129,15 @@ class Broker:
                         channel.guest["binding"], channel.guest["broker_token_file"])
                 # Still under the endpoint fence. A paused or unreachable guest
                 # cannot have received this action, so leave no dirty attempt.
-                if client.state().get("mode") != "agent":
+                state = client.state()
+                if state.get("mode") != "agent":
                     return outcome
+                if action == "wechat:check-login":
+                    observed = state.get("wechat_config_digest")
+                    expected = channel.wechat["config_digest"]
+                    if (not isinstance(observed, str)
+                            or not hmac.compare_digest(observed, expected)):
+                        return {"ok": False, "error": "wechat_config_mismatch"}
                 if channel.lite is not None:
                     client.claim(active.request_id, active.generation,
                                  secrets.token_hex(16), _GUEST_TTL_SECONDS)
@@ -1127,13 +1157,12 @@ class Broker:
                 # Recheck at the actual input boundary as a slow database write
                 # may itself cross expiry. An uncertain tombstone is kept then.
                 self.store.assert_owner(channel.channel_id, payload["token"])
-                client.input(action, **fields)
-                outcome = {"ok": True, "action": action}
+                outcome = send(client)
             except LeaseGone:
                 outcome = {"ok": False, "error": "lease_expired"}
             except Exception:
                 # The input outcome can be uncertain. Never send it again here.
-                outcome = {"ok": False, "error": "input_failed" if claimed else (
+                outcome = {"ok": False, "error": failure_error if claimed else (
                     "lite_unavailable" if channel.lite is not None else "guest_unavailable")}
             finally:
                 if claimed:
@@ -1147,11 +1176,55 @@ class Broker:
             if outcome["ok"]:
                 try:
                     self._complete_input_attempt(
-                        channel.channel_id, active.request_id, action_id)
+                        channel.channel_id, active.request_id, action_id,
+                        {"login": outcome["login"]} if action == "wechat:check-login" else None)
                 except Exception:
                     return {"ok": False, "error": "attempt_unavailable"}
             return outcome
         return self.store.execute_owned(channel.channel_id, payload["token"], run)
+
+    def input(self, payload: dict) -> dict:
+        """Send exactly one bounded action while holding the local endpoint fence."""
+        if not {"channel_id", "token", "action", "action_id"} <= set(payload):
+            raise ValueError("input requires channel_id, token, action and action_id")
+        action_id = payload["action_id"]
+        if not isinstance(action_id, str) or not _ACTION_ID.fullmatch(action_id):
+            raise ValueError("action_id must be 1..64 safe characters")
+        channel = self._channel(payload["channel_id"])
+        if channel.guest is None and channel.lite is None:
+            raise ValueError("input is not configured for this channel")
+        action, fields = _input_fields(payload)
+
+        def send(client):
+            client.input(action, **fields)
+            return {"ok": True, "action": action}
+
+        return self._send_guest_attempt(payload, channel, action, fields,
+                                        send, "input_failed")
+
+    def wechat_cli(self, payload: dict) -> dict:
+        """Run the single configured read-only WeChat query under a guest lease."""
+        if not isinstance(payload, dict) or set(payload) != {
+                "channel_id", "token", "action_id", "action"}:
+            raise ValueError("wechat-cli requires channel_id, token, action_id and action")
+        action_id = payload["action_id"]
+        if not isinstance(action_id, str) or not _ACTION_ID.fullmatch(action_id):
+            raise ValueError("action_id must be 1..64 safe characters")
+        if payload["action"] != "check-login":
+            raise ValueError("wechat-cli permits only check-login")
+        channel = self._channel(payload["channel_id"])
+        if channel.guest is None or channel.wechat is None:
+            return {"ok": False, "error": "wechat_unavailable"}
+
+        def send(client):
+            result = client.wechat("check-login", project_id=channel.project_id,
+                                   config_digest=channel.wechat["config_digest"])
+            if type(result) is not dict or set(result) != {"login"} or type(result["login"]) is not bool:
+                raise ValueError("untrusted wechat result")
+            return {"ok": True, "action": "check-login", "login": result["login"]}
+
+        return self._send_guest_attempt(payload, channel, "wechat:check-login",
+                                        channel.wechat, send, "wechat_failed")
 
 
 class BrokerHTTPServer(ThreadingHTTPServer):
@@ -1233,6 +1306,8 @@ class BrokerHandler(BaseHTTPRequestHandler):
                      "lite_unavailable": 503, "input_failed": 502,
                      "guest_release_uncertain": 503, "lite_release_uncertain": 503,
                      "attempt_unavailable": 503, "already_attempted": 409,
+                     "wechat_unavailable": 403, "wechat_failed": 502,
+                     "wechat_config_mismatch": 503,
                      "action_conflict": 409, "ack_unavailable": 409,
                      "ack_required": 409, "guest_dirty": 409,
                      "lease_expired": 410, "client_disconnected": 499,
@@ -1252,7 +1327,8 @@ class BrokerHandler(BaseHTTPRequestHandler):
                    "/v1/release": self.server.broker.release,
                    "/v1/ack": self.server.broker.ack,
                   "/v1/execute": self.server.broker.execute,
-                  "/v1/input": self.server.broker.input}
+                  "/v1/input": self.server.broker.input,
+                  "/v1/wechat-cli": self.server.broker.wechat_cli}
         if self.path not in routes:
             self._send(404, {"error": "not_found"})
             return
