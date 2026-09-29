@@ -11,3 +11,6 @@ __pycache__/
 *.pfx
 *.pem
 *.key
+# Historical machine screenshots are retained locally for provenance, not release.
+/docs/images/lite-workspace.png
+/docs/images/windows-workbench.png
