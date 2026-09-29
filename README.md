@@ -24,6 +24,8 @@ The optional **Task Lease** broker lets explicitly connected Codex MCP and n8n j
 3. Choose **Take control** to use a channel yourself. Choose **Give to AI** before a connected client sends input. Each channel keeps its own browser profile and Downloads volume.
 4. Run the installed diagnostics if a channel is unavailable. The package quickstart lists data locations and AI connection steps.
 
+To stop the pilot and keep your browser data, follow the [manual uninstall and data guide](docs/UNINSTALL-LITE.md). There is no one-click uninstaller in alpha.16.
+
 The 01 host now runs private alpha.16 with two Lite channels. Its dark Firefox chrome and in-place upgrade were checked on that host; Firefox security and session-recovery notices remain visible. There is no matching public alpha.16 installer yet.
 
 The explicit offline upgrade option checks the local Linux engine, installed backend files, Compose ownership, persistent volumes and image content before reusing an existing image. The default installer still builds a new image. The 01 host completed a PowerShell 5.1 in-place upgrade using the verified local image; this does not cover first installation or prove a fresh Dockerfile build on DELL. See the package quickstart for the preview and apply commands. This version has not been published as a Release.
