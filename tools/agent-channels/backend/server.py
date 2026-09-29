@@ -158,6 +158,8 @@ class Channel:
         self.channel_id = channel_id or uuid.uuid4().hex
         self.lease = None
         self.last_generation = 0
+        self.last_owner = None
+        self.used_nonces = set()
         self.action_count = 0
         self.last_action_at = None
         self.last_input_error = None
@@ -193,9 +195,17 @@ class Channel:
             if self.mode != "agent": raise Conflict("Agent mode is not enabled")
             if self.lease is not None and not self._matches_locked(identity):
                 raise Conflict("Lease already held")
-            if self.lease is None and generation <= self.last_generation:
-                raise Conflict("Stale lease generation")
-            self.last_generation = generation
+            if self.lease is None:
+                if generation < self.last_generation:
+                    raise Conflict("Stale lease generation")
+                if generation == self.last_generation:
+                    if owner != self.last_owner or nonce in self.used_nonces:
+                        raise Conflict("Stale lease identity")
+                else:
+                    self.last_generation = generation
+                    self.last_owner = owner
+                    self.used_nonces.clear()
+                self.used_nonces.add(nonce)
             self.lease = {"owner": owner, "generation": generation, "nonce": nonce,
                           "deadline": time.monotonic() + ttl, "expires_at": time.time() + ttl}
             return self._status_locked()

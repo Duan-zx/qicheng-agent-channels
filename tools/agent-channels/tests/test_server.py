@@ -214,6 +214,8 @@ class BrokerLeaseTests(unittest.TestCase):
             self.channel.mode = 'agent'
             self.channel.lease = None
             self.channel.last_generation = 0
+            self.channel.last_owner = None
+            self.channel.used_nonces.clear()
             self.channel.action_count = 0
             self.display.calls.clear()
 
@@ -298,11 +300,51 @@ class BrokerLeaseTests(unittest.TestCase):
         self.assertEqual(self.channel.status()['mode'], 'agent')
         self.assertEqual(self.call('/api/input', self.action())[0], 409)
         self.assertEqual(self.call('/api/lease/claim', self.lease)[0], 409)
+        same_lease = dict(self.lease, nonce='second-action-nonce')
+        self.assertEqual(self.call('/api/lease/claim', dict(same_lease, owner='other'))[0], 409)
+        self.assertEqual(self.call('/api/lease/claim', same_lease)[0], 200)
+        self.assertEqual(self.call('/api/input', self.action({
+            k: same_lease[k] for k in ('owner', 'generation', 'nonce')}))[0], 200)
+        self.assertEqual(self.call('/api/lease/release', same_lease)[0], 200)
+        self.assertEqual(self.call('/api/lease/claim', same_lease)[0], 409)
         next_lease = dict(self.lease, generation=2, nonce='next-private-nonce')
         self.assertEqual(self.call('/api/lease/claim', next_lease)[0], 200)
         self.assertEqual(self.call('/api/input', self.action())[0], 409)
         self.assertEqual(self.call('/api/input', self.action({
             k: next_lease[k] for k in ('owner', 'generation', 'nonce')}))[0], 200)
+
+    def test_same_broker_lease_acknowledges_each_action_and_rejects_replay(self):
+        for index in range(3):
+            action_lease = dict(self.lease, nonce='action-nonce-' + str(index))
+            status, claimed = self.call('/api/lease/claim', action_lease)
+            self.assertEqual(status, 200)
+            self.assertEqual(claimed['lease']['owner'], self.lease['owner'])
+            self.assertEqual(claimed['lease']['generation'], self.lease['generation'])
+            status, acknowledged = self.call('/api/input', self.action({
+                k: action_lease[k] for k in ('owner', 'generation', 'nonce')}))
+            self.assertEqual(status, 200)
+            self.assertEqual(acknowledged['actions'], index + 1)
+            self.assertEqual(len(self.display.calls), index + 1)
+            self.assertEqual(self.call('/api/lease/release', action_lease)[0], 200)
+            self.assertEqual(self.call('/api/lease/claim', action_lease)[0], 409)
+            self.assertEqual(self.call('/api/input', self.action({
+                k: action_lease[k] for k in ('owner', 'generation', 'nonce')}))[0], 409)
+        self.assertEqual(self.call('/api/lease/claim', dict(
+            self.lease, owner='different-broker-lease', nonce='fresh-nonce'))[0], 409)
+        self.assertEqual(self.call('/api/lease/claim', dict(
+            self.lease, generation=2, owner='different-broker-lease', nonce='fresh-nonce'))[0], 200)
+        self.assertEqual(self.call('/api/lease/claim', dict(
+            self.lease, generation=1, nonce='unused-old-generation-nonce'))[0], 409)
+
+    def test_paused_and_human_modes_reject_same_generation_reclaim(self):
+        self.assertEqual(self.call('/api/lease/claim', self.lease)[0], 200)
+        self.assertEqual(self.call('/api/lease/release', self.lease)[0], 200)
+        for mode in ('paused', 'human'):
+            self.assertEqual(self.call('/api/control', {'mode': mode}, auth='viewer')[0], 200)
+            candidate = dict(self.lease, nonce=mode + '-fresh-nonce')
+            self.assertEqual(self.call('/api/lease/claim', candidate)[0], 409)
+            self.assertEqual(self.call('/api/input', self.action(candidate))[0], 409)
+            self.assertEqual(self.display.calls, [])
 
     def test_expiry_takeover_and_pause_revoke(self):
         self.assertEqual(self.call('/api/lease/claim', self.lease)[0], 200)

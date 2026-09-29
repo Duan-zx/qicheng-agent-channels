@@ -106,8 +106,8 @@
     },
     {
       "path": "tools/agent-channels/backend/server.py",
-      "bytes": 19154,
-      "sha256": "c830997a47b85cb9d31eca5264e22c14989c975f1671d0bda2782eb0c7c96013"
+      "bytes": 19596,
+      "sha256": "36c6e939df887462b7d91b191433ae612150365be7c949bded657b0b92699fcc"
     },
     {
       "path": "tools/agent-channels/backend/start.sh",
@@ -176,8 +176,8 @@
     },
     {
       "path": "tools/agent-channels/tests/test_server.py",
-      "bytes": 21327,
-      "sha256": "1a0025539f51780e74b98a4d36968616e0026a5d76eed0874ba2a71c2742b019"
+      "bytes": 24185,
+      "sha256": "799cd08d5be97c5de848f579f63d1acdc23ccf19513c3efff17bd34b6feacb1f"
     },
     {
       "path": "tools/agent-channels/tests/test_wechat_option.py",
