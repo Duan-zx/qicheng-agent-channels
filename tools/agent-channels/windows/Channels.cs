@@ -70,7 +70,7 @@ sealed class Channels : Form {
     readonly int channelCount;
     ApplicationContext context;
     EventWaitHandle showSignal;
-    bool polling, exiting, connected, stateKnown, collapsed, returningToHost;
+    bool polling, exiting, connected, stateKnown, collapsed, returningToHost, aiLeaseActive;
     int channel = 1, generation, textGeneration, guestWidth = 1600, guestHeight = 900;
     string mode = "paused", statusError = "";
     DateTime statusErrorUntil = DateTime.MinValue;
@@ -89,7 +89,8 @@ sealed class Channels : Form {
                 && !ShouldFallback(HttpStatusCode.ServiceUnavailable) && !ShouldFallback(HttpStatusCode.Unauthorized)
                 && KeyName(Keys.L, true, false) == "ctrl+l" && KeyName(Keys.Tab, false, false) == "Tab"
                 && InputAllowed("human", true, true) && !InputAllowed("human", false, true) && !InputAllowed("agent", true, true)
-                && MatchesInputRoute(1, 4, 1, 4) && !MatchesInputRoute(1, 4, 2, 4) && !MatchesInputRoute(1, 4, 1, 5);
+                && MatchesInputRoute(1, 4, 1, 4) && !MatchesInputRoute(1, 4, 2, 4) && !MatchesInputRoute(1, 4, 1, 5)
+                && AgentStatus(false) == "AI 可操作" && AgentStatus(true) == "AI 操作中";
             bool credentialRouting = TestCredentialRouting() && TestChannelSelection();
             File.WriteAllText(args[1], JsonResult(mapping, contract, credentialRouting));
             Environment.Exit(mapping && contract && credentialRouting ? 0 : 1); return;
@@ -323,7 +324,7 @@ sealed class Channels : Form {
         if (useMini) {
             int miniWidth = Math.Min(420, Math.Max(1, available)), miniHeight = forcedMini ? 88 : 44;
             miniBar.Size = new Size(miniWidth, miniHeight); SignalButton expand = miniBar.Tag as SignalButton;
-            string compactText = !stateKnown ? (connected ? "正在读取状态" : "频道未连接") : mode == "agent" ? "AI 已接管" : mode == "human" ? "你正在操作" : "输入已暂停";
+            string compactText = !stateKnown ? (connected ? "正在读取状态" : "频道未连接") : mode == "agent" ? AgentStatus(aiLeaseActive) : mode == "human" ? "你正在操作" : "输入已暂停";
             if (expand != null) { expand.Text = "频道 " + channel + " · " + compactText + (forcedMini ? "" : "    展开"); expand.Enabled = !forcedMini; expand.Bounds = new Rectangle(6, 5, Math.Max(1, miniWidth - 60), 34); }
             if (miniMoreButton != null) miniMoreButton.Bounds = new Rectangle(Math.Max(6, miniWidth - 48), 5, 42, 34);
             if (miniHumanButton != null) {
@@ -396,7 +397,7 @@ sealed class Channels : Form {
     void OpenChannel(int id) {
         if (exiting || id < 1 || id > channelCount) return;
         IntPtr foreground = GetForegroundWindow(); if (foreground != Handle) previous = foreground;
-        ClearPendingInput(); generation++; channel = id; connected = false; stateKnown = false; mode = "paused"; ClearStatusError(); ReplaceImage(null);
+        ClearPendingInput(); generation++; channel = id; connected = false; stateKnown = false; mode = "paused"; aiLeaseActive = false; ClearStatusError(); ReplaceImage(null);
         Text = "启程 · 频道" + id; Rectangle bounds = Screen.FromPoint(Cursor.Position).Bounds; Bounds = bounds; WindowState = FormWindowState.Normal;
         ShowInTaskbar = true; Show(); Bounds = bounds; BringToFront(); Activate(); screen.Focus(); UpdateStatus(); BeginPoll();
     }
@@ -406,6 +407,7 @@ sealed class Channels : Form {
     static bool ShouldFallback(HttpStatusCode statusCode) { return statusCode == HttpStatusCode.NotFound || statusCode == HttpStatusCode.MethodNotAllowed; }
     static int PollInterval(string currentMode) { return currentMode == "human" ? 250 : 700; }
     static bool InputAllowed(string currentMode, bool activeConnection, bool knownState) { return currentMode == "human" && activeConnection && knownState; }
+    static string AgentStatus(bool leaseActive) { return leaseActive ? "AI 操作中" : "AI 可操作"; }
     static bool MatchesInputRoute(int expectedChannel, int expectedGeneration, int currentChannel, int currentGeneration) { return expectedChannel == currentChannel && expectedGeneration == currentGeneration; }
     async void BeginPoll() { await Poll(); }
     async Task<Dictionary<string, object>> ReadState(int id) { return json.Deserialize<Dictionary<string, object>>(await http.GetStringAsync(Url(id, "/api/state"))); }
@@ -419,6 +421,7 @@ sealed class Channels : Form {
 
     void ApplyState(Dictionary<string, object> data) {
         guestWidth = Convert.ToInt32(data["width"]); guestHeight = Convert.ToInt32(data["height"]); mode = Convert.ToString(data["mode"]);
+        object lease; aiLeaseActive = mode == "agent" && data.TryGetValue("lease", out lease) && lease != null;
         stateKnown = true; connected = true; int next = PollInterval(mode); if (pollTimer.Interval != next) pollTimer.Interval = next; UpdateStatus();
     }
 
@@ -503,7 +506,7 @@ sealed class Channels : Form {
         Color color = !connected ? Theme.Offline : mode == "agent" ? Theme.Agent : mode == "human" ? Theme.Human : Theme.Pause;
         string modeText, detail;
         if (!stateKnown) { modeText = connected ? "正在读取状态" : "频道未连接"; detail = connected ? "正在读取该频道的真实控制状态。" : "频道暂时无法连接；请检查轻量后端。"; }
-        else if (mode == "agent") { modeText = "AI 已接管"; detail = "AI 可以向这个频道输入；点击“我来接管”可立即切回人工输入。"; }
+        else if (mode == "agent") { modeText = AgentStatus(aiLeaseActive); detail = aiLeaseActive ? "AI 正在这个频道执行任务；点击“我来接管”可立即阻断后续输入。" : "AI 可直接开始任务，无需再点“交给 AI”；你随时可以接管。"; }
         else if (mode == "human") { modeText = "你正在操作"; detail = "人工输入已启用；完成后可将控制交给 AI 或暂停。"; }
         else { modeText = "输入已暂停"; detail = "人工与 AI 的输入都已暂停，选择一个控制方式后继续。"; }
         identity.Text = "频道 " + channel; status.Text = "●  " + modeText; status.ForeColor = color; statusShell.Edge = Color.FromArgb(108, color); statusShell.Invalidate(); tips.SetToolTip(status, statusErrorUntil > DateTime.UtcNow ? statusError : detail);
@@ -515,7 +518,7 @@ sealed class Channels : Form {
         if (miniAgentButton != null) { miniAgentButton.Tone = mode == "agent" && connected ? ButtonTone.AgentActive : ButtonTone.Agent; miniAgentButton.Invalidate(); }
         if (miniPauseButton != null) { miniPauseButton.Tone = mode == "paused" && connected ? ButtonTone.PauseActive : ButtonTone.Pause; miniPauseButton.Invalidate(); }
         SignalButton mini = miniBar.Tag as SignalButton; if (mini != null) { mini.Text = "频道 " + channel + " · " + modeText + (mini.Enabled ? "    展开" : ""); mini.Signal = color; mini.Invalidate(); }
-        bool canNavigate = stateKnown && connected && mode == "human"; address.ReadOnly = !canNavigate; address.TabStop = canNavigate; address.ForeColor = canNavigate ? Theme.Text : Theme.Muted; addressShell.Fill = canNavigate ? Theme.Input : Theme.Panel; addressShell.Edge = canNavigate ? Color.FromArgb(92, Theme.Human) : Theme.Edge; address.BackColor = addressShell.Fill; address.AccessibleDescription = canNavigate ? "输入网址后按 Enter" : "当前不可输入网址。"; navigateButton.Enabled = canNavigate; tips.SetToolTip(navigateButton, canNavigate ? "打开输入的网址" : "接管频道后才能输入网址"); SetAddressCue(canNavigate ? "输入网址并按 Enter" : mode == "agent" ? "AI 正在操作，接管后可输入" : "选择“我来接管”后可输入网址"); addressShell.Invalidate();
+        bool canNavigate = stateKnown && connected && mode == "human"; address.ReadOnly = !canNavigate; address.TabStop = canNavigate; address.ForeColor = canNavigate ? Theme.Text : Theme.Muted; addressShell.Fill = canNavigate ? Theme.Input : Theme.Panel; addressShell.Edge = canNavigate ? Color.FromArgb(92, Theme.Human) : Theme.Edge; address.BackColor = addressShell.Fill; address.AccessibleDescription = canNavigate ? "输入网址后按 Enter" : "当前不可输入网址。"; navigateButton.Enabled = canNavigate; tips.SetToolTip(navigateButton, canNavigate ? "打开输入的网址" : "接管频道后才能输入网址"); SetAddressCue(canNavigate ? "输入网址并按 Enter" : mode == "agent" ? (aiLeaseActive ? "AI 正在操作，接管后可输入" : "AI 可操作，接管后可输入") : "选择“我来接管”后可输入网址"); addressShell.Invalidate();
     }
 
     async Task ExitViewer() {
