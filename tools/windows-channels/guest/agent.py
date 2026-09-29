@@ -1,5 +1,6 @@
 """Hyper-V socket transport for the experimental Windows guest agent."""
 import argparse
+import ntpath
 import os
 from pathlib import Path
 import socket
@@ -8,9 +9,45 @@ import sys
 from .protocol import (GuestChannel, RequestError, TOKEN_RE, dispatch,
                        receive_request, response_error, send_response)
 from .windows import Win32Desktop, verify_this_guest
+from .wechat_cli import load_trusted_config
 
 SERVICE_ID = "6f3bbd64-8b13-4f20-a1c6-93f77f6ab20e"
 CONNECTION_TIMEOUT_SECONDS = 5
+
+
+def load_fixed_wechat_sidecar(path, token_file):
+    """Require a fixed token sibling and reject reparse points; ACL is a deploy gate."""
+    try:
+        raw_path = os.fspath(path)
+        token_path = os.fspath(token_file)
+        drive, tail = ntpath.splitdrive(raw_path)
+        token_drive, token_tail = ntpath.splitdrive(token_path)
+        if (os.name != "nt" or len(drive) != 2 or drive[1] != ":"
+                or not tail.startswith("\\") or len(token_drive) != 2
+                or token_drive[1] != ":" or not token_tail.startswith("\\")
+                or ntpath.normpath(raw_path) != raw_path
+                or ntpath.normpath(token_path) != token_path):
+            raise ValueError("invalid path")
+        token_dir = ntpath.dirname(token_path)
+        if (ntpath.basename(token_dir).lower() != ".local"
+                or ntpath.normcase(raw_path) != ntpath.normcase(
+                    ntpath.join(token_dir, "wechat.json"))):
+            raise ValueError("config must be fixed token sibling")
+        for target in (token_dir, token_path, raw_path):
+            info = os.stat(target, follow_symlinks=False)
+            attributes = getattr(info, "st_file_attributes", None)
+            if attributes is None or attributes & 0x400 or os.path.islink(target):
+                raise ValueError("reparse point or unsupported filesystem")
+        if not os.path.isfile(raw_path):
+            raise ValueError("not a file")
+        config = load_trusted_config(raw_path)
+        if not os.path.isdir(config.guest_project_path):
+            raise ValueError("project missing")
+        if not os.path.isfile(config.cli_bat_path):
+            raise ValueError("CLI missing")
+        return config
+    except Exception:
+        raise RuntimeError("Fixed WeChat CLI sidecar unavailable") from None
 
 
 def load_token(path):
@@ -45,6 +82,8 @@ def handle_connection(connection, expected_token, channel):
     try:
         connection.settimeout(CONNECTION_TIMEOUT_SECONDS)
         request = receive_request(connection)
+        if request.get("op") == "wechat_cli":
+            connection.settimeout(12)
         request_id = request.get("id")
         response = dispatch(request, expected_token, channel)
     except RequestError as exc:
@@ -77,6 +116,8 @@ def build_parser():
                         help="Enable broker-owned guest input leases with a distinct token")
     parser.add_argument("--human-token-file",
                         help="Required with broker leases for local control and human input")
+    parser.add_argument("--wechat-config-file",
+                        help="Optional protected guest-only WeChat CLI configuration")
     return parser
 
 
@@ -94,9 +135,14 @@ def main(argv=None):
     human_token = load_token(args.human_token_file) if args.human_token_file else None
     if broker_token is not None and len({token, broker_token, human_token}) != 3:
         raise RuntimeError("Channel, broker, and human tokens must differ")
+    if args.wechat_config_file and broker_token is None:
+        raise RuntimeError("WeChat CLI requires broker leases")
+    wechat_config = (load_fixed_wechat_sidecar(args.wechat_config_file,
+                                               args.token_file)
+                     if args.wechat_config_file else None)
     backend = Win32Desktop()
     channel = GuestChannel(backend, identity, broker_token=broker_token,
-                           human_token=human_token)
+                           human_token=human_token, wechat_config=wechat_config)
     listener = create_hyperv_listener()
     with listener:
         serve(listener, token, channel)

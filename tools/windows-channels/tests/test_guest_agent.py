@@ -3,12 +3,15 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 
 from guest import agent, protocol
+from guest.wechat_cli import TrustedWechatConfig
 
 
 class FakeListener:
@@ -85,6 +88,31 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(response["id"], "r1")
         self.assertTrue(response["ok"])
         self.assertEqual(connection.timeout, agent.CONNECTION_TIMEOUT_SECONDS)
+
+    def test_optional_wechat_sidecar_is_fixed_sibling_without_external_modules(self):
+        self.assertIsNone(agent.build_parser().parse_args([
+            "--expected-bios-uuid", "x", "--token-file", "token"]).wechat_config_file)
+        self.assertEqual(agent.build_parser().parse_args([
+            "--expected-bios-uuid", "x", "--token-file", "token",
+            "--wechat-config-file", r"C:\private\wechat.json"]).wechat_config_file,
+                         r"C:\private\wechat.json")
+        with self.assertRaisesRegex(RuntimeError, "Fixed WeChat CLI sidecar unavailable"):
+            agent.load_fixed_wechat_sidecar("relative.json", r"C:\private\.local\token.txt")
+        with patch.dict(sys.modules, {"win32api": None, "win32security": None}):
+            config = TrustedWechatConfig("project-a", r"C:\work\mini",
+                                          r"C:\cli\cli.bat", 9420)
+            with patch.object(agent.os, "name", "nt"):
+                with patch.object(agent.os, "stat", return_value=SimpleNamespace(st_file_attributes=0)):
+                    with patch.object(agent.os.path, "isfile", return_value=True), patch.object(
+                            agent.os.path, "isdir", return_value=True), patch.object(
+                            agent.os.path, "islink", return_value=False), patch.object(
+                            agent, "load_trusted_config", return_value=config):
+                        self.assertEqual(agent.load_fixed_wechat_sidecar(
+                            r"C:\private\.local\wechat.json",
+                            r"C:\private\.local\token.txt"), config)
+            with self.assertRaisesRegex(RuntimeError, "Fixed WeChat CLI sidecar unavailable"):
+                agent.load_fixed_wechat_sidecar(r"C:\other\wechat.json",
+                                                   r"C:\private\.local\token.txt")
 
 
 if __name__ == "__main__":

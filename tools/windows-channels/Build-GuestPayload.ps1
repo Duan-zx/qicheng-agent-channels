@@ -17,6 +17,8 @@ param(
 
     [string]$HumanTokenFile,
 
+    [string]$WechatConfigFile,
+
     [switch]$Compact
 )
 
@@ -98,6 +100,56 @@ function Assert-PrivateTokenAcl {
     }
 }
 
+function Assert-PrivateWechatConfig {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $parent = [IO.Path]::GetDirectoryName($Path)
+    $cursor = $parent
+    while ($cursor) {
+        if ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'WeChat config ancestry must not contain a reparse point.' }
+        $next = [IO.Path]::GetDirectoryName($cursor)
+        if (-not $next -or $next -eq $cursor) { break }
+        $cursor = $next
+    }
+    $parentAcl = Get-Acl -LiteralPath $parent -ErrorAction Stop
+    if (-not $parentAcl.AreAccessRulesProtected) { throw 'WeChat config parent ACL inheritance must be disabled.' }
+    foreach ($rule in $parentAcl.Access) {
+        if ($rule.AccessControlType -eq 'Deny') { throw 'WeChat config parent ACL contains a deny rule.' }
+        if ($rule.AccessControlType -eq 'Allow') {
+            try { $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+            catch { throw 'WeChat config parent ACL identity is unresolvable.' }
+            if ($sid -notin @(Get-AllowedPayloadSids)) { throw 'WeChat config parent ACL grants an unapproved identity.' }
+        }
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'WeChat config file is missing.' }
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'WeChat config must not be a reparse point.' }
+    if ($item.Length -lt 2 -or $item.Length -gt 4096) { throw 'WeChat config size is invalid.' }
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    if (-not $acl.AreAccessRulesProtected) { throw 'WeChat config ACL inheritance must be disabled.' }
+    $allowed = @(Get-AllowedPayloadSids)
+    foreach ($rule in $acl.Access) {
+        if ($rule.AccessControlType -eq 'Deny') { throw 'WeChat config ACL contains a deny rule.' }
+        if ($rule.AccessControlType -eq 'Allow') {
+            try { $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+            catch { throw 'WeChat config ACL identity is unresolvable.' }
+            if ($sid -notin $allowed) { throw 'WeChat config ACL grants an unapproved identity.' }
+        }
+    }
+    try {
+        $utf8 = [Text.UTF8Encoding]::new($false, $true)
+        $config = $utf8.GetString([IO.File]::ReadAllBytes($Path)) | ConvertFrom-Json -ErrorAction Stop
+        if ($config -isnot [pscustomobject]) { throw 'invalid' }
+        $names = @($config.PSObject.Properties.Name | Sort-Object)
+        if (($names -join '|') -cne 'cli_bat_path|guest_project_path|project_id|service_port') { throw 'invalid' }
+        if ([string]$config.project_id -cnotmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'invalid' }
+        foreach ($field in @('guest_project_path','cli_bat_path')) {
+            $value = $config.$field
+            if ($value -isnot [string] -or $value -notmatch '^[A-Za-z]:\\' -or $value -match '[\x00"&|<>^%!\r\n]' -or $value -match '(^|[\\/])\.\.?(?:[\\/]|$)' -or [IO.Path]::GetFullPath($value) -cne $value) { throw 'invalid' }
+        }
+        if (-not $config.cli_bat_path.EndsWith('\cli.bat',[StringComparison]::OrdinalIgnoreCase) -or ($config.service_port -isnot [int] -and $config.service_port -isnot [long]) -or $config.service_port -lt 1 -or $config.service_port -gt 65535) { throw 'invalid' }
+    } catch { throw 'WeChat config JSON format is invalid.' }
+}
+
 function Set-ProtectedPayloadAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -120,6 +172,8 @@ try {
     $pythonSource = Resolve-SafeLocalPath -Path $EmbeddedPythonDirectory
     $payloadRoot = Resolve-SafeLocalPath -Path $OutputDirectory
     $threeCredentialMode = [bool]($ChannelTokenFile -or $BrokerTokenFile -or $HumanTokenFile)
+    if ($WechatConfigFile -and -not $threeCredentialMode) { throw 'WeChat config requires three-credential mode.' }
+    $wechatSource = if ($WechatConfigFile) { Resolve-SafeLocalPath -Path $WechatConfigFile } else { $null }
     if ($threeCredentialMode) {
         if ($TokenFile -or -not $ChannelTokenFile -or -not $BrokerTokenFile -or -not $HumanTokenFile) {
             throw 'Provide all three ChannelTokenFile, BrokerTokenFile, and HumanTokenFile paths, without TokenFile.'
@@ -130,6 +184,9 @@ try {
         $tokenSources = @(Resolve-SafeLocalPath -Path $TokenFile)
     }
     $guestSource = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'guest'))
+    if ($wechatSource -and ((Test-PathContains -Parent $pythonSource -Child $wechatSource) -or (Test-PathContains -Parent $guestSource -Child $wechatSource))) {
+        throw 'WeChat config source must be outside copied runtime trees.'
+    }
 
     if (-not (Test-Path -LiteralPath $pythonSource -PathType Container)) {
         throw "Embedded Python directory does not exist: $pythonSource"
@@ -144,6 +201,10 @@ try {
         if (-not (Test-Path -LiteralPath $tokenSource -PathType Leaf)) { throw "Token file does not exist: $tokenSource" }
         if ((Get-Item -LiteralPath $tokenSource).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Token file must not be a reparse point.' }
         Assert-PrivateTokenAcl -Path $tokenSource
+    }
+    if ($wechatSource) {
+        if ($wechatSource -in $tokenSources) { throw 'WeChat config and credentials must use distinct paths.' }
+        Assert-PrivateWechatConfig -Path $wechatSource
     }
     if (Test-Path -LiteralPath $payloadRoot) {
         throw "Output path already exists: $payloadRoot"
@@ -239,8 +300,16 @@ try {
         [System.IO.File]::WriteAllText((Join-Path $localDestination 'broker.token'), $tokens[1] + [Environment]::NewLine, [System.Text.Encoding]::ASCII)
         [System.IO.File]::WriteAllText((Join-Path $localDestination 'human.token'), $tokens[2] + [Environment]::NewLine, [System.Text.Encoding]::ASCII)
     }
+    if ($wechatSource) {
+        $wechatDestination = Join-Path $localDestination 'wechat.json'
+        Copy-Item -LiteralPath $wechatSource -Destination $wechatDestination -ErrorAction Stop
+        $wechatAcl = Get-Acl -LiteralPath $wechatDestination -ErrorAction Stop
+        $wechatAcl.SetAccessRuleProtection($true, $true)
+        Set-Acl -LiteralPath $wechatDestination -AclObject $wechatAcl -ErrorAction Stop
+    }
 
     $additionalArguments = if ($threeCredentialMode) { ' --broker-token-file "%~dp0.local\broker.token" --human-token-file "%~dp0.local\human.token"' } else { '' }
+    if ($wechatSource) { $additionalArguments += ' --wechat-config-file "%~dp0.local\wechat.json"' }
 
     $startScript = @"
 @echo off
@@ -272,6 +341,7 @@ exit /b %CHANNEL_EXIT%
         tokenPaths = if ($threeCredentialMode) { @('.local/channel.token', '.local/broker.token', '.local/human.token') } else { @('.local/channel.token') }
         files = $manifestFiles
     }
+    if ($wechatSource) { $manifest.wechatConfigPath = '.local/wechat.json' }
     [System.IO.File]::WriteAllText((Join-Path $payloadRoot 'payload-manifest.json'), ($manifest | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
 
     $result = [ordered]@{

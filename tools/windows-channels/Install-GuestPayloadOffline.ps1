@@ -56,10 +56,19 @@ try {
     if($manifest.schemaVersion -ne 2 -or $manifest.payloadType -ne 'qicheng-windows-guest' -or $manifest.credentialMode -ne 'channel-broker-human' -or $manifest.entrypoint -ne 'Start-Channel.cmd'){throw 'Unsupported three-credential manifest.'}
     $tokenPaths=@('.local/channel.token','.local/broker.token','.local/human.token')
     if($manifest.tokenPath -cne $tokenPaths[0] -or (@($manifest.tokenPaths)-join '|') -cne ($tokenPaths-join '|')){throw 'Manifest credential paths are invalid.'}
+    $wechatConfigured=[bool]$manifest.PSObject.Properties['wechatConfigPath']
+    if($wechatConfigured -and $manifest.wechatConfigPath -cne '.local/wechat.json'){throw 'Manifest WeChat config path is invalid.'}
     $bios=[guid]::Empty; if(-not[guid]::TryParse($manifest.expectedBiosUuid,[ref]$bios) -or $bios -eq [guid]::Empty){throw 'Manifest BIOS UUID is invalid.'}
     $entries=@($manifest.files); if(-not $entries.Count){throw 'Manifest is empty.'}; $seen=@{}
     foreach($entry in $entries){$rel=[string]$entry.path;if(-not$rel -or $rel -match '(^|/)\.\.(/|$)' -or $rel.StartsWith('/') -or $rel.Contains('\') -or $rel.Contains(':')){throw "Unsafe manifest path: $rel"};$key=$rel.ToLowerInvariant();if($seen.ContainsKey($key)){throw "Duplicate manifest path: $rel"};$seen[$key]=$true;$src=Join-Path $payloadRoot $rel.Replace('/','\');if(-not(Test-Path $src -PathType Leaf)){throw "Missing payload file: $rel"};$item=Get-Item $src;if([uint64]$item.Length-ne[uint64]$entry.sizeBytes){throw "Payload size mismatch: $rel"};if((Get-FileHash $src -Algorithm SHA256).Hash.ToUpperInvariant()-cne([string]$entry.sha256).ToUpperInvariant()){throw "Payload hash mismatch: $rel"}}
     foreach($required in @('Start-Channel.cmd','python/python.exe','python/pythonw.exe','guest/agent.py','guest/protocol.py','guest/windows.py') + $tokenPaths){if(-not $seen.ContainsKey($required.ToLowerInvariant())){throw "Manifest is missing required runtime file: $required"}}
+    if($wechatConfigured -and -not $seen.ContainsKey('.local/wechat.json')){throw 'Manifest is missing WeChat config.'}
+    if(-not $wechatConfigured -and $seen.ContainsKey('.local/wechat.json')){throw 'Unconfigured WeChat config is present.'}
+    if($wechatConfigured){$wechatSource=Join-Path $payloadRoot '.local\wechat.json';if((Get-Item -LiteralPath $wechatSource).Length -gt 4096){throw 'WeChat config is too large.'};if((Get-Item -LiteralPath $wechatSource -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'WeChat config is a reparse point.'};if((Get-Item -LiteralPath (Join-Path $payloadRoot '.local') -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'WeChat config parent is a reparse point.'};Assert-PrivateAcl $wechatSource}
+    $actual=@(Get-ChildItem -LiteralPath $payloadRoot -File -Recurse -Force|Where-Object{$_.FullName -ne $manifestPath});if($actual.Count -ne $entries.Count){throw 'Payload includes files outside its manifest.'}
+    $startText=Get-Content -LiteralPath (Join-Path $payloadRoot 'Start-Channel.cmd') -Raw -Encoding ASCII
+    if($startText.Contains('--wechat-config-file') -ne $wechatConfigured){throw 'Start command and manifest disagree about WeChat config.'}
+    if($wechatConfigured -and -not $startText.Contains('--wechat-config-file "%~dp0.local\wechat.json"')){throw 'Start command has an unsafe WeChat config path.'}
     $seenTokenValues=@{}
     foreach($tokenPath in $tokenPaths){
         $tokenFile=Join-Path $payloadRoot $tokenPath.Replace('/','\')
@@ -100,9 +109,16 @@ try {
     $installRoot=Join-Path $offlineProfile 'AppData\Local\Qicheng\channel';if(Test-Path $installRoot){throw 'Existing guest installation found; overwrite is refused.'}
     New-Item -ItemType Directory -Path $installRoot|Out-Null;Set-GuestPrivateAcl $installRoot $selected.sid
     foreach($entry in $entries){$src=Join-Path $payloadRoot ([string]$entry.path).Replace('/','\');$dst=Join-Path $installRoot ([string]$entry.path).Replace('/','\');$parent=Split-Path $dst -Parent;if(-not(Test-Path $parent)){New-Item -ItemType Directory -Path $parent|Out-Null};Copy-Item -LiteralPath $src -Destination $dst;$installedFiles++}
+    if($wechatConfigured){
+        $wechatDestination=Join-Path $installRoot '.local\wechat.json'
+        $acl=[Security.AccessControl.FileSecurity]::new();$acl.SetAccessRuleProtection($true,$false);$acl.SetOwner([Security.Principal.SecurityIdentifier]::new($selected.sid))
+        foreach($sidText in @($selected.sid,'S-1-5-18','S-1-5-32-544')){[void]$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sidText),[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.InheritanceFlags]::None,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))}
+        Set-Acl -LiteralPath $wechatDestination -AclObject $acl
+        if(-not(Get-Acl -LiteralPath $wechatDestination).AreAccessRulesProtected){throw 'Installed WeChat config ACL protection failed.'}
+    }
     Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $installRoot 'payload-manifest.json');$installedFiles++
     $startupDir=Join-Path $offlineProfile 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup';if(-not(Test-Path $startupDir)){New-Item -ItemType Directory -Path $startupDir|Out-Null}
-    $shortcutTemp=Join-Path $mountWork ('qicheng-'+[guid]::NewGuid().ToString('N')+'.lnk');$shell=New-Object -ComObject WScript.Shell;$lnk=$shell.CreateShortcut($shortcutTemp);$guestInstall=$selected.profile+'\AppData\Local\Qicheng\channel';$lnk.TargetPath=$guestInstall+'\python\pythonw.exe';$lnk.Arguments='-B -m guest.agent --expected-bios-uuid "'+$bios.ToString('D')+'" --token-file "'+$guestInstall+'\.local\channel.token" --broker-token-file "'+$guestInstall+'\.local\broker.token" --human-token-file "'+$guestInstall+'\.local\human.token"';$lnk.WorkingDirectory=$guestInstall;$lnk.Save();Copy-Item $shortcutTemp (Join-Path $startupDir 'Qicheng Channel.lnk')
+    $shortcutTemp=Join-Path $mountWork ('qicheng-'+[guid]::NewGuid().ToString('N')+'.lnk');$shell=New-Object -ComObject WScript.Shell;$lnk=$shell.CreateShortcut($shortcutTemp);$guestInstall=$selected.profile+'\AppData\Local\Qicheng\channel';$lnk.TargetPath=$guestInstall+'\python\pythonw.exe';$lnk.Arguments='-B -m guest.agent --expected-bios-uuid "'+$bios.ToString('D')+'" --token-file "'+$guestInstall+'\.local\channel.token" --broker-token-file "'+$guestInstall+'\.local\broker.token" --human-token-file "'+$guestInstall+'\.local\human.token"';if($wechatConfigured){$lnk.Arguments+=' --wechat-config-file "'+$guestInstall+'\.local\wechat.json"'};$lnk.WorkingDirectory=$guestInstall;$lnk.Save();Copy-Item $shortcutTemp (Join-Path $startupDir 'Qicheng Channel.lnk')
     Write-ResultAndExit ([ordered]@{schemaVersion=1;status='installed-offline';vmName=$vm.Name;vmId=$vm.Id.ToString();guestSid=$selected.sid;guestProfile=$selected.profile;installedFiles=$installedFiles;startupInstalled=$true;agentStarted=$false;vmStartedOrStopped=$false}) 0
 }
 catch {Write-ResultAndExit ([ordered]@{schemaVersion=1;status=if($installedFiles){'partial-files-preserved'}else{'failed'};error=$_.Exception.Message;installedFiles=$installedFiles;recursiveCleanupAttempted=$false;agentStarted=$false;vmStartedOrStopped=$false}) 2}

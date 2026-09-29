@@ -63,26 +63,26 @@
     {
       "path": "tools/windows-channels/Build-GuestPayload.ps1",
       "kind": "source",
-      "bytes": 14539,
-      "sha256": "9f95ddbcd89ebc2069257981d9168bf774d24ccf8d04b9b480106ce3f7341ff9"
+      "bytes": 19277,
+      "sha256": "f3438f2ea90cfa326743d71876c89563978c20d9b81d63fd63a6eca33978ba75"
     },
     {
       "path": "tools/windows-channels/Install-GuestPayloadOffline.ps1",
       "kind": "source",
-      "bytes": 13580,
-      "sha256": "1266ef0a69dd804e8879c5ae3621d2c537faf735552cbc697420c95010813f20"
+      "bytes": 16172,
+      "sha256": "34ab119cf5de3f3d4ec60cbb4161b26574ad4f028afa535b2573b1d390212ca4"
     },
     {
       "path": "tools/windows-channels/Stage-GuestPayloadDirect.ps1",
       "kind": "source",
-      "bytes": 14046,
-      "sha256": "55bb4ca611653b7120617a9ea677071b39085d4d93f5c98a1451a4edefc0cec7"
+      "bytes": 16217,
+      "sha256": "5a41562e1960949425f7fb15368c8f750f8d5a4d4dc7c6e829d6ddc18e318d73"
     },
     {
       "path": "tools/windows-channels/Switch-GuestPayloadDirect.ps1",
       "kind": "source",
-      "bytes": 40442,
-      "sha256": "884b7b4de3ba26b0853b5f9f8552f277e888bdd74029968b02f6f0ac1272b0d6"
+      "bytes": 41859,
+      "sha256": "5044dff6d30d24eedb9b09d4feb211208aff813d76ecb63a212e9b697bd4098c"
     },
     {
       "path": "tools/windows-channels/Install-GuestPayloadDirect.ps1",
@@ -141,14 +141,14 @@
     {
       "path": "tools/windows-channels/guest/agent.py",
       "kind": "source",
-      "bytes": 4185,
-      "sha256": "0267d619d18c31e566cf97fd47adc05fec487dbdcf944e07c7db89000f36989b"
+      "bytes": 6618,
+      "sha256": "e507e170333e47363950f936d9ef84c9d1136122765af53ad49996f1825f8dcb"
     },
     {
       "path": "tools/windows-channels/guest/protocol.py",
       "kind": "source",
-      "bytes": 23540,
-      "sha256": "ec943fdf4af74a6a7480e08ef607b6f4831d88e027f00fd6a135ec118fc72e0f"
+      "bytes": 28716,
+      "sha256": "4be69a8fec476b84d3e8db420b4ce816222ec0f68055b4f8ba78b81645d0db83"
     },
     {
       "path": "tools/windows-channels/guest/windows.py",
@@ -165,8 +165,8 @@
     {
       "path": "tools/windows-channels/guest/README.md",
       "kind": "source",
-      "bytes": 9435,
-      "sha256": "82fa61565e1893a56ad08dd78de95497eec253eccf872c80386137c35df2422e"
+      "bytes": 10438,
+      "sha256": "a5623af0d28dbbdf1546a0e44ae3ee46a743f162ddbccc7aae930651da700d7b"
     },
     {
       "path": "tools/windows-channels/viewer/Viewer.cs",
@@ -201,8 +201,8 @@
     {
       "path": "tools/windows-channels/tests/test_guest_agent.py",
       "kind": "source",
-      "bytes": 3324,
-      "sha256": "ef3972fad010aaca9ade06c2a38cc8cdee1691475721c80401121081554c9807"
+      "bytes": 5304,
+      "sha256": "bd67828914d0381b9e4513e3be4745a1e5ea6879362f2db8a4ff0ec29fb90fe5"
     },
     {
       "path": "tools/windows-channels/tests/test_guest_protocol.py",
@@ -219,8 +219,8 @@
     {
       "path": "tools/windows-channels/tests/test_guest_lease.py",
       "kind": "source",
-      "bytes": 14545,
-      "sha256": "a426add7ff7a39a33870b489e65cadd21aeb10007a4106cef68e46f82f223c0d"
+      "bytes": 22528,
+      "sha256": "b7f2bf372423445c67005aa24b8097933b85b495f7a7b68018de1a4612805c17"
     },
     {
       "path": "tools/windows-channels/tests/test_host.py",
@@ -273,14 +273,14 @@
     {
       "path": "tools/windows-channels/tests/ThreeCredentialPayload.Tests.ps1",
       "kind": "source",
-      "bytes": 11308,
-      "sha256": "5a31399f03a5b8cf862ccfdd37b3a386edeb48fcc83605fb2a46da79d8c6cdcd"
+      "bytes": 22463,
+      "sha256": "2b052b0e1f4ff7c1dd5199af4b63be322a5589ff79e2bd28525c5622a277a7a5"
     },
     {
       "path": "tools/windows-channels/tests/InstallGuestPayloadOffline.Tests.ps1",
       "kind": "source",
-      "bytes": 8173,
-      "sha256": "8d9f0dbe22541d05e97e37c7cc91ead884da6f899806250702de0eb85419f5bd"
+      "bytes": 9958,
+      "sha256": "e367c49c39b4150756cc927bab7a770807773389fa2b03a6c9be9e83506cd714"
     },
     {
       "path": "tools/windows-channels/tests/InstallGuestPayloadDirect.Tests.ps1",

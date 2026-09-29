@@ -117,6 +117,8 @@ try {
                 $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
                 $tokens = @('.local/channel.token','.local/broker.token','.local/human.token')
                 if ($manifest.schemaVersion -ne 2 -or $manifest.payloadType -ne 'qicheng-windows-guest' -or $manifest.credentialMode -ne 'channel-broker-human' -or $manifest.entrypoint -ne 'Start-Channel.cmd' -or $manifest.tokenPath -ne $tokens[0] -or (@($manifest.tokenPaths) -join '|') -cne ($tokens -join '|') -or [guid]$manifest.expectedBiosUuid -ne [guid]$Bios) { return $false }
+                $wechatConfigured = [bool]$manifest.PSObject.Properties['wechatConfigPath']
+                if ($wechatConfigured -and $manifest.wechatConfigPath -cne '.local/wechat.json') { return $false }
                 $entries = @($manifest.files)
                 if ($entries.Count -eq 0) { return $false }
                 $required = @('Start-Channel.cmd','python/python.exe','python/pythonw.exe','guest/agent.py','guest/protocol.py','guest/windows.py') + $tokens
@@ -132,14 +134,23 @@ try {
                     if ([uint64](Get-Item -LiteralPath $file).Length -ne [uint64]$entry.sizeBytes -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -cne ([string]$entry.sha256).ToUpperInvariant()) { return $false }
                 }
                 foreach ($relative in $required) { if (-not $seen.ContainsKey($relative.ToLowerInvariant())) { return $false } }
+                if ($wechatConfigured -ne $seen.ContainsKey('.local/wechat.json')) { return $false }
+                if ($wechatConfigured) {
+                    $wechatFile = $Path + '\.local\wechat.json'
+                    if ((Get-Item -LiteralPath $wechatFile).Length -gt 4096 -or -not (Get-Acl -LiteralPath $wechatFile).AreAccessRulesProtected) { return $false }
+                }
                 $actual = @(Get-ChildItem -LiteralPath $Path -File -Recurse -Force | Where-Object { $_.FullName -ne $ManifestPath })
                 if ($actual.Count -ne $entries.Count) { return $false }
                 $start = Get-Content -LiteralPath ($Path + '\Start-Channel.cmd') -Raw -Encoding ASCII
                 foreach ($flag in @('--token-file','--broker-token-file','--human-token-file')) { if (-not $start.Contains($flag)) { return $false } }
+                if ($start.Contains('--wechat-config-file') -ne $wechatConfigured) { return $false }
+                if ($wechatConfigured -and -not $start.Contains('--wechat-config-file "%~dp0.local\wechat.json"')) { return $false }
                 return $true
             } catch { return $false }
         }
         $versionVerified = Test-StagedVersion $versionRoot $manifestPath $expectedBios $identity.User.Value
+        $wechatConfigured = $false
+        if ($versionVerified) { $wechatConfigured = [bool]((Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json).PSObject.Properties['wechatConfigPath']) }
         $oldAction = if ($task) { @($task.Actions)[0] } else { $null }
         $oldExecutablePresent = [bool]($oldAction -and $oldAction.Execute -and (Test-Path -LiteralPath $oldAction.Execute -PathType Leaf))
         $processes = @(Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" -ErrorAction Stop)
@@ -156,6 +167,7 @@ try {
             taskState=if($task){$task.State.ToString()}else{$null}
             stagedVersionPresent=(Test-Path -LiteralPath $versionRoot -PathType Container)
             stagedVersionVerified=$versionVerified
+            wechatConfigPresent=$wechatConfigured
             guestSid=$identity.User.Value
             guestProfile=$env:USERPROFILE
             oldExecutable=if($oldAction){[string]$oldAction.Execute}else{$null}
@@ -199,7 +211,7 @@ try {
         if ($Promote -or ($Rollback -and (-not $guest.oldTaskEnabled -or $guest.candidateTriggerCount -gt 0))) {
             $promotionAttempted = $true
             $promotionScript = {
-                param($mode,$version,$expectedBios,$sid,$profile,$candidateName,$oldPath)
+                param($mode,$version,$expectedBios,$sid,$profile,$candidateName,$oldPath,$wechatConfigured)
                 $ErrorActionPreference = 'Stop'
                 $oldName = 'Qicheng Guest Channel'
                 $root = $profile + '\AppData\Local\Qicheng\channel\versions\' + $version
@@ -245,6 +257,7 @@ try {
                     $candidateSid=try{([Security.Principal.NTAccount]$candidate.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value}catch{([Security.Principal.SecurityIdentifier]::new($candidate.Principal.UserId)).Value}
                     $oldSid=try{([Security.Principal.NTAccount]$old.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value}catch{([Security.Principal.SecurityIdentifier]::new($old.Principal.UserId)).Value}
                     $arguments='-B -m guest.agent --expected-bios-uuid "' + $expectedBios + '" --token-file "' + $root + '\.local\channel.token" --broker-token-file "' + $root + '\.local\broker.token" --human-token-file "' + $root + '\.local\human.token"'
+                    if($wechatConfigured){$arguments+=' --wechat-config-file "'+$root+'\.local\wechat.json"'}
                     if($oldSid -ne $sid -or $candidateSid -ne $sid -or @($old.Actions).Count -ne 1 -or @($candidate.Actions).Count -ne 1 -or ([string]$old.Actions[0].Execute) -ine $oldPath -or ([string]$candidate.Actions[0].Execute) -ine $candidatePath -or ([string]$candidate.Actions[0].Arguments) -cne $arguments -or ([string]$candidate.Actions[0].WorkingDirectory) -ine $root -or $candidate.Principal.LogonType.ToString() -ne 'Interactive' -or $candidate.Principal.RunLevel.ToString() -ne 'Limited' -or (Get-TriggerCount $old) -ne 1 -or $old.Triggers[0].CimClass.CimClassName -ne 'MSFT_TaskLogonTrigger') { throw 'Task definition changed before promotion transition.' }
                     $items=@(Get-AgentProcess)
                     if($mode -eq 'promote') {
@@ -273,13 +286,13 @@ try {
                 }
             }
             $mode=if($Promote){'promote'}else{'rollback'}
-            $transition=Invoke-Command -Session $session -ArgumentList $mode,$Version,$bios.ToString('D'),$guest.guestSid,$guest.guestProfile,$candidateName,$oldPath -ScriptBlock $promotionScript
+            $transition=Invoke-Command -Session $session -ArgumentList $mode,$Version,$bios.ToString('D'),$guest.guestSid,$guest.guestProfile,$candidateName,$oldPath,$guest.wechatConfigPresent -ScriptBlock $promotionScript
             Emit-Result ([ordered]@{schemaVersion=1;status=$transition.status;error=$transition.error;vmId=$id.ToString('D');version=$Version;oldTaskState=$transition.oldTaskState;candidateTaskState=$transition.candidateTaskState;pythonwCount=$transition.pythonwCount;rollbackRestored=$transition.rollbackRestored;candidateHasAutoTrigger=$transition.candidateHasAutoTrigger;stateHandshakeVerified=if($Promote){$true}else{$false};rebootBehavior=if($transition.status -eq 'promoted'){'At the next interactive logon, only the v2 candidate task is enabled.'}else{'At the next interactive logon, only the legacy task is enabled.'};modeMayNeedRestorationAfterReboot=$false;oldTaskDefinitionChanged=$false;stageFilesPreserved=$true;credentialReported=$false}) $(if($transition.status -in @('promoted','rolled-back')){0}else{2})
         }
         $mode = if ($Apply) { 'apply' } else { 'rollback' }
         $transitionAttempted = $true
         $transitionScript = {
-            param($mode,$version,$expectedBios,$sid,$profile,$candidateName,$oldPath)
+            param($mode,$version,$expectedBios,$sid,$profile,$candidateName,$oldPath,$wechatConfigured)
             $ErrorActionPreference = 'Stop'
             $oldName = 'Qicheng Guest Channel'
             $root = $profile + '\AppData\Local\Qicheng\channel\versions\' + $version
@@ -321,6 +334,7 @@ try {
                     if ($items.Count -ne 1) { throw 'Expected exactly one pythonw before apply.' }
                     if (-not ([string]$items[0].ExecutablePath).Equals($oldPath,[StringComparison]::OrdinalIgnoreCase) -or (Get-ScheduledTask -TaskName $candidateName -ErrorAction SilentlyContinue)) { throw 'Legacy process or candidate task changed before apply.' }
                     $arguments = '-B -m guest.agent --expected-bios-uuid "' + $expectedBios + '" --token-file "' + $root + '\.local\channel.token" --broker-token-file "' + $root + '\.local\broker.token" --human-token-file "' + $root + '\.local\human.token"'
+                    if($wechatConfigured){$arguments+=' --wechat-config-file "'+$root+'\.local\wechat.json"'}
                     $action = New-ScheduledTaskAction -Execute $candidatePath -Argument $arguments -WorkingDirectory $root
                     $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Limited
                     $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew
@@ -350,12 +364,12 @@ try {
                 [pscustomobject]@{status=if($restored){'failed-rolled-back'}else{'failed-recovery-incomplete'};error=$reason;oldTaskState=try{(Get-ScheduledTask -TaskName $oldName -ErrorAction Stop).State.ToString()}catch{$null};candidateTaskState=try{(Get-ScheduledTask -TaskName $candidateName -ErrorAction Stop).State.ToString()}catch{$null};pythonwCount=try{@(Get-AgentProcess).Count}catch{$null};rollbackRestored=$restored;candidateHasAutoTrigger=$false}
             }
         }
-        $transition = Invoke-Command -Session $session -ArgumentList $mode,$Version,$bios.ToString('D'),$guest.guestSid,$guest.guestProfile,$candidateName,$oldPath -ScriptBlock $transitionScript
+        $transition = Invoke-Command -Session $session -ArgumentList $mode,$Version,$bios.ToString('D'),$guest.guestSid,$guest.guestProfile,$candidateName,$oldPath,$guest.wechatConfigPresent -ScriptBlock $transitionScript
         $handshakeVerified = $false
         if ($Apply -and $transition.status -eq 'candidate-running') {
             $handshakeVerified = Test-HostStateHandshake $hostPython $hostClient $hostConfig $Project
             if (-not $handshakeVerified) {
-                $rollback = Invoke-Command -Session $session -ArgumentList 'rollback',$Version,$bios.ToString('D'),$guest.guestSid,$guest.guestProfile,$candidateName,$oldPath -ScriptBlock $transitionScript
+                $rollback = Invoke-Command -Session $session -ArgumentList 'rollback',$Version,$bios.ToString('D'),$guest.guestSid,$guest.guestProfile,$candidateName,$oldPath,$guest.wechatConfigPresent -ScriptBlock $transitionScript
                 $transition = [pscustomobject]@{status=if($rollback.status -eq 'rolled-back'){'failed-rolled-back'}else{'failed-recovery-incomplete'};error='Candidate host client state handshake failed; legacy recovery was attempted.';oldTaskState=$rollback.oldTaskState;candidateTaskState=$rollback.candidateTaskState;pythonwCount=$rollback.pythonwCount;rollbackRestored=($rollback.status -eq 'rolled-back');candidateHasAutoTrigger=$false}
             }
         }

@@ -60,6 +60,8 @@ try {
     $required = @('Start-Channel.cmd','python/python.exe','python/pythonw.exe','guest/agent.py','guest/protocol.py','guest/windows.py','.local/channel.token','.local/broker.token','.local/human.token')
     $expectedTokens = @('.local/channel.token','.local/broker.token','.local/human.token')
     if ((@($manifest.tokenPaths) -join '|') -cne ($expectedTokens -join '|') -or $manifest.tokenPath -ne $expectedTokens[0]) { throw 'Manifest credential paths are invalid.' }
+    $wechatConfigured = [bool]($manifest.PSObject.Properties['wechatConfigPath'])
+    if ($wechatConfigured -and $manifest.wechatConfigPath -cne '.local/wechat.json') { throw 'Manifest WeChat config path is invalid.' }
     $bios = [guid]::Empty
     if (-not [guid]::TryParse($manifest.expectedBiosUuid, [ref]$bios) -or $bios -eq [guid]::Empty) { throw 'Manifest BIOS UUID is invalid.' }
     $entries = @($manifest.files)
@@ -77,10 +79,19 @@ try {
         if ([uint64](Get-Item -LiteralPath $path).Length -ne [uint64]$entry.sizeBytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne ([string]$entry.sha256).ToUpperInvariant()) { throw "Payload hash or size mismatch: $relative" }
     }
     foreach ($relative in $required) { if (-not $seen.ContainsKey($relative.ToLowerInvariant())) { throw "Missing required payload file: $relative" } }
+    if ($wechatConfigured -and -not $seen.ContainsKey('.local/wechat.json')) { throw 'Manifest is missing WeChat config.' }
+    if (-not $wechatConfigured -and $seen.ContainsKey('.local/wechat.json')) { throw 'Unconfigured WeChat config is present.' }
+    if ($wechatConfigured) {
+        $configPath = Join-Path $root '.local\wechat.json'
+        if ((Get-Item -LiteralPath $configPath).Length -gt 4096) { throw 'WeChat config is too large.' }
+        if (-not (Get-Acl -LiteralPath $configPath).AreAccessRulesProtected) { throw 'WeChat config ACL inheritance is enabled.' }
+    }
     $actual = @(Get-ChildItem -LiteralPath $root -File -Recurse -Force | Where-Object { $_.FullName -ne $manifestPath })
     if ($actual.Count -ne $entries.Count) { throw 'Payload includes files outside its manifest.' }
     $startText = Get-Content -LiteralPath (Join-Path $root 'Start-Channel.cmd') -Raw -Encoding ASCII
     foreach ($flag in @('--token-file','--broker-token-file','--human-token-file')) { if (-not $startText.Contains($flag)) { throw 'Start command omits a required credential argument.' } }
+    if ($startText.Contains('--wechat-config-file') -ne $wechatConfigured) { throw 'Start command and manifest disagree about WeChat config.' }
+    if ($wechatConfigured -and -not $startText.Contains('--wechat-config-file "%~dp0.local\wechat.json"')) { throw 'Start command has an unsafe WeChat config path.' }
     $vm = Get-VM -Name $VMName -ErrorAction Stop
     if ($vm.Id -ne $vmId -or $vm.State -ne 'Running') { throw 'Host VM ID or running state does not match.' }
     $settings = @(Get-CimInstance -Namespace 'root/virtualization/v2' -ClassName Msvm_VirtualSystemSettingData -Filter "VirtualSystemIdentifier='$($vm.Id)'" -ErrorAction Stop | Where-Object VirtualSystemType -eq 'Microsoft:Hyper-V:System:Realized')
@@ -136,8 +147,19 @@ try {
         Copy-Item -LiteralPath (Join-Path $root $relative) -Destination $remote -ToSession $session -ErrorAction Stop
     }
     Copy-Item -LiteralPath $manifestPath -Destination ($guestVersionRoot + '\payload-manifest.json') -ToSession $session -ErrorAction Stop
-    Invoke-Command -Session $session -ArgumentList $guestVersionRoot,$identity.sid -ScriptBlock {
-        param($destination,$sidText)
+    Invoke-Command -Session $session -ArgumentList $guestVersionRoot,$identity.sid,$wechatConfigured -ScriptBlock {
+        param($destination,$sidText,$hasWechatConfig)
+        if ($hasWechatConfig) {
+            $wechatFile = $destination + '\.local\wechat.json'
+            $acl = [Security.AccessControl.FileSecurity]::new()
+            $acl.SetAccessRuleProtection($true,$false)
+            $acl.SetOwner([Security.Principal.SecurityIdentifier]::new($sidText))
+            foreach ($sid in @($sidText,'S-1-5-18','S-1-5-32-544')) {
+                [void]$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid),[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.InheritanceFlags]::None,[Security.AccessControl.PropagationFlags]::None,'Allow'))
+            }
+            Set-Acl -LiteralPath $wechatFile -AclObject $acl
+            if (-not (Get-Acl -LiteralPath $wechatFile).AreAccessRulesProtected) { throw 'Guest WeChat config ACL protection failed.' }
+        }
         $allowed = @($sidText,'S-1-5-18','S-1-5-32-544')
         function Assert-GuestPath([string]$Path,[string]$Root,[string[]]$Approved) {
             $cursor = [IO.Path]::GetFullPath($Path)
@@ -159,6 +181,7 @@ try {
             }
         }
         $m = Get-Content -LiteralPath ($destination + '\payload-manifest.json') -Raw | ConvertFrom-Json
+        if ([bool]$m.PSObject.Properties['wechatConfigPath'] -ne $hasWechatConfig) { throw 'Guest WeChat config manifest changed.' }
         Assert-GuestPath -Path ($destination + '\payload-manifest.json') -Root $destination -Approved $allowed
         foreach ($entry in $m.files) {
             $file = $destination + '\' + ([string]$entry.path).Replace('/','\')

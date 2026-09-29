@@ -1,5 +1,11 @@
 # 验证范围与限制
 
+## 2026-09-28 Windows 微信 CLI 只读查询源码候选（未公开发行）
+
+本地候选新增客体内固定 `check-login`：只有可选的私有 sidecar 已配置、项目 ID 匹配、频道令牌与当前客体租约有效、agent 模式和桌面就绪时才执行；CLI 返回后重查租约与桌面。`open`、host 客户端、Broker 持久动作确认和 MCP 均未接入。无 sidecar 的旧安装路径保持原行为。构包、离线安装、Stage/Switch 用清单、固定启动参数和受保护 ACL 约束 sidecar；私有配置、令牌与项目路径不在此源码仓。
+
+独立 Checker 在私有源码上验证 Windows Python 123 项、PowerShell 5.1 三组 50/18/31 项，含 Stage 有/无 sidecar 的隔离模拟 Apply；最终源码重构的私有合成成品 48/48 文件哈希一致，内置 Python 模块导入通过。公开候选只同步白名单源码，其中 Switch 转换专项测试未列入当前公开白名单。**正式 A/B 客体尚未部署本候选**，合法 AppID/项目、真实微信 CLI 输出及编译均未验收；此处不代表可从 Codex 调用微信 CLI。本仓未 push、tag 或发布 Release。
+
 ## 2026-09-28 Lite alpha.16 源码与 01 实测（本地候选，未公开发行）
 
 01 已从私有 alpha.16 ZIP 原位升级并后台运行双 Lite 频道，安装诊断 15/15；两频道读取到各自私有 Linux 显示，保留原浏览器资料卷和三类本机凭据。容器中的 `GTK_THEME=Adwaita:dark` 已在两频道实际生效，Firefox 标签栏、地址栏和安全提示条变深，原安全提示与会话恢复标签仍可见。独立 Checker 在同运行代码的 alpha.15 Viewer 实测 Alt+1/2/3、频道身份、展开菜单、迷你控制条和“退出并暂停输入”；alpha.16 EXE 与其只有构建时间戳和模块 ID 字节不同。

@@ -23,9 +23,10 @@ function Set-PrivateAcl([string]$Path){
     }
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
-function Write-Manifest([string[]]$Files,[string[]]$Tokens=$tokenPaths,[int]$Schema=2){
+function Write-Manifest([string[]]$Files,[string[]]$Tokens=$tokenPaths,[int]$Schema=2,[bool]$Wechat=$false){
     $entries=@(foreach($relative in $Files){$file=Join-Path $payload $relative.Replace('/','\');$item=Get-Item -LiteralPath $file;[ordered]@{path=$relative;sizeBytes=[uint64]$item.Length;sha256=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash}})
     $manifest=[ordered]@{schemaVersion=$Schema;payloadType='qicheng-windows-guest';credentialMode='channel-broker-human';expectedBiosUuid=$bios.ToString('D');entrypoint='Start-Channel.cmd';tokenPath=$tokenPaths[0];tokenPaths=$Tokens;files=$entries}
+    if($Wechat){$manifest.wechatConfigPath='.local/wechat.json'}
     [IO.File]::WriteAllText((Join-Path $payload 'payload-manifest.json'),($manifest|ConvertTo-Json -Depth 6))
 }
 function Set-TokenValue([string]$Name,[string]$Value){[IO.File]::WriteAllText((Join-Path $payload ('.local\'+$Name+'.token')),$Value+[Environment]::NewLine,[Text.Encoding]::ASCII)}
@@ -67,6 +68,30 @@ exit $LASTEXITCODE
     $result=Invoke-Plan
     Assert-True ($result.Code -eq 0) "Valid three-credential plan failed: $($result.Output)"
     Assert-True (($result.Output|ConvertFrom-Json).status -eq 'not-installed') 'Valid plan must remain not-installed.'
+    $wechatFile=Join-Path $payload '.local\wechat.json'
+    [IO.File]::WriteAllText($wechatFile,'{"project_id":"fixture","guest_project_path":"C:\\Users\\fixture\\project","cli_bat_path":"C:\\wechat\\cli.bat","service_port":1234}')
+    Set-PrivateAcl $wechatFile
+    $startFile=Join-Path $payload 'Start-Channel.cmd'
+    [IO.File]::WriteAllText($startFile,'fixture --wechat-config-file "%~dp0.local\wechat.json"')
+    Write-Manifest (@($required)+'.local/wechat.json') $tokenPaths 2 $true
+    $result=Invoke-Plan
+    Assert-True ($result.Code -eq 0) "Configured offline plan must validate: $($result.Output)"
+    [IO.File]::AppendAllText($wechatFile,'tamper')
+    $result=Invoke-Plan
+    Assert-True ($result.Code -eq 2) 'Offline plan must reject sidecar tampering.'
+    [IO.File]::WriteAllText($wechatFile,'{"project_id":"fixture","guest_project_path":"C:\\Users\\fixture\\project","cli_bat_path":"C:\\wechat\\cli.bat","service_port":1234}')
+    $savedAcl=Get-Acl -LiteralPath $wechatFile
+    $wideAcl=Get-Acl -LiteralPath $wechatFile;$wideAcl.SetAccessRuleProtection($false,$true);Set-Acl -LiteralPath $wechatFile -AclObject $wideAcl
+    $result=Invoke-Plan
+    Assert-True ($result.Code -eq 2) 'Offline plan must reject unprotected sidecar ACL.'
+    Set-Acl -LiteralPath $wechatFile -AclObject $savedAcl
+    Move-Item -LiteralPath $wechatFile -Destination ($wechatFile+'.missing')
+    $result=Invoke-Plan
+    Assert-True ($result.Code -eq 2) 'Offline plan must reject a missing configured sidecar.'
+    Move-Item -LiteralPath ($wechatFile+'.missing') -Destination $wechatFile
+    Remove-Item -LiteralPath $wechatFile
+    [IO.File]::WriteAllText($startFile,'fixture')
+    Write-Manifest $required
 
     Write-Manifest $required @('.local/channel.token')
     $result=Invoke-Plan
@@ -119,6 +144,6 @@ exit $LASTEXITCODE
     $arguments=Invoke-Expression $match.Groups['expression'].Value
     $expected='-B -m guest.agent --expected-bios-uuid "11111111-2222-4333-8444-555555555555" --token-file "'+$guestInstall+'\.local\channel.token" --broker-token-file "'+$guestInstall+'\.local\broker.token" --human-token-file "'+$guestInstall+'\.local\human.token"'
     Assert-True ($arguments -ceq $expected) "Startup must pass all three credential paths: $arguments"
-    [pscustomobject]@{passed=14;failed=0;vmMounts=0;agentStarts=0}|ConvertTo-Json -Compress
+    [pscustomobject]@{passed=18;failed=0;vmMounts=0;agentStarts=0}|ConvertTo-Json -Compress
 }
 finally {if(Test-Path -LiteralPath $testRoot){Remove-Item -LiteralPath $testRoot -Recurse -Force}}

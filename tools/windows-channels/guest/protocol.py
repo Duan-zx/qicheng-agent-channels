@@ -8,6 +8,8 @@ import struct
 import threading
 import time
 
+from .wechat_cli import TrustedWechatConfig, check_login
+
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_PNG_BYTES = 8 * 1024 * 1024
 MAX_RESPONSE_BYTES = 12 * 1024 * 1024
@@ -90,8 +92,25 @@ def validate_request(request, width, height, lease_enabled=False):
     op = request["op"]
     common = {"id", "token", "op"}
     if not isinstance(op, str) or op not in {"state", "control", "input", "screenshot",
-                  "lease_claim", "lease_release", "lease_renew", "lease_inspect"}:
+                  "lease_claim", "lease_release", "lease_renew", "lease_inspect",
+                  "wechat_cli"}:
         raise RequestError("unsupported_operation")
+    if op == "wechat_cli":
+        allowed = common | {"action", "project_id", "lease_owner",
+                            "lease_generation", "lease_nonce"}
+        if set(request) != allowed:
+            raise RequestError("unexpected_field")
+        if request.get("action") != "check-login":
+            raise RequestError("unsupported_action")
+        project, owner = request.get("project_id"), request.get("lease_owner")
+        generation, nonce = request.get("lease_generation"), request.get("lease_nonce")
+        if not isinstance(project, str) or not ID_RE.fullmatch(project):
+            raise RequestError("invalid_project")
+        if (not lease_enabled or not isinstance(owner, str) or not ID_RE.fullmatch(owner)
+                or type(generation) is not int or generation < 1
+                or not isinstance(nonce, str) or not NONCE_RE.fullmatch(nonce)):
+            raise RequestError("invalid_lease")
+        return request
     if op == "lease_inspect":
         if set(request) != common:
             raise RequestError("unexpected_field")
@@ -217,7 +236,8 @@ def send_response(connection, response):
 
 
 class GuestChannel:
-    def __init__(self, backend, identity, broker_token=None, human_token=None):
+    def __init__(self, backend, identity, broker_token=None, human_token=None,
+                 wechat_config=None, wechat_check_login=check_login):
         if broker_token is not None and (not isinstance(broker_token, str)
                                          or not TOKEN_RE.fullmatch(broker_token)):
             raise ValueError("Invalid broker token")
@@ -227,10 +247,15 @@ class GuestChannel:
             raise ValueError("A distinct human token is required with broker leases")
         if broker_token is None and human_token is not None:
             raise ValueError("Human token requires broker leases")
+        if wechat_config is not None and (broker_token is None
+                                          or not isinstance(wechat_config, TrustedWechatConfig)):
+            raise ValueError("WeChat CLI requires broker leases and trusted configuration")
         self.backend = backend
         self.identity = dict(identity)
         self.broker_token = broker_token
         self.human_token = human_token
+        self.wechat_config = wechat_config
+        self._wechat_check_login = wechat_check_login
         self.lock = threading.RLock()
         self.mode = "paused"
         self.action_count = 0
@@ -431,6 +456,65 @@ class GuestChannel:
             self.last_error = None
             return self.state()
 
+    def wechat_cli(self, request):
+        # The same lock fences lease release and controlled mode transitions.
+        with self.lock:
+            validate_request(request, 0, 0, self.broker_token is not None)
+            if self.wechat_config is None:
+                raise RequestError("wechat_unavailable", "WeChat CLI unavailable")
+            if request["project_id"] != self.wechat_config.project_id:
+                raise RequestError("invalid_project", "Invalid project")
+            self._expire_lease_locked()
+            if self.mode != "agent":
+                raise RequestError("input_disabled", "Input disabled for this actor")
+            if (self._lease_owner != request["lease_owner"]
+                    or self._lease_generation != request["lease_generation"]
+                    or self._lease_nonce is None
+                    or not hmac.compare_digest(self._lease_nonce, request["lease_nonce"])):
+                raise RequestError("lease_required", "Valid lease required")
+            ready, _ = self._probe_locked()
+            if not ready:
+                raise RequestError("desktop_not_ready", "Desktop not ready")
+            self._expire_lease_locked()
+            if (self._lease_owner != request["lease_owner"]
+                    or self._lease_generation != request["lease_generation"]
+                    or self._lease_nonce is None
+                    or not hmac.compare_digest(self._lease_nonce, request["lease_nonce"])):
+                raise RequestError("lease_required", "Valid lease required")
+            try:
+                result = self._wechat_check_login(self.wechat_config, {
+                    "project_id": self.wechat_config.project_id, "action": "check-login"})
+            except Exception:
+                raise RequestError("cli_failed", "WeChat CLI failed") from None
+            # The CLI can outlive a short guest lease. Never report a fresh
+            # login observation under an expired/revoked lease or lost desktop.
+            self._expire_lease_locked()
+            if self.mode != "agent":
+                raise RequestError("input_disabled", "Input disabled for this actor")
+            ready, _ = self._probe_locked()
+            if not ready:
+                raise RequestError("desktop_not_ready", "Desktop not ready")
+            self._expire_lease_locked()
+            if (self._lease_owner != request["lease_owner"]
+                    or self._lease_generation != request["lease_generation"]
+                    or self._lease_nonce is None
+                    or not hmac.compare_digest(self._lease_nonce, request["lease_nonce"])):
+                raise RequestError("lease_required", "Valid lease required")
+            if (isinstance(result, dict) and result.get("ok") is True
+                    and set(result) == {"ok", "result"}
+                    and isinstance(result["result"], dict)
+                    and set(result["result"]) == {"login"}
+                    and type(result["result"]["login"]) is bool):
+                return {"login": result["result"]["login"]}
+            known_errors = {"invalid_output", "start_failed", "timeout",
+                            "output_too_large", "cli_failed", "cli_reported_error"}
+            if (isinstance(result, dict) and result.get("ok") is False
+                    and isinstance(result.get("error"), dict)
+                    and isinstance(result["error"].get("code"), str)
+                    and result["error"].get("code") in known_errors):
+                raise RequestError(result["error"]["code"], "WeChat CLI failed")
+            raise RequestError("cli_failed", "WeChat CLI failed")
+
     def screenshot(self):
         with self.lock:
             started = time.monotonic()
@@ -506,6 +590,8 @@ def dispatch(request, expected_token, channel):
             result = channel.control(request["mode"])
         elif op == "input":
             result = channel.input(request)
+        elif op == "wechat_cli":
+            result = channel.wechat_cli(request)
         else:
             result = channel.screenshot()
         return response_ok(request_id, result)

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from guest import protocol
+from guest.wechat_cli import TrustedWechatConfig
 
 CHANNEL_TOKEN = "a" * 64
 BROKER_TOKEN = "b" * 64
@@ -279,6 +280,159 @@ class LeaseTests(unittest.TestCase):
         self.assertTrue(old("control", mode="human")["ok"])
         self.assertTrue(old("input", actor="human", action="key", key="Return")["ok"])
         self.assertEqual(old("lease_inspect")["error"]["code"], "authentication_failed")
+
+
+class WechatLeaseTests(unittest.TestCase):
+    def setUp(self):
+        self.backend = Backend()
+        self.calls = []
+        self.config = TrustedWechatConfig("project-a", r"C:\work\mini", r"C:\cli\cli.bat", 9420)
+        def check(config, request):
+            self.calls.append((config, request))
+            return {"ok": True, "result": {"login": False}}
+        self.channel = protocol.GuestChannel(
+            self.backend, IDENTITY, broker_token=BROKER_TOKEN,
+            human_token=HUMAN_TOKEN, wechat_config=self.config,
+            wechat_check_login=check)
+        self.channel.control("agent")
+
+    def call(self, token=CHANNEL_TOKEN, **fields):
+        request = {"id": "wc1", "token": token, "op": "wechat_cli",
+                   "action": "check-login", "project_id": "project-a"}
+        request.update(fields)
+        return protocol.dispatch(request, CHANNEL_TOKEN, self.channel)
+
+    def claim(self):
+        result = protocol.dispatch({"id": "l1", "token": BROKER_TOKEN,
+                                    "op": "lease_claim", "owner": "owner-a",
+                                    "ttl_seconds": 30}, CHANNEL_TOKEN, self.channel)
+        self.assertTrue(result["ok"], result)
+        lease = result["result"]
+        return {"lease_owner": lease["owner"],
+                "lease_generation": lease["generation"],
+                "lease_nonce": lease["nonce"]}
+
+    def test_only_channel_token_with_exact_current_lease_starts_cli(self):
+        lease = self.claim()
+        for token in (BROKER_TOKEN, HUMAN_TOKEN, "d" * 64):
+            self.assertEqual(self.call(token, **lease)["error"]["code"],
+                             "authentication_failed")
+        self.assertEqual(self.calls, [])
+        response = self.call(**lease)
+        self.assertEqual(response["result"], {"login": False})
+        self.assertEqual(self.calls, [(self.config, {"project_id": "project-a",
+                                               "action": "check-login"})])
+
+    def test_missing_wrong_and_expired_lease_never_start_cli(self):
+        self.assertEqual(self.call()["error"]["code"], "unexpected_field")
+        lease = self.claim()
+        for altered in ({**lease, "lease_owner": "other"},
+                        {**lease, "lease_generation": lease["lease_generation"] + 1},
+                        {**lease, "lease_nonce": "0" * 64}):
+            self.assertEqual(self.call(**altered)["error"]["code"], "lease_required")
+        self.channel._lease_deadline = 0
+        self.assertEqual(self.call(**lease)["error"]["code"], "lease_required")
+        self.assertEqual(self.calls, [])
+
+    def test_mode_desktop_and_request_shape_gate_cli(self):
+        lease = self.claim()
+        for extra in ({"argv": ["open"]}, {"path": r"C:\other"},
+                      {"port": 1}, {"account": "secret"}):
+            self.assertEqual(self.call(**lease, **extra)["error"]["code"],
+                             "unexpected_field")
+        self.assertEqual(self.call(**lease, action="open")["error"]["code"],
+                         "unsupported_action")
+        self.assertEqual(self.call(**lease, project_id="other")["error"]["code"],
+                         "invalid_project")
+        self.backend.ready = False
+        self.assertFalse(self.call(**lease)["ok"])
+        self.assertEqual(self.channel.mode, "paused")
+        self.assertEqual(self.calls, [])
+        self.backend.ready = True
+        self.channel.control("human")
+        self.assertEqual(self.call(**lease)["error"]["code"], "input_disabled")
+        self.channel.control("paused")
+        self.assertEqual(self.call(**lease)["error"]["code"], "input_disabled")
+        self.assertEqual(self.calls, [])
+
+    def test_cli_failure_and_exception_are_fixed_and_private(self):
+        lease = self.claim()
+        for output, code in [
+            ({"ok": False, "error": {"code": "cli_reported_error",
+                                      "raw": "account-secret"}}, "cli_reported_error"),
+            ({"ok": False, "error": {"code": "unknown", "raw": "account-secret"}},
+             "cli_failed"),
+            ({"ok": False, "error": {"code": [], "raw": "account-secret"}},
+             "cli_failed"),
+            ({"ok": False, "error": {"code": {"secret": "account-secret"}}},
+             "cli_failed"),
+            ({"ok": True, "result": {"login": "account-secret"}}, "cli_failed")]:
+            self.channel._wechat_check_login = lambda *_: output
+            response = self.call(**lease)
+            self.assertEqual(response["error"]["code"], code)
+            self.assertNotIn("account-secret", str(response))
+        def explode(*_):
+            raise OSError("account-secret")
+        self.channel._wechat_check_login = explode
+        response = self.call(**lease)
+        self.assertEqual(response["error"]["code"], "cli_failed")
+        self.assertNotIn("account-secret", str(response))
+
+    def test_unconfigured_and_legacy_channels_keep_cli_closed(self):
+        broker = protocol.GuestChannel(self.backend, IDENTITY,
+                                       broker_token=BROKER_TOKEN,
+                                       human_token=HUMAN_TOKEN)
+        broker.control("agent")
+        denied = protocol.dispatch({"id": "x", "token": CHANNEL_TOKEN,
+                                    "op": "wechat_cli", "action": "check-login",
+                                    "project_id": "project-a", "lease_owner": "owner-a",
+                                    "lease_generation": 1, "lease_nonce": "0" * 64},
+                                   CHANNEL_TOKEN, broker)
+        self.assertEqual(denied["error"]["code"], "wechat_unavailable")
+        with self.assertRaises(ValueError):
+            protocol.GuestChannel(self.backend, IDENTITY, wechat_config=self.config)
+
+    def test_human_takeover_waits_for_in_flight_cli_then_revokes(self):
+        lease = self.claim()
+        entered, release = threading.Event(), threading.Event()
+        def running(*_):
+            entered.set()
+            release.wait(2)
+            return {"ok": True, "result": {"login": True}}
+        self.channel._wechat_check_login = running
+        results = {}
+        operation = threading.Thread(target=lambda: results.setdefault("cli", self.call(**lease)))
+        takeover = threading.Thread(target=lambda: results.setdefault(
+            "control", protocol.dispatch({"id": "h1", "token": HUMAN_TOKEN,
+                                           "op": "control", "mode": "human"},
+                                          CHANNEL_TOKEN, self.channel)))
+        operation.start()
+        self.assertTrue(entered.wait(1))
+        takeover.start()
+        time.sleep(0.05)
+        self.assertTrue(takeover.is_alive())
+        release.set()
+        operation.join(2)
+        takeover.join(2)
+        self.assertEqual(results["cli"]["result"], {"login": True})
+        self.assertEqual(results["control"]["result"]["mode"], "human")
+        self.assertEqual(self.call(**lease)["error"]["code"], "input_disabled")
+
+    def test_cli_completion_after_one_second_lease_does_not_report_login(self):
+        claimed = protocol.dispatch({"id": "short", "token": BROKER_TOKEN,
+                                     "op": "lease_claim", "owner": "short-owner",
+                                     "ttl_seconds": 1}, CHANNEL_TOKEN, self.channel)
+        self.assertTrue(claimed["ok"], claimed)
+        value = claimed["result"]
+        self.channel._wechat_check_login = lambda *_: (
+            time.sleep(1.2) or {"ok": True, "result": {"login": True}})
+        response = self.call(lease_owner=value["owner"],
+                             lease_generation=value["generation"],
+                             lease_nonce=value["nonce"])
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["error"]["code"], "lease_required")
+        self.assertNotIn("login", str(response))
+        self.assertFalse(self.channel.lease_inspect()["active"])
 
 
 if __name__ == "__main__":
