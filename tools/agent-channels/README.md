@@ -16,7 +16,7 @@ stdio 桥启动命令：`python <当前克隆目录>/tools/agent-channels/bridge
 
 Codex 片段见 [codex.example.toml](integrations/codex.example.toml)。它是模板，不是已经加载的连接。默认读取本模块 `.local/channel.token`，由 `Start-Backend.ps1` 生成，不应写进配置、聊天或 Git。
 
-工具为 `channel_state`、`channel_screenshot`、`channel_input`。先截图观察，再按客体坐标行动。只有人选择“交给 AI”后，agent 输入才会被接受；人工接管或暂停时应立即停止，不能回退到宿主 Computer Use。模型或客户端必须能够消费 MCP 图片。
+工具为 `channel_state`、`channel_screenshot`、`channel_input`。新频道默认交给 AI；先读实际状态并截图观察，再按客体坐标行动。人选择接管或暂停后，agent 输入立即停止，只有人能在查看器里交回 AI；不能回退到宿主 Computer Use。模型或客户端必须能够消费 MCP 图片。
 
 本桥不提供 shell 执行工具，但在桌面终端中键入仍能执行命令；它不是安全授权边界。网页内容与应用数据继续按不可信输入处理，对外动作遵循用户实际授权。
 

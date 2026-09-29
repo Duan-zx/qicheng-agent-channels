@@ -26,8 +26,8 @@
     },
     {
       "path": "tools/agent-channels/README.md",
-      "bytes": 2926,
-      "sha256": "ad16062a04965506f99e1709bc84b16bbbc67d49616741a48866aa20e1178c11"
+      "bytes": 2959,
+      "sha256": "00f28ab52cc63cbca17eab9277ded0647654ce1a624470f38cca984c7d7e513d"
     },
     {
       "path": "tools/agent-channels/Build.ps1",
@@ -66,8 +66,8 @@
     },
     {
       "path": "tools/agent-channels/bridge.py",
-      "bytes": 8727,
-      "sha256": "d5d9a1eba04c66eee5db9cc4585b8c3ed226fdb529c5610fa2287fea89fa2062"
+      "bytes": 8774,
+      "sha256": "27633d4ecc5db9a6ab7d83e846606a7e1abc6758508db91fdf853e027ff1e375"
     },
     {
       "path": "tools/agent-channels/broker_client.py",
@@ -106,8 +106,8 @@
     },
     {
       "path": "tools/agent-channels/backend/server.py",
-      "bytes": 19596,
-      "sha256": "36c6e939df887462b7d91b191433ae612150365be7c949bded657b0b92699fcc"
+      "bytes": 22115,
+      "sha256": "5429d807df1a1b10e48fd7da61111d77c3396c2e48f66e5c98e4e9b994191840"
     },
     {
       "path": "tools/agent-channels/backend/start.sh",
@@ -146,8 +146,8 @@
     },
     {
       "path": "tools/agent-channels/docs/WECHAT-LINUX-OPTION.md",
-      "bytes": 6490,
-      "sha256": "a8bbd0af1bb2e99f29f62c5bd5e973f7cff11ae35a57603a001df950942d5ffd"
+      "bytes": 6576,
+      "sha256": "17f5091dc3e953bfc7016b592c03f5621f5e865b00bc639035dbc7e220ab0f2c"
     },
     {
       "path": "tools/agent-channels/windows/Channels.cs",
@@ -176,8 +176,8 @@
     },
     {
       "path": "tools/agent-channels/tests/test_server.py",
-      "bytes": 24185,
-      "sha256": "799cd08d5be97c5de848f579f63d1acdc23ccf19513c3efff17bd34b6feacb1f"
+      "bytes": 27608,
+      "sha256": "26f010d0ffa73508f764d5a0665c1e05ca5c9277e97868c2678d45bced16cd18"
     },
     {
       "path": "tools/agent-channels/tests/test_wechat_option.py",
@@ -196,8 +196,8 @@
     },
     {
       "path": "tools/agent-channels/product/QUICKSTART.zh-CN.md",
-      "bytes": 9222,
-      "sha256": "e18e3329270263ab313ec4a561e9832b00576d181c040bdc601f30a241a21bde"
+      "bytes": 9421,
+      "sha256": "cb3b111844035315f4b825e3aa73f3958394b6824e07a31b5cacf818f4539ba7"
     },
     {
       "path": "tools/agent-channels/product/Source-Allowlist.psd1",

@@ -75,7 +75,7 @@ codex mcp add qicheng_lite_1 -- $python $bridge --channel 1
 codex mcp add qicheng_lite_2 -- $python $bridge --channel 2
 ```
 
-重新加载 AI 客户端，按客户端要求批准工具。在频道点击“交给 AI”，再要求 AI 先读取 `channel_state` 和 `channel_screenshot`，确认频道后调用 `channel_input`。人工接管或暂停后，AI 输入会被拒绝；不要改用宿主桌面绕过拒绝。
+重新加载 AI 客户端，按客户端要求批准工具。新频道默认由 AI 操作；先让 AI 读取 `channel_state` 和 `channel_screenshot`，确认频道及实际控制状态后再调用 `channel_input`。在查看器点“我来接管”或“暂停”会立即拒绝 AI 输入，点“交给 AI”可恢复。每个频道的控制选择保存在各自资料卷，重启后沿用；从托盘选“退出并暂停输入”也会保持暂停。不要改用宿主桌面绕过拒绝。
 
 已验证适配器 stdio 协议、实际频道输入和暂停边界。不同 AI 客户端的加载、权限和端到端执行需要分别验证；注册成功不代表客户端已经可用。两个频道互相独立，工具不会退回宿主桌面。
 
@@ -87,7 +87,7 @@ codex mcp add qicheng_lite_2 -- $python $bridge --channel 2
 .\Install-Qicheng-Lite.ps1 -ImportBrokerTokenPath 'C:\private\lite-broker.token' -Apply
 ```
 
-升级时若已有 `.local\broker.token`，安装器会保留它，并为查看器生成独立的 `.local\viewer.token`（后续升级保留）。启动器检测到 broker token 后使用 `compose.broker.yaml`，要求频道读取、查看器人工操作和 Broker AI 输入使用三类不同凭据。旧直连 MCP 只能读取，不能更改接管状态或输入；查看器中的“交给 AI”仍须由人操作，人工接管或暂停会立即撤销后端短租约。不要只打开后端门禁却继续使用上面的直连 MCP 注册命令。
+升级时若已有 `.local\broker.token`，安装器会保留它，并为查看器生成独立的 `.local\viewer.token`（后续升级保留）。启动器检测到 broker token 后使用 `compose.broker.yaml`，要求频道读取、查看器人工操作和 Broker AI 输入使用三类不同凭据。旧直连 MCP 只能读取，不能更改接管状态或输入；只有查看器中的人能更改控制模式，人工接管或暂停会立即撤销后端短租约。不要只打开后端门禁却继续使用上面的直连 MCP 注册命令。
 
 Task Lease 每个频道需配置固定的 `lite` 绑定，端口分别为 18761/18762，频道编号分别为 1/2；`broker_token_file` 指向安装后的 `.local\broker.token`，`channel_token_file` 指向 `.local\channel.token`。对应的 `endpoint_id` 和 `project_path` 各自独立。完整示例见 Task Lease 随包说明。AI 客户端通过同一 `bridge.py` 增加 `--broker-url http://127.0.0.1:18770 --broker-token-file <Task Lease 的 broker.token> --broker-channel-id <频道 ID>`。三项参数必须同时提供；`channel_input` 先用 `begin`，再执行动作，最后 `finish`。每个动作由 Broker 记录并确认；响应不确定时停止该会话，先核对实际桌面，不能自动重试。
 

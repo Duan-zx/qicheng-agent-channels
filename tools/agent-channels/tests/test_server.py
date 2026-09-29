@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 import threading
 import unittest
 from unittest.mock import patch
@@ -44,10 +45,10 @@ class ChannelTests(unittest.TestCase):
             self.assertFalse(run.call_args.kwargs['shell'])
         with patch.object(server.subprocess,'run',return_value=SimpleNamespace(stdout=b'not-jpeg')):
             with self.assertRaises(RuntimeError): display.frame_jpeg()
-    def test_default_pause_and_takeover(self):
+    def test_default_agent_and_takeover(self):
         action = dict(actor='agent', action='click', x=10, y=20)
-        with self.assertRaises(server.Conflict): self.channel.act(action)
-        self.channel.control('agent'); self.channel.act(action)
+        self.assertEqual(self.channel.status()['mode'], 'agent')
+        self.channel.act(action)
         self.channel.control('human')
         with self.assertRaises(server.Conflict): self.channel.act(action)
         self.channel.act(dict(action, actor='human'))
@@ -66,9 +67,59 @@ class ChannelTests(unittest.TestCase):
         self.assertNotIn('--sync', self.display.calls[0][0])
         self.assertEqual(self.channel.status()['actions'], 2)
     def test_channels_do_not_share_input_or_mode(self):
-        other = server.Channel(Display()); self.channel.control('agent')
+        other = server.Channel(Display()); other.control('paused')
         self.channel.act(dict(actor='agent', action='key', key='Return'))
         self.assertEqual(other.status()['mode'], 'paused'); self.assertEqual(other.display.calls, [])
+    def test_control_persists_per_home_and_does_not_restore_lease(self):
+        with tempfile.TemporaryDirectory() as root:
+            first = Path(root) / 'first' / '.config/qicheng-lite/control.json'
+            second = Path(root) / 'second' / '.config/qicheng-lite/control.json'
+            a = server.Channel(Display(), broker_enabled=True, channel_id='1', state_path=first)
+            b = server.Channel(Display(), broker_enabled=True, channel_id='2', state_path=second)
+            self.assertEqual((a.mode, b.mode), ('agent', 'agent'))
+            a.claim(dict(owner='worker', generation=1, nonce='secret', ttl_seconds=30))
+            a.control('human')
+            self.assertIsNone(a.status()['lease'])
+            self.assertEqual(json.loads(first.read_text()), {'version': 1, 'mode': 'human'})
+            restored = server.Channel(Display(), broker_enabled=True, channel_id='1', state_path=first)
+            self.assertEqual((restored.mode, restored.status()['lease']), ('human', None))
+            self.assertEqual(b.mode, 'agent')
+            with self.assertRaises(server.Conflict):
+                restored.claim(dict(owner='worker', generation=2, nonce='fresh', ttl_seconds=30))
+            restored.control('agent')
+            self.assertEqual(server.Channel(Display(), state_path=first).mode, 'agent')
+            restored.control('paused')
+            self.assertEqual(server.Channel(Display(), state_path=first).mode, 'paused')
+    def test_invalid_or_unreadable_state_fails_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'control.json'
+            for content in ('{', '{"version": 2, "mode": "agent"}',
+                            '{"version": 1, "mode": "unexpected"}', 'x' * 300):
+                with self.subTest(content=content[:30]):
+                    path.write_text(content)
+                    self.assertEqual(server.Channel(Display(), state_path=path).mode, 'paused')
+            with patch.object(server.Path, 'read_bytes', side_effect=OSError('disk error')):
+                self.assertEqual(server.Channel(Display(), state_path=path).mode, 'paused')
+    def test_failed_state_write_blocks_agent_and_revokes_lease(self):
+        with tempfile.TemporaryDirectory() as root:
+            channel = server.Channel(Display(), broker_enabled=True,
+                                     state_path=Path(root) / 'control.json')
+            channel.claim(dict(owner='worker', generation=1, nonce='secret', ttl_seconds=30))
+            with patch.object(server.os, 'replace', side_effect=OSError('disk error')):
+                with self.assertRaises(server.ControlPersistenceError): channel.control('human')
+            self.assertEqual(channel.status()['mode'], 'paused')
+            self.assertIsNone(channel.status()['lease'])
+            self.assertEqual(list(Path(root).glob('*.tmp')), [])
+    def test_input_failure_pause_survives_restart(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'control.json'
+            display = Display()
+            channel = server.Channel(display, state_path=path)
+            channel.control('agent')
+            display.failure = TimeoutError('input timed out')
+            with self.assertRaises(server.InputFailure):
+                channel.act(dict(actor='agent', action='key', key='Return'))
+            self.assertEqual(server.Channel(Display(), state_path=path).mode, 'paused')
     def test_bounds_and_command_injection(self):
         for data in [dict(action='click', x=-1, y=0), dict(action='click', x=1600, y=0),
                      dict(action='click', x=True, y=0), dict(action='key', key='Return; calc'),

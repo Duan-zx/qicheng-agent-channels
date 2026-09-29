@@ -20,6 +20,7 @@ KEYS = {"Return", "BackSpace", "Tab", "Escape", "Delete", "Left", "Right",
 
 class Invalid(ValueError): pass
 class Conflict(RuntimeError): pass
+class ControlPersistenceError(RuntimeError): pass
 
 def _lease_request(data, *, ttl):
     owner, generation, nonce = data.get("owner"), data.get("generation"), data.get("nonce")
@@ -150,10 +151,12 @@ def wechat_gui_alive():
 
 
 class Channel:
-    def __init__(self, display, width=1600, height=900, *, broker_enabled=False, channel_id=None):
+    def __init__(self, display, width=1600, height=900, *, broker_enabled=False,
+                 channel_id=None, state_path=None):
         self.display, self.width, self.height = display, width, height
         self.lock = threading.Lock()
-        self.mode = "paused"
+        self.state_path = Path(state_path) if state_path is not None else None
+        self.mode = self._load_mode()
         self.broker_enabled = broker_enabled
         self.channel_id = channel_id or uuid.uuid4().hex
         self.lease = None
@@ -163,6 +166,49 @@ class Channel:
         self.action_count = 0
         self.last_action_at = None
         self.last_input_error = None
+    def _load_mode(self):
+        if self.state_path is None:
+            return "agent"
+        try:
+            raw = self.state_path.read_bytes()
+            if len(raw) > 256:
+                return "paused"
+            state = json.loads(raw)
+            if (isinstance(state, dict) and type(state.get("version")) is int
+                    and state["version"] == 1
+                    and state.get("mode") in ("agent", "human", "paused")):
+                return state["mode"]
+        except FileNotFoundError:
+            return "agent"
+        except (OSError, ValueError, UnicodeError):
+            pass
+        return "paused"
+    def _save_mode_locked(self, mode):
+        if self.state_path is None:
+            return
+        path = self.state_path
+        temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+        try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            with temporary.open("xb") as output:
+                os.chmod(temporary, 0o600)
+                output.write(json.dumps({"version": 1, "mode": mode}).encode("ascii"))
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, path)
+            # The rename must survive a container restart as well as the file contents.
+            if os.name != "nt":
+                directory = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+        except OSError as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise ControlPersistenceError("Control state could not be saved") from exc
     def status(self):
         with self.lock:
             self._expire_locked()
@@ -229,8 +275,16 @@ class Channel:
         if mode not in ("paused", "human", "agent"): raise Invalid("Unknown mode")
         # Serialize takeover with input; already delivered input cannot be undone.
         with self.lock:
+            if mode in ("human", "paused"):
+                self.mode = mode
+                self.lease = None
+            try:
+                self._save_mode_locked(mode)
+            except ControlPersistenceError:
+                self.mode = "paused"
+                self.lease = None
+                raise
             self.mode = mode
-            if mode in ("human", "paused"): self.lease = None
     def act(self, data):
         actor, args, stdin = validate_action(data, self.width, self.height)
         with self.lock:
@@ -246,6 +300,10 @@ class Channel:
             except Exception as exc:
                 self.mode = "paused"
                 self.lease = None
+                try:
+                    self._save_mode_locked("paused")
+                except ControlPersistenceError:
+                    pass
                 stage = {'click': 'pointer_click', 'move': 'pointer_move',
                          'type': 'text_type', 'key': 'key'}.get(data.get('action'), 'input')
                 self.last_input_error = _input_diagnostic(exc, stage, started)
@@ -337,6 +395,7 @@ def handler_for(channel, token, broker_token=None, viewer_token=None):
                 else: return self.send(404, {"error": "Not found"})
                 self.send(200, channel.status())
             except Conflict as exc: self.send(409, {"error": str(exc)})
+            except ControlPersistenceError: self.send(503, {"error": "Control state could not be saved"})
             except (Invalid, ValueError, TypeError, UnicodeError): self.send(400, {"error": "Invalid request"})
             except InputFailure as exc:
                 self.send(503, {"error": "Private desktop unavailable; no host fallback",
@@ -358,6 +417,7 @@ if __name__ == "__main__":
     channel = Channel(XDisplay(), int(os.environ.get("SCREEN_WIDTH", "1600")),
                       int(os.environ.get("SCREEN_HEIGHT", "900")),
                       broker_enabled=broker_token is not None,
-                      channel_id=os.environ.get("CHANNEL_ID"))
+                      channel_id=os.environ.get("CHANNEL_ID"),
+                      state_path=Path.home() / ".config/qicheng-lite/control.json")
     ThreadingHTTPServer(("0.0.0.0", 8080),
             handler_for(channel, token, broker_token, viewer_token)).serve_forever()

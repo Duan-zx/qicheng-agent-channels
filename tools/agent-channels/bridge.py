@@ -1,4 +1,4 @@
-"""Dependency-free MCP stdio adapter. Human must enable agent input in viewer first.
+"""Dependency-free MCP stdio adapter for an isolated Linux desktop.
 Never writes protocol logs or tokens to stdout; desktop traffic stays on loopback.
 """
 import argparse
@@ -14,7 +14,7 @@ from broker_client import BrokerClient
 TOOLS = [
     {'name':'channel_state','description':'Read this isolated Linux desktop and input mode.', 'annotations':{'readOnlyHint':True}, 'inputSchema':{'type':'object','properties':{},'additionalProperties':False}},
     {'name':'channel_screenshot','description':'See this isolated Linux desktop, not the Windows host.', 'annotations':{'readOnlyHint':True}, 'inputSchema':{'type':'object','properties':{},'additionalProperties':False}},
-    {'name':'channel_input','description':'Send one action to the isolated Linux desktop. Requires the human to select Allow agent in the viewer. Never falls back to the Windows host.',
+    {'name':'channel_input','description':'Send one action to the isolated Linux desktop when its current mode is agent. Never falls back to the Windows host.',
      'annotations':{'readOnlyHint':False},
      'inputSchema':{'type':'object','properties':{'action':{'enum':['click','move','type','key']},'x':{'type':'integer'},'y':{'type':'integer'},'button':{'type':'integer','enum':[1,2,3,4,5]},'text':{'type':'string','maxLength':2000},'key':{'type':'string'}},'required':['action'],'additionalProperties':False}},
 ]
@@ -78,7 +78,7 @@ class Bridge:
             if method=='initialize':
                 requested=message.get('params',{}).get('protocolVersion')
                 version=requested if requested in ('2024-11-05','2025-03-26','2025-06-18') else '2025-06-18'
-                instructions='These tools target only one isolated Linux desktop, never the Windows host. Read channel_state and channel_screenshot before input. Coordinates are guest screenshot pixels. A human must enable agent mode in the viewer. If input is paused or taken over, stop and do not fall back to host computer-use tools. Capture a new screenshot after actions; follow user authorization for external actions.'
+                instructions='These tools target only one isolated Linux desktop, never the Windows host. Read channel_state and channel_screenshot before input. Coordinates are guest screenshot pixels. New channels start in agent mode; a human can pause or take over in the viewer. If input is paused or taken over, stop and do not fall back to host computer-use tools. Capture a new screenshot after actions; follow user authorization for external actions.'
                 if self.broker is not None:
                     instructions+=' Input requires explicit begin, actions, and finish. A confirmed finish permits a new begin. Failed or uncertain broker exchange ends this process session; never retry or fall back to direct input. Screenshots are read-only direct access and are not protected by a broker lease.'
                 result={'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'agent-channels','version':'0.1.0'},'instructions':instructions}
@@ -88,7 +88,7 @@ class Bridge:
                 params=message.get('params',{})
                 try: result=self.tool(params.get('name'),params.get('arguments',{}))
                 except urllib.error.HTTPError as exc:
-                    result={'isError':True,'content':[{'type':'text','text':'Desktop request rejected (HTTP '+str(exc.code)+'). A human must enable agent mode; do not target the host instead.'}]}
+                    result={'isError':True,'content':[{'type':'text','text':'Desktop request rejected (HTTP '+str(exc.code)+'). Read channel_state; if paused or taken over, only the viewer can return control to AI. Do not target the host instead.'}]}
                 except Exception:
                     result={'isError':True,'content':[{'type':'text','text':'Isolated desktop unavailable or invalid action. No host fallback.'}]}
             else: return {'jsonrpc':'2.0','id':request_id,'error':{'code':-32601,'message':'Method not found'}}

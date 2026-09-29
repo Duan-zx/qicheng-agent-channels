@@ -41,4 +41,4 @@ docker compose --project-name qicheng-agent-channels -f compose.yaml -f compose.
 
 shim 直接以 `ELECTRON_RUN_AS_NODE=1` 执行 Electron 的 `js/common/cli/index.js`。上游的 `bin/wechat-devtools-cli` 包装脚本对 `islogin` 只打印帮助，不能作为验收入口。上游 JS 在某些失败中会以退出码 0 打印 `[error]` 或非零 JSON `code`；shim 将其转成非零退出码。`{"login":false}` 是有效的未登录状态，不代表登录成功。`open --project ...` 需要额外核对开发者工具中的实际项目状态，不能仅凭进程退出码或命令受理报告成功。
 
-验收顺序：确认两频道的 `/health` 和认证后的 `/api/state` 分别显示正确 `channel_id`、私有 Linux display 和预期输入授权模式；分别截图确认 GUI 与频道资料；逐频道运行 `islogin` 并核对输出；在用户完成登录和打开服务端口后再试实际项目操作。MCP 仍通过原有 `bridge.py --channel 1/2` 接入，AI 输入仍需人工在查看器内交给 AI。切回 Firefox 可用原 `compose.yaml`（及已启用的 broker 覆盖文件）重建容器，保留同一资料卷。
+验收顺序：确认两频道的 `/health` 和认证后的 `/api/state` 分别显示正确 `channel_id`、私有 Linux display 和预期输入授权模式；分别截图确认 GUI 与频道资料；逐频道运行 `islogin` 并核对输出；在用户完成登录和打开服务端口后再试实际项目操作。MCP 仍通过原有 `bridge.py --channel 1/2` 接入；新频道默认是 `agent`，人工接管或暂停后须由人在查看器里交回 AI，所选状态会随各频道资料卷保留。切回 Firefox 可用原 `compose.yaml`（及已启用的 broker 覆盖文件）重建容器，保留同一资料卷。
