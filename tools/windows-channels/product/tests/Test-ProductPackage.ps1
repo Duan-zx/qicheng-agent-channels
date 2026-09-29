@@ -391,7 +391,9 @@ class FakeHotkeyViewer {
         string failed = Environment.GetEnvironmentVariable("QICHENG_FAKE_HOTKEY_FAILURE") == "1" ? "[\"Alt+4\"]" : "[]";
         string json = "{\"host_enabled\":" + (host ? "true" : "false") + ",\"channels\":[" + channels +
             "],\"registered\":" + (digits.Length + (host ? 1 : 0)) + ",\"failed\":" + failed + "}";
-        File.WriteAllText(path, json, new UTF8Encoding(false));
+        string temporary = path + ".tmp";
+        File.WriteAllText(temporary, json, new UTF8Encoding(false));
+        File.Move(temporary, path);
     }
 }
 '@ | Set-Content -LiteralPath $fakeViewerSource -Encoding UTF8
@@ -401,8 +403,12 @@ class FakeHotkeyViewer {
     try {
         $coordinated = & (Join-Path $installRoot 'Start-WindowsChannels.ps1') -ConfigPath $installedConfigPath -PythonPath $pythonPath -ChannelHotkeys '4,5' -NoHostHotkey -WaitForHotkeys
         Assert-True ($coordinated.status -eq 'hotkeys-confirmed' -and -not $coordinated.hostHotkeyEnabled) 'Start script did not wait for confirmed remapping.'
-        $ps5Start = Start-Process -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -ConfigPath "{1}" -PythonPath "{2}" -ChannelHotkeys 4,5 -NoHostHotkey -WaitForHotkeys' -f (Join-Path $installRoot 'Start-WindowsChannels.ps1'),$installedConfigPath,$pythonPath) -Wait -PassThru -WindowStyle Hidden
-        Assert-True ($ps5Start.ExitCode -eq 0) 'Windows PowerShell 5.1 could not confirm hotkey remapping.'
+        $ps5StartOut = Join-Path $temporaryRoot 'ps5-hotkey-remap.out'
+        $ps5StartErr = Join-Path $temporaryRoot 'ps5-hotkey-remap.err'
+        $ps5Start = Start-Process -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -ConfigPath "{1}" -PythonPath "{2}" -ChannelHotkeys 4,5 -NoHostHotkey -WaitForHotkeys' -f (Join-Path $installRoot 'Start-WindowsChannels.ps1'),$installedConfigPath,$pythonPath) -RedirectStandardOutput $ps5StartOut -RedirectStandardError $ps5StartErr -Wait -PassThru -WindowStyle Hidden
+        $ps5StartError = if (Test-Path -LiteralPath $ps5StartErr) { Get-Content -LiteralPath $ps5StartErr -Raw } else { '' }
+        $ps5StartOutput = if (Test-Path -LiteralPath $ps5StartOut) { Get-Content -LiteralPath $ps5StartOut -Raw } else { '' }
+        Assert-True ($ps5Start.ExitCode -eq 0) ("Windows PowerShell 5.1 could not confirm hotkey remapping: " + $ps5StartError + $ps5StartOutput)
         $env:QICHENG_FAKE_HOTKEY_FAILURE = '1'
         $registrationFailure = $false
         try { & (Join-Path $installRoot 'Start-WindowsChannels.ps1') -ConfigPath $installedConfigPath -PythonPath $pythonPath -ChannelHotkeys '4,5' -NoHostHotkey -WaitForHotkeys | Out-Null }

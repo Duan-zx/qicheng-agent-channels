@@ -393,8 +393,8 @@
     {
       "path": "tools/windows-channels/product/tests/Test-ProductPackage.ps1",
       "kind": "source",
-      "bytes": 59703,
-      "sha256": "79366b633b469fe28fbbd41a0980225e54ee5be08319adc49d4f1f96346d7a75"
+      "bytes": 60290,
+      "sha256": "51f4de715fc31f6d7562e018ef3eafaa9e338561aa5221e0738896bd4035a3a7"
     },
     {
       "path": "tools/windows-channels/theme/ai-space.png",

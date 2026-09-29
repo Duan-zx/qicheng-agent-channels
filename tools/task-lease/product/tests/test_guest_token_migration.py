@@ -49,7 +49,9 @@ class GuestTokenMigrationTests(unittest.TestCase):
         self.db = sqlite3.connect(self.data / "leases.db")
         self.addCleanup(self.db.close)
         old = self.db.execute("SELECT fingerprint FROM guest_bindings WHERE channel_id='channel-a'").fetchone()[0]
-        self.db.execute("INSERT INTO guest_input_attempts VALUES (?, ?, ?, ?, ?, ?)",
+        self.db.execute("""INSERT INTO guest_input_attempts
+                        (channel_id, request_id, action_id, fingerprint, status, acked)
+                        VALUES (?, ?, ?, ?, ?, ?)""",
                         ("channel-a", "request-1", "action-1", old, "success", 1))
         self.db.commit()
 
