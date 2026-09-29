@@ -8,56 +8,79 @@ on:
 permissions:
   contents: read
 jobs:
-  build:
+  lite:
+    name: Linux channels on Windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Unit tests (no VM)
-        shell: pwsh
-        working-directory: tools/windows-channels
-        run: python -m unittest discover -s tests -v
-      - name: Installer and source reproduction tests (no VM)
-        shell: pwsh
-        run: ./tools/windows-channels/product/tests/Test-ProductPackage.ps1
       - name: Lite unit tests (no containers)
         shell: pwsh
-        working-directory: tools/agent-channels
-        run: python -m unittest discover -s tests -v
+        run: python -m unittest discover -s tools/agent-channels/tests -v
       - name: Lite package and installation tests (temporary directories)
         shell: pwsh
         run: ./tools/agent-channels/product/tests/Test-ProductPackage.ps1
       - name: Lite installed-version consistency tests
         shell: pwsh
         run: ./tools/agent-channels/product/tests/Test-InstalledConsistency.ps1
-      - name: Task Lease unit and migration tests (no VM)
+      - name: Build Lite package
         shell: pwsh
         run: |
-          python -m unittest discover -s tools/task-lease/tests -v
-          python -m unittest discover -s tools/task-lease/product/tests -p 'test_*.py' -v
-      - name: Task Lease package and public source tests (temporary directories)
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.2.0-dev+' + $env:GITHUB_SHA.Substring(0,8) }
+          ./tools/agent-channels/product/Build-Package.ps1 -OutputDirectory "$env:RUNNER_TEMP/LiteBuild" -Version $version
+          $zip = "$env:RUNNER_TEMP/LiteBuild/Qicheng-Lite.zip"
+          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() + '  Qicheng-Lite.zip' | Set-Content "$zip.sha256" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Agent-Channel-Linux-Guest
+          path: |
+            ${{ runner.temp }}/LiteBuild/Qicheng-Lite.zip
+            ${{ runner.temp }}/LiteBuild/Qicheng-Lite.zip.sha256
+  windows:
+    name: Native Windows experimental component
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Windows unit tests (no VM)
         shell: pwsh
-        run: |
-          ./tools/task-lease/product/tests/Test-ProductPackage.ps1
-          ./tools/task-lease/product/tests/Test-PublicSourceExport.ps1
-      - name: Build package
+        run: python -m unittest discover -s tools/windows-channels/tests -v
+      - name: Windows installer and source reproduction tests (no VM)
+        shell: pwsh
+        run: ./tools/windows-channels/product/tests/Test-ProductPackage.ps1
+      - name: Build Windows package
         shell: pwsh
         run: |
           $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.2.0-dev+' + $env:GITHUB_SHA.Substring(0,8) }
           ./tools/windows-channels/product/Build-Package.ps1 -OutputDirectory "$env:RUNNER_TEMP/Qicheng-Windows-Channels" -Version $version
           $zip = "$env:RUNNER_TEMP/Qicheng-Windows-Channels.zip"
           (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() + '  Qicheng-Windows-Channels.zip' | Set-Content "$zip.sha256" -Encoding ascii
-          $liteBuild = (./tools/agent-channels/product/Build-Package.ps1 -OutputDirectory "$env:RUNNER_TEMP/LiteBuild" -Version $version | Out-String | ConvertFrom-Json)
-          $liteZip = "$env:RUNNER_TEMP/Qicheng-Lite.zip"
-          Copy-Item -LiteralPath $liteBuild.windows.archive -Destination $liteZip
-          (Get-FileHash $liteZip -Algorithm SHA256).Hash.ToLowerInvariant() + '  Qicheng-Lite.zip' | Set-Content "$liteZip.sha256" -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
-          name: Qicheng-Two-Editions
+          name: Agent-Channel-Windows-Experimental
           path: |
             ${{ runner.temp }}/Qicheng-Windows-Channels.zip
             ${{ runner.temp }}/Qicheng-Windows-Channels.zip.sha256
-            ${{ runner.temp }}/Qicheng-Lite.zip
-            ${{ runner.temp }}/Qicheng-Lite.zip.sha256
+  task-lease:
+    name: Task Lease experimental component
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Lease unit and migration tests (no VM)
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tools/task-lease/tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tools/task-lease/product/tests -p 'test_*.py' -v
+      - name: Lease package and public source tests
+        shell: pwsh
+        run: |
+          ./tools/task-lease/product/tests/Test-ProductPackage.ps1
+          ./tools/task-lease/product/tests/Test-PublicSourceExport.ps1

@@ -6,6 +6,7 @@ $productRoot = Split-Path -Parent $PSScriptRoot
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('qicheng-product-test-' + [guid]::NewGuid().ToString('N'))
 $packageRoot = Join-Path $temporaryRoot 'package'
 $previousLocalAppData = $env:LOCALAPPDATA
+$previousPSModulePath = $env:PSModulePath
 function Assert-True([bool]$Condition,[string]$Message) { if (-not $Condition) { throw $Message } }
 function Protect-ImportToken([string]$Path) {
     $acl = Get-Acl -LiteralPath $Path
@@ -95,6 +96,8 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $dataRoot)) 'Install plan created DataRoot.'
     $winPsOut = Join-Path $temporaryRoot 'winps-install-plan.json'
     $winPsErr = Join-Path $temporaryRoot 'winps-install-plan.err'
+    # Start-Process inherits pwsh's module path; Windows PowerShell needs its own built-in modules (Get-Acl).
+    $env:PSModulePath = (& powershell.exe -NoProfile -Command '$env:PSModulePath' | Out-String).Trim()
     $winPsArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -PackageRoot "{1}" -InstallRoot "{2}" -DataRoot "{3}" -StartMenuRoot "{4}" -DesktopRoot "{5}" -StartupRoot "{6}" -PythonPath "{7}" -ImportConfigPath "{8}"' -f (Join-Path $packageRoot 'Install-WindowsChannels.ps1'),$packageRoot,$installRoot,$dataRoot,$startMenu,$desktop,$startup,$pythonPath,$importConfig
     $winPsProcess = Start-Process -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source -ArgumentList $winPsArgs -RedirectStandardOutput $winPsOut -RedirectStandardError $winPsErr -Wait -PassThru
     $winPsErrorText = if (Test-Path -LiteralPath $winPsErr) { Get-Content -LiteralPath $winPsErr -Raw } else { '' }
@@ -535,6 +538,7 @@ class FakeHotkeyViewer {
     [ordered]@{ status='passed'; packageFiles=$manifest.files.Count; publicSourceRoundTripValidated=(-not $SkipPublicExportRoundTrip); offlinePreflightSimulated=$true; offlineApplyValidated=$false; archive=$build.archive; planValidated=$true; windowsPowerShellInstallerPreflight=$true; windowsPowerShell51ImportValidated=$true; windowsPowerShell51SetupValidated=$true; powerShell7ImportValidated=$true; firstRunSetupValidated=$true; invalidConfigurationRepairValidated=$true; existingConfigurationReuseValidated=$true; workspaceCountOptionsValidated='1..8 without Lite; 1..6 with Lite'; liteCoexistenceLimitValidated=$true; workspaceResourceEstimateValidated=$true; vmCreatedStateRemainsPendingValidated=$true; failedUpgradeRestoreValidated=$true; upgradeProcessBlockValidated=$true; temporaryInstallValidated=$true; configImportValidated=$true; viewerDerivedRoot=$derivedRoot; viewerSelfTestValidated=$true; powerShell7DiagnosisValidated=$true; shortcutsValidated=$true; defaultLaunchHiddenAndManagementShowValidated=$true; autoStartEnabledValidated=$true; autoStartDisabledValidated=$true; uninstallExactStartupLinkValidated=$true; aiConnectorsValidated=2; stableMcpLauncherValidated=$true; codexCliIsolatedFakeValidated=$true; codexEmptyListAddRecorded=$true; codexSameConfigNoOpValidated=$true; codexNameConflictRejected=$true; nativeMcpDiscovered=$false; uninstallPreservesUserData=$true; relativePathRejected=$true; realUserInstallPerformed=$false } | ConvertTo-Json -Depth 4
 } finally {
     if ($null -eq $previousLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $previousLocalAppData }
+    if ($null -eq $previousPSModulePath) { Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue } else { $env:PSModulePath = $previousPSModulePath }
     $resolvedTemporaryRoot = [IO.Path]::GetFullPath($temporaryRoot).TrimEnd([char[]]@('\','/'))
     $resolvedTempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]@('\','/'))
     Assert-True ([string]::Equals([IO.Path]::GetDirectoryName($resolvedTemporaryRoot),$resolvedTempParent,[StringComparison]::OrdinalIgnoreCase) -and [IO.Path]::GetFileName($resolvedTemporaryRoot) -match '^qicheng-product-test-[0-9a-f]{32}$') 'Refusing to remove a test directory outside the expected temporary location.'
