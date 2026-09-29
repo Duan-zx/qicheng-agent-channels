@@ -188,8 +188,8 @@
     {
       "path": "tools/task-lease/product/tests/test_guest_token_migration.py",
       "kind": "source",
-      "bytes": 8582,
-      "sha256": "99c000748298a86171ac8a96bfb332bea514f4a115a9c0d5ee1f6e1a375cf6cb"
+      "bytes": 8592,
+      "sha256": "8260638422aea0f966dc5bc26a4ffb350c378c794e5214b21163be4bac27c65e"
     },
     {
       "path": "tools/windows-channels/host/__init__.py",
