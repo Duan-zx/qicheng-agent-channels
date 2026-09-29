@@ -1,283 +1,338 @@
-{
-  "schemaVersion": 1,
-  "product": "Qicheng Lite",
-  "policy": "Explicit agent-channels source allowlist. No private Git identity or machine-local data.",
-  "excluded": [
-    ".local",
-    "dist",
-    "tokens",
-    "accounts",
-    "Docker volumes",
-    "browser profiles",
-    "caches",
-    "logs",
-    "private Git metadata"
-  ],
-  "files": [
-    {
-      "path": "tools/agent-channels/.dockerignore",
-      "bytes": 63,
-      "sha256": "94df4c86e63c5f8a41f55f15901ffda7cde6ce0e6671d6c8dd8a1b0590052874"
-    },
-    {
-      "path": "tools/agent-channels/.gitignore",
-      "bytes": 33,
-      "sha256": "c1d97e8dd6812a49792153d1dd2c10db3ae34b1739c4db6bfe67ca6a574232bf"
-    },
-    {
-      "path": "tools/agent-channels/README.md",
-      "bytes": 2959,
-      "sha256": "00f28ab52cc63cbca17eab9277ded0647654ce1a624470f38cca984c7d7e513d"
-    },
-    {
-      "path": "tools/agent-channels/Build.ps1",
-      "bytes": 854,
-      "sha256": "234b58667b0e07cc694b08f9b73a92bcf603d62381d49204745daf454c628612"
-    },
-    {
-      "path": "tools/agent-channels/Dockerfile",
-      "bytes": 1152,
-      "sha256": "75a39adf3c6c189352e083241fefc2c6e62e1fe5a9ab09741d4988b41600bab8"
-    },
-    {
-      "path": "tools/agent-channels/Dockerfile.wechat",
-      "bytes": 1366,
-      "sha256": "98ac93059d4edd88aa861a37af9c96b819ed9c89f546811e02b374c0ba609022"
-    },
-    {
-      "path": "tools/agent-channels/Dockerfile.wechat.offline",
-      "bytes": 1173,
-      "sha256": "cceb49500c5cc063c044cd9f430779621a1ec7b16155630a19fbaf7588064c81"
-    },
-    {
-      "path": "tools/agent-channels/compose.yaml",
-      "bytes": 940,
-      "sha256": "33b11eb5bc5abaf6707ff4d8085b95a58958128ead48e9cb89f457e89e17e273"
-    },
-    {
-      "path": "tools/agent-channels/compose.wechat.yaml",
-      "bytes": 658,
-      "sha256": "71594628666e622ff37be5958031877b94f64694158bd50c52c28c806ae0f86a"
-    },
-    {
-      "path": "tools/agent-channels/compose.broker.yaml",
-      "bytes": 527,
-      "sha256": "15c3fb6dc8685ddd4e13abffa966d8bb6c14e5972326db8d39e9b79b822c96aa"
-    },
-    {
-      "path": "tools/agent-channels/bridge.py",
-      "bytes": 8774,
-      "sha256": "27633d4ecc5db9a6ab7d83e846606a7e1abc6758508db91fdf853e027ff1e375"
-    },
-    {
-      "path": "tools/agent-channels/broker_client.py",
-      "bytes": 12344,
-      "sha256": "7abdc93ee1ba73f24a82a19a170b20709dc168ccdd55eb4a875af93bd896637d"
-    },
-    {
-      "path": "tools/agent-channels/Start-Backend.ps1",
-      "bytes": 3905,
-      "sha256": "a084bbf161c84b7d21a8039bb56e011dfc79719b551e1f39a51236b394518e89"
-    },
-    {
-      "path": "tools/agent-channels/Start-Viewer.ps1",
-      "bytes": 690,
-      "sha256": "9b3f03a25a73d490a44be7853a814bac97116d015b9e00d1fcb56145a0ea46ff"
-    },
-    {
-      "path": "tools/agent-channels/Stop-Backend.ps1",
-      "bytes": 258,
-      "sha256": "2c185cc2b8cff4040eb6ffc6c23b542e2049786c5a610c516b962fae3a9b78fa"
-    },
-    {
-      "path": "tools/agent-channels/backend/forward.py",
-      "bytes": 1429,
-      "sha256": "af1aaa1d6cf918f953a107baa6b0785521c4ae74c243a7b43eee8bdfb9111693"
-    },
-    {
-      "path": "tools/agent-channels/backend/README.md",
-      "bytes": 1035,
-      "sha256": "141c67873a80ec92f7e30a435f496d4f117c511845e937cd30953e1d4ae3c796"
-    },
-    {
-      "path": "tools/agent-channels/backend/firefox-policies.json",
-      "bytes": 439,
-      "sha256": "3ed2a46d20033f689f1688aa06276557233d9d70e1afdd2d4d7567b05e9039a7"
-    },
-    {
-      "path": "tools/agent-channels/backend/server.py",
-      "bytes": 22115,
-      "sha256": "5429d807df1a1b10e48fd7da61111d77c3396c2e48f66e5c98e4e9b994191840"
-    },
-    {
-      "path": "tools/agent-channels/backend/start.sh",
-      "bytes": 3082,
-      "sha256": "1a73060d4b7715b4044867368466c15f8946cc40be0fe0e02a86581b74e6b23e"
-    },
-    {
-      "path": "tools/agent-channels/backend/welcome.html",
-      "bytes": 9038,
-      "sha256": "6b49a5f69c71d966a216db3e784890b5f3315cd14ff3eb213bdb276bc0835ea4"
-    },
-    {
-      "path": "tools/agent-channels/wechat-devtools-cli",
-      "bytes": 1051,
-      "sha256": "eaf3aa65606911276f26ae01a554bb815ed078933f687884499871878c1b6c0c"
-    },
-    {
-      "path": "tools/agent-channels/wechat-cli-result.py",
-      "bytes": 568,
-      "sha256": "1fe8ea7ce20738a3ea88722f7268bf8677c9c6fcb1ebadf177f3cfa3c8d85bc3"
-    },
-    {
-      "path": "tools/agent-channels/backend/theme/ai-space.png",
-      "bytes": 1804353,
-      "sha256": "1cf933351f3a7e401e30e954582ee0d94d75cdb7c71b52d7e68a9920b027149c"
-    },
-    {
-      "path": "tools/agent-channels/integrations/codex.example.toml",
-      "bytes": 481,
-      "sha256": "1296fca08b134692f5abd59855dc7633b4ce19216b9ecbc234af428f6187b752"
-    },
-    {
-      "path": "tools/agent-channels/docs/RELEASE-0.2.0-alpha.1-local.md",
-      "bytes": 2207,
-      "sha256": "7783c4ea901db9aa69e816746d175c98268632b17b247de0cb2d12bb1db5df08"
-    },
-    {
-      "path": "tools/agent-channels/docs/WECHAT-LINUX-OPTION.md",
-      "bytes": 6576,
-      "sha256": "17f5091dc3e953bfc7016b592c03f5621f5e865b00bc639035dbc7e220ab0f2c"
-    },
-    {
-      "path": "tools/agent-channels/windows/Channels.cs",
-      "bytes": 41824,
-      "sha256": "8e1fc07d5a9adffa61037a53f4ed152e8ba2ef5b65ace6373f7f4de69a63b84d"
-    },
-    {
-      "path": "tools/agent-channels/windows/Skin.cs",
-      "bytes": 7372,
-      "sha256": "b70803c6030eec2abbeeb3319355b5fc5e29d1d2115ff968246476c42ac28bfe"
-    },
-    {
-      "path": "tools/agent-channels/tests/live_smoke.py",
-      "bytes": 5651,
-      "sha256": "d1a14c0714a4204784e65aa44d9f7c45d3609a3e19532bc19b2e21781ac215ed"
-    },
-    {
-      "path": "tools/agent-channels/tests/test_bridge.py",
-      "bytes": 13785,
-      "sha256": "f753bd9f7bf29864869977d20b98de65168bb2d32f20df8704be8369528eeec9"
-    },
-    {
-      "path": "tools/agent-channels/tests/test_backend_container.py",
-      "bytes": 5922,
-      "sha256": "555f8db0669e02e823dc6d1e571b350466c8dffd346f621ee15b23f2946f0a9f"
-    },
-    {
-      "path": "tools/agent-channels/tests/test_server.py",
-      "bytes": 27608,
-      "sha256": "26f010d0ffa73508f764d5a0665c1e05ca5c9277e97868c2678d45bced16cd18"
-    },
-    {
-      "path": "tools/agent-channels/tests/test_wechat_option.py",
-      "bytes": 3549,
-      "sha256": "9096868e07cc38ae9173748f569ced327825f4b3bfd5c570f04ac35e4828598a"
-    },
-    {
-      "path": "tools/agent-channels/product/LICENSE",
-      "bytes": 11558,
-      "sha256": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6"
-    },
-    {
-      "path": "tools/agent-channels/product/THIRD-PARTY-NOTICES.md",
-      "bytes": 2885,
-      "sha256": "1e7e77b9f4321aab735dca1e784a83269eb3a8d3648cabcc63b4cfde023ecc05"
-    },
-    {
-      "path": "tools/agent-channels/product/QUICKSTART.zh-CN.md",
-      "bytes": 9421,
-      "sha256": "cb3b111844035315f4b825e3aa73f3958394b6824e07a31b5cacf818f4539ba7"
-    },
-    {
-      "path": "tools/agent-channels/product/Source-Allowlist.psd1",
-      "bytes": 1907,
-      "sha256": "3783fd9b2b735299593fcb43a0219afca23dbcb4f3623ff9d58c8821465ddaf4"
-    },
-    {
-      "path": "tools/agent-channels/product/Build-Package.ps1",
-      "bytes": 5738,
-      "sha256": "b74dad74d555b6f97ba926fdfafe7f500e3e1441cdaddc50dac4b73ec454dbca"
-    },
-    {
-      "path": "tools/agent-channels/product/Export-PublicSource.ps1",
-      "bytes": 2304,
-      "sha256": "3887cf13c23ac7cfd7e237da90d0774aa6d69fe4bec1449518cfa21322567da1"
-    },
-    {
-      "path": "tools/agent-channels/product/runtime/Product.Common.ps1",
-      "bytes": 4432,
-      "sha256": "c52cc445bfeb7680fa77828daaed325d5caaed6c956da3be5597b9f456bc6caa"
-    },
-    {
-      "path": "tools/agent-channels/product/runtime/Install-Qicheng-Lite.ps1",
-      "bytes": 39177,
-      "sha256": "94cc8f53caf1cf5e34f16519706262a432a6d6bbf28d38bd34f9cfc3176cf499"
-    },
-    {
-      "path": "tools/agent-channels/product/runtime/Start-Qicheng-Lite.ps1",
-      "bytes": 15181,
-      "sha256": "f66638f800287fcb892f72ad6a24477afe84667c3fd3271acf478fc33c681eae"
-    },
-    {
-      "path": "tools/agent-channels/product/runtime/Diagnose-Qicheng-Lite.ps1",
-      "bytes": 11458,
-      "sha256": "9ebdeea6b0b324f1d14369f7ca37a267e3bcbd105350b05bd33521d503845aa5"
-    },
-    {
-      "path": "tools/agent-channels/product/runtime/Export-Downloads.ps1",
-      "bytes": 4016,
-      "sha256": "fb9a49272cf8dee99737fb4ef325cdab7596940a4572b93849ad1e0af2762513"
-    },
-    {
-      "path": "tools/agent-channels/product/runtime/Restore-LegacyWindowsChannelsStartup.ps1",
-      "bytes": 1825,
-      "sha256": "597aabfe381928c718a37abff02db38e632ef20335b8e34afffe4a6d244e2b77"
-    },
-    {
-      "path": "tools/agent-channels/product/runtime/Install-Qicheng-Lite.cmd",
-      "bytes": 2075,
-      "sha256": "0773ec88b087e378915c13cfc535dded415243ccca42c64e6d632760a6a246ab"
-    },
-    {
-      "path": "tools/agent-channels/product/runtime/linux/install.sh",
-      "bytes": 3365,
-      "sha256": "d28a440e48f880a01ba17cd7fd98c3f3d66bb20673f38f0fa0e1ea391d2822af"
-    },
-    {
-      "path": "tools/agent-channels/product/runtime/linux/start.sh",
-      "bytes": 4518,
-      "sha256": "7a0fbcb3ab3626f54b7c8d5c5190672521bd8f990a505f593300509fcbd0209c"
-    },
-    {
-      "path": "tools/agent-channels/product/runtime/linux/diagnose.sh",
-      "bytes": 1131,
-      "sha256": "901c5a2b5c305b892639feeff22a25b64ef48f20aa0a7bb9290597cac819c8a0"
-    },
-    {
-      "path": "tools/agent-channels/product/tests/Test-ProductPackage.ps1",
-      "bytes": 67681,
-      "sha256": "b9a2b096329846285b1513533c82576f1844ebc26e1a05400071c29403356d6c"
-    },
-    {
-      "path": "tools/agent-channels/product/tests/Test-WechatInstall.ps1",
-      "bytes": 11026,
-      "sha256": "4413a2c19e137e824b2254154dc006bfa3a71763bf6643d8ed4e7e4fed11ab6f"
-    },
-    {
-      "path": "tools/agent-channels/product/tests/Test-LegacyStartupDiagnosis.ps1",
-      "bytes": 5179,
-      "sha256": "a23687577b5fb754c40513f2bc186b02e0eb372191d2c14cd1126f56ab9023aa"
-    }
-  ]
+﻿{
+    "schemaVersion":  1,
+    "product":  "Qicheng Lite",
+    "policy":  "Explicit agent-channels source allowlist. No private Git identity or machine-local data.",
+    "excluded":  [
+                     ".local",
+                     "dist",
+                     "tokens",
+                     "accounts",
+                     "Docker volumes",
+                     "browser profiles",
+                     "caches",
+                     "logs",
+                     "private Git metadata"
+                 ],
+    "files":  [
+                  {
+                      "path":  "tools/agent-channels/.dockerignore",
+                      "bytes":  63,
+                      "sha256":  "94df4c86e63c5f8a41f55f15901ffda7cde6ce0e6671d6c8dd8a1b0590052874"
+                  },
+                  {
+                      "path":  "tools/agent-channels/.gitignore",
+                      "bytes":  33,
+                      "sha256":  "c1d97e8dd6812a49792153d1dd2c10db3ae34b1739c4db6bfe67ca6a574232bf"
+                  },
+                  {
+                      "path":  "tools/agent-channels/README.md",
+                      "bytes":  3054,
+                      "sha256":  "f6a5ecdf6f8b516a2c9db733aca2a26ec5d9e5d53b217c4164ba30abfb9b2cd2"
+                  },
+                  {
+                      "path":  "tools/agent-channels/Build.ps1",
+                      "bytes":  854,
+                      "sha256":  "234b58667b0e07cc694b08f9b73a92bcf603d62381d49204745daf454c628612"
+                  },
+                  {
+                      "path":  "tools/agent-channels/Dockerfile",
+                      "bytes":  1152,
+                      "sha256":  "75a39adf3c6c189352e083241fefc2c6e62e1fe5a9ab09741d4988b41600bab8"
+                  },
+                  {
+                      "path":  "tools/agent-channels/Dockerfile.wechat",
+                      "bytes":  1366,
+                      "sha256":  "98ac93059d4edd88aa861a37af9c96b819ed9c89f546811e02b374c0ba609022"
+                  },
+                  {
+                      "path":  "tools/agent-channels/Dockerfile.wechat.offline",
+                      "bytes":  1173,
+                      "sha256":  "cceb49500c5cc063c044cd9f430779621a1ec7b16155630a19fbaf7588064c81"
+                  },
+                  {
+                      "path":  "tools/agent-channels/Dockerfile.wechat.repair",
+                      "bytes":  547,
+                      "sha256":  "e5f8b2d7841b4c5528b3d37f042f3e0454642f082b8f9a760d63bfaefc3c0147"
+                  },
+                  {
+                      "path":  "tools/agent-channels/compose.yaml",
+                      "bytes":  940,
+                      "sha256":  "33b11eb5bc5abaf6707ff4d8085b95a58958128ead48e9cb89f457e89e17e273"
+                  },
+                  {
+                      "path":  "tools/agent-channels/compose.wechat.yaml",
+                      "bytes":  658,
+                      "sha256":  "71594628666e622ff37be5958031877b94f64694158bd50c52c28c806ae0f86a"
+                  },
+                  {
+                      "path":  "tools/agent-channels/compose.broker.yaml",
+                      "bytes":  527,
+                      "sha256":  "15c3fb6dc8685ddd4e13abffa966d8bb6c14e5972326db8d39e9b79b822c96aa"
+                  },
+                  {
+                      "path":  "tools/agent-channels/bridge.py",
+                      "bytes":  8774,
+                      "sha256":  "27633d4ecc5db9a6ab7d83e846606a7e1abc6758508db91fdf853e027ff1e375"
+                  },
+                  {
+                      "path":  "tools/agent-channels/broker_client.py",
+                      "bytes":  12344,
+                      "sha256":  "7abdc93ee1ba73f24a82a19a170b20709dc168ccdd55eb4a875af93bd896637d"
+                  },
+                  {
+                      "path":  "tools/agent-channels/Start-Backend.ps1",
+                      "bytes":  3905,
+                      "sha256":  "a084bbf161c84b7d21a8039bb56e011dfc79719b551e1f39a51236b394518e89"
+                  },
+                  {
+                      "path":  "tools/agent-channels/Start-Viewer.ps1",
+                      "bytes":  690,
+                      "sha256":  "9b3f03a25a73d490a44be7853a814bac97116d015b9e00d1fcb56145a0ea46ff"
+                  },
+                  {
+                      "path":  "tools/agent-channels/Stop-Backend.ps1",
+                      "bytes":  258,
+                      "sha256":  "2c185cc2b8cff4040eb6ffc6c23b542e2049786c5a610c516b962fae3a9b78fa"
+                  },
+                  {
+                      "path":  "tools/agent-channels/backend/forward.py",
+                      "bytes":  1429,
+                      "sha256":  "af1aaa1d6cf918f953a107baa6b0785521c4ae74c243a7b43eee8bdfb9111693"
+                  },
+                  {
+                      "path":  "tools/agent-channels/backend/README.md",
+                      "bytes":  1035,
+                      "sha256":  "141c67873a80ec92f7e30a435f496d4f117c511845e937cd30953e1d4ae3c796"
+                  },
+                  {
+                      "path":  "tools/agent-channels/backend/firefox-policies.json",
+                      "bytes":  439,
+                      "sha256":  "3ed2a46d20033f689f1688aa06276557233d9d70e1afdd2d4d7567b05e9039a7"
+                  },
+                  {
+                      "path":  "tools/agent-channels/backend/server.py",
+                      "bytes":  22115,
+                      "sha256":  "5429d807df1a1b10e48fd7da61111d77c3396c2e48f66e5c98e4e9b994191840"
+                  },
+                  {
+                      "path":  "tools/agent-channels/backend/start.sh",
+                      "bytes":  3082,
+                      "sha256":  "1a73060d4b7715b4044867368466c15f8946cc40be0fe0e02a86581b74e6b23e"
+                  },
+                  {
+                      "path":  "tools/agent-channels/backend/welcome.html",
+                      "bytes":  9045,
+                      "sha256":  "66160b951dc7e2d4e0764bd3c2b9e3d2d1991720eb9d420a6a38b3ee8339d79e"
+                  },
+                  {
+                      "path":  "tools/agent-channels/wechat-devtools-cli",
+                      "bytes":  1051,
+                      "sha256":  "eaf3aa65606911276f26ae01a554bb815ed078933f687884499871878c1b6c0c"
+                  },
+                  {
+                      "path":  "tools/agent-channels/wechat-cli-result.py",
+                      "bytes":  568,
+                      "sha256":  "1fe8ea7ce20738a3ea88722f7268bf8677c9c6fcb1ebadf177f3cfa3c8d85bc3"
+                  },
+                  {
+                      "path":  "tools/agent-channels/backend/theme/ai-space.png",
+                      "bytes":  1804353,
+                      "sha256":  "1cf933351f3a7e401e30e954582ee0d94d75cdb7c71b52d7e68a9920b027149c"
+                  },
+                  {
+                      "path":  "tools/agent-channels/integrations/codex.example.toml",
+                      "bytes":  481,
+                      "sha256":  "1296fca08b134692f5abd59855dc7633b4ce19216b9ecbc234af428f6187b752"
+                  },
+                  {
+                      "path":  "tools/agent-channels/docs/RELEASE-0.2.0-alpha.1-local.md",
+                      "bytes":  2207,
+                      "sha256":  "7783c4ea901db9aa69e816746d175c98268632b17b247de0cb2d12bb1db5df08"
+                  },
+                  {
+                      "path":  "tools/agent-channels/docs/WECHAT-LINUX-OPTION.md",
+                      "bytes":  6576,
+                      "sha256":  "17f5091dc3e953bfc7016b592c03f5621f5e865b00bc639035dbc7e220ab0f2c"
+                  },
+                  {
+                      "path":  "tools/agent-channels/windows/Channels.cs",
+                      "bytes":  47828,
+                      "sha256":  "cb6383348ce17339e5d3cd4631b6a71abf4d7f5c501b721490e8bab3ed7352a3"
+                  },
+                  {
+                      "path":  "tools/agent-channels/windows/Skin.cs",
+                      "bytes":  7372,
+                      "sha256":  "b70803c6030eec2abbeeb3319355b5fc5e29d1d2115ff968246476c42ac28bfe"
+                  },
+                  {
+                      "path":  "tools/agent-channels/tests/live_smoke.py",
+                      "bytes":  5651,
+                      "sha256":  "d1a14c0714a4204784e65aa44d9f7c45d3609a3e19532bc19b2e21781ac215ed"
+                  },
+                  {
+                      "path":  "tools/agent-channels/tests/test_bridge.py",
+                      "bytes":  13785,
+                      "sha256":  "f753bd9f7bf29864869977d20b98de65168bb2d32f20df8704be8369528eeec9"
+                  },
+                  {
+                      "path":  "tools/agent-channels/tests/test_backend_container.py",
+                      "bytes":  5922,
+                      "sha256":  "555f8db0669e02e823dc6d1e571b350466c8dffd346f621ee15b23f2946f0a9f"
+                  },
+                  {
+                      "path":  "tools/agent-channels/tests/test_server.py",
+                      "bytes":  27608,
+                      "sha256":  "26f010d0ffa73508f764d5a0665c1e05ca5c9277e97868c2678d45bced16cd18"
+                  },
+                  {
+                      "path":  "tools/agent-channels/tests/test_wechat_option.py",
+                      "bytes":  3549,
+                      "sha256":  "9096868e07cc38ae9173748f569ced327825f4b3bfd5c570f04ac35e4828598a"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/LICENSE",
+                      "bytes":  11558,
+                      "sha256":  "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/THIRD-PARTY-NOTICES.md",
+                      "bytes":  2985,
+                      "sha256":  "8f174fee0cff6afe226b7ac4abf6f64933cbcf845e6e7b135a2507c2bac71c50"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/QUICKSTART.zh-CN.md",
+                      "bytes":  11553,
+                      "sha256":  "732afb740ec05d0c04efa6d4a9ac6088d64883f01d2defce152848d53f7fee5f"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/AI-CLIENTS.zh-CN.md",
+                      "bytes":  3804,
+                      "sha256":  "c42b8346566512c577a1fcb02b9b05405e3787424f6752bbc151f26ab824d5e8"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/skills/agent-channel/SKILL.md",
+                      "bytes":  2662,
+                      "sha256":  "465b8bb779e2c65dc89b4144028f256262245a40a30383eac84f5a9255c21048"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/Source-Allowlist.psd1",
+                      "bytes":  2449,
+                      "sha256":  "36c8fa42863a104ba73efab21dacbc9f039b8def1342efaf6933acfb60ff8882"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/Build-Package.ps1",
+                      "bytes":  6110,
+                      "sha256":  "ac07e0d1cdaece64628d08498b87139398f84c025f1f48799cabd31f8a6a0f35"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/Export-PublicSource.ps1",
+                      "bytes":  2304,
+                      "sha256":  "3887cf13c23ac7cfd7e237da90d0774aa6d69fe4bec1449518cfa21322567da1"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Product.Common.ps1",
+                      "bytes":  6253,
+                      "sha256":  "f7c9971bd12ef0ba1dd923ea70a0219bbdf81d336dd82d1f060dbc9e300d46ad"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Install-Qicheng-Lite.ps1",
+                      "bytes":  45758,
+                      "sha256":  "32095dced320068011f44667440636e7b703748bde42465e4cff913011d3ed6a"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Start-Qicheng-Lite.ps1",
+                      "bytes":  15181,
+                      "sha256":  "f66638f800287fcb892f72ad6a24477afe84667c3fd3271acf478fc33c681eae"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Diagnose-Qicheng-Lite.ps1",
+                      "bytes":  12678,
+                      "sha256":  "3bfda290b0a2a2309f5a0d415cce22def741ac1bf357a38998958b5e2d6223dd"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Export-Downloads.ps1",
+                      "bytes":  4016,
+                      "sha256":  "fb9a49272cf8dee99737fb4ef325cdab7596940a4572b93849ad1e0af2762513"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Restore-LegacyWindowsChannelsStartup.ps1",
+                      "bytes":  1825,
+                      "sha256":  "597aabfe381928c718a37abff02db38e632ef20335b8e34afffe4a6d244e2b77"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Install-Qicheng-Lite.cmd",
+                      "bytes":  2075,
+                      "sha256":  "0773ec88b087e378915c13cfc535dded415243ccca42c64e6d632760a6a246ab"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Register-CodexMcp.ps1",
+                      "bytes":  6196,
+                      "sha256":  "ee6b87a397f32c6e1d5e2a45a37e026174e8328d0e366cd13e7422d05be57ec6"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Register-Qicheng-Codex.cmd",
+                      "bytes":  743,
+                      "sha256":  "e518a2f9bbea1035d36f6b2ab0e375e6bd7b34db6e454919b6d60686cbf29d33"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Uninstall-Qicheng-Lite.ps1",
+                      "bytes":  10667,
+                      "sha256":  "a16b5b8b5c0b79b68575ef63deec3c3acb086db1c9442e6bc923745de4547fe2"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/Uninstall-Qicheng-Lite.cmd",
+                      "bytes":  1140,
+                      "sha256":  "95a0a2ad89a0e68d38026eb13827376fda2820a3a8c8756d23dfa90928882779"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/linux/install.sh",
+                      "bytes":  3365,
+                      "sha256":  "d28a440e48f880a01ba17cd7fd98c3f3d66bb20673f38f0fa0e1ea391d2822af"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/linux/start.sh",
+                      "bytes":  4518,
+                      "sha256":  "7a0fbcb3ab3626f54b7c8d5c5190672521bd8f990a505f593300509fcbd0209c"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/runtime/linux/diagnose.sh",
+                      "bytes":  1131,
+                      "sha256":  "901c5a2b5c305b892639feeff22a25b64ef48f20aa0a7bb9290597cac819c8a0"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/tests/Test-ProductPackage.ps1",
+                      "bytes":  67681,
+                      "sha256":  "b9a2b096329846285b1513533c82576f1844ebc26e1a05400071c29403356d6c"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/tests/Test-WechatInstall.ps1",
+                      "bytes":  11287,
+                      "sha256":  "33b35be266abd70a69c2f6ca9265f76be528ba47ff3fd43a86a404ba9a800c00"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/tests/Test-WechatReusePreflight.ps1",
+                      "bytes":  11215,
+                      "sha256":  "58ecb9cd719a517c65320cf5e4065d6894d5cd6b34f4ea1dad266744e2bb376c"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/tests/Test-LegacyStartupDiagnosis.ps1",
+                      "bytes":  5179,
+                      "sha256":  "a23687577b5fb754c40513f2bc186b02e0eb372191d2c14cd1126f56ab9023aa"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/tests/Test-CodexMcpRegistration.ps1",
+                      "bytes":  4520,
+                      "sha256":  "059e3903a2ab98b31a0db4162eafed08b9a19d8b1d1a797b448f631e7fdbd89f"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/tests/Test-InstalledConsistency.ps1",
+                      "bytes":  1995,
+                      "sha256":  "a76382b7f6d19e84b3c782640a8929fe0924fa922b56b32f657167a6421a071f"
+                  },
+                  {
+                      "path":  "tools/agent-channels/product/tests/Test-KeepDataUninstall.ps1",
+                      "bytes":  8093,
+                      "sha256":  "3a71c76b223e892c2e3d6f8196c75dc6bb61fcbb2f5129a18d4476aac0b98c09"
+                  }
+              ]
 }

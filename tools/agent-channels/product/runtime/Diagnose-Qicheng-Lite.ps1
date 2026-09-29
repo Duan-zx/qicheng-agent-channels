@@ -50,6 +50,8 @@ function Test-CompatibleWindowsStartup([string]$ShortcutPath,[string]$LiteRoot){
 }
 $record=Read-QichengLiteInstallRecord -InstallRoot $installRoot
 Add-Check 'install-record' ($null -ne $record) $(if($record){"版本 $($record.version)"}else{'安装记录缺失'})
+$packageCheck=Test-QichengLiteInstalledPackage -InstallRoot $installRoot
+Add-Check 'installed-package-consistency' $packageCheck.valid $(if($packageCheck.valid){"版本 $($packageCheck.version)，文件与包清单一致"}else{($packageCheck.issues -join '；')+'；请使用完整安装包修复，不要继续覆盖单个文件'})
 $channelCount=0
 if($record){try{$channelCount=Get-QichengLiteChannelCount -Record $record}catch{Add-Check 'channel-selection' $false $_.Exception.Message}}
 if($channelCount){Add-Check 'channel-selection' $true "$channelCount 个频道"}
@@ -101,6 +103,19 @@ if($dockerAvailable){
     if($brokerEnabled){$composeArgs+=@('-f',(Join-Path $installRoot 'compose.broker.yaml'))}
     try{$composeOutput=(& $DockerPath @composeArgs --profile second ps --format json 2>&1|Out-String);$composeOk=($LASTEXITCODE -eq 0)}catch{$composeOk=$false;$composeOutput=$_.Exception.Message}
     Add-Check 'compose-project' $composeOk $(if($composeOk){'qicheng-agent-channels 可读取'}else{'无法读取项目状态'})
+    if($record -and $record.PSObject.Properties['runtimeImageId'] -and $record.runtimeImageId){
+        foreach($channel in 1..$channelCount){
+            $imageMatches=$false
+            try {
+                $ids=@(& $DockerPath @composeArgs --profile second ps -q "channel$channel" 2>$null)
+                if($LASTEXITCODE -eq 0 -and $ids.Count -eq 1){
+                    $runningImage=@(& $DockerPath inspect --format '{{.Image}}' ([string]$ids[0]) 2>$null)
+                    $imageMatches=($LASTEXITCODE -eq 0 -and $runningImage.Count -eq 1 -and [string]$runningImage[0] -ceq [string]$record.runtimeImageId)
+                }
+            } catch {}
+            Add-Check "channel-$channel-image-version" $imageMatches $(if($imageMatches){'运行镜像与安装记录一致'}else{'运行镜像缺失或与安装版本不一致；请使用完整安装包修复'})
+        }
+    }
 }
 $ports=@(18761);if($channelCount -eq 2){$ports+=18762}
 foreach($port in $ports){

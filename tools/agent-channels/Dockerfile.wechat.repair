@@ -1,0 +1,12 @@
+# Local repair only. The installer verifies the source image belongs to the
+# existing WeChat channels and has the pinned DevTools package installed.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER root
+RUN rm -rf /app
+COPY backend /app
+RUN mkdir -p /etc/firefox/policies && cp /app/firefox-policies.json /etc/firefox/policies/policies.json && chmod 755 /app/start.sh
+COPY wechat-devtools-cli /usr/local/bin/wechat-devtools-cli
+COPY wechat-cli-result.py /usr/local/libexec/wechat-cli-result.py
+RUN chmod 755 /usr/local/bin/wechat-devtools-cli
+USER channel

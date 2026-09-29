@@ -31,12 +31,14 @@ function Copy-File([string]$Source,[string]$Root,[string]$Relative,[string]$Kind
     $List.Add([ordered]@{path=$Relative.Replace('\','/');kind=$Kind;bytes=$item.Length;sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()})
 }
 function Add-CommonRuntime([string]$Root,[System.Collections.Generic.List[object]]$List){
-    foreach($relative in @('.dockerignore','Dockerfile','Dockerfile.wechat','Dockerfile.wechat.offline','compose.yaml','compose.wechat.yaml','compose.broker.yaml','wechat-devtools-cli','wechat-cli-result.py','bridge.py','broker_client.py','backend/forward.py','backend/README.md','backend/firefox-policies.json','backend/server.py','backend/start.sh','backend/welcome.html','backend/theme/ai-space.png','docs/WECHAT-LINUX-OPTION.md')){
+    foreach($relative in @('.dockerignore','Dockerfile','Dockerfile.wechat','Dockerfile.wechat.offline','Dockerfile.wechat.repair','compose.yaml','compose.wechat.yaml','compose.broker.yaml','wechat-devtools-cli','wechat-cli-result.py','bridge.py','broker_client.py','backend/forward.py','backend/README.md','backend/firefox-policies.json','backend/server.py','backend/start.sh','backend/welcome.html','backend/theme/ai-space.png','docs/WECHAT-LINUX-OPTION.md')){
         Copy-File (Join-Path $moduleRoot $relative) $Root $relative 'runtime' $List
     }
     Copy-File (Join-Path $productRoot 'LICENSE') $Root 'LICENSE' 'license' $List
     Copy-File (Join-Path $productRoot 'THIRD-PARTY-NOTICES.md') $Root 'THIRD-PARTY-NOTICES.md' 'notice' $List
     Copy-File (Join-Path $productRoot 'QUICKSTART.zh-CN.md') $Root 'QUICKSTART.zh-CN.md' 'documentation' $List
+    Copy-File (Join-Path $productRoot 'AI-CLIENTS.zh-CN.md') $Root 'AI-CLIENTS.zh-CN.md' 'documentation' $List
+    Copy-File (Join-Path $productRoot 'skills/agent-channel/SKILL.md') $Root 'skills/agent-channel/SKILL.md' 'skill' $List
     foreach($relative in $sourcePaths){Copy-File (Join-Path $moduleRoot $relative) $Root (Join-Path 'source' $relative) 'source' $List}
     $sourceManifest|ConvertTo-Json -Depth 7|Set-Content -LiteralPath (Join-Path $Root 'SOURCE-MANIFEST.json') -Encoding UTF8
     $item=Get-Item -LiteralPath (Join-Path $Root 'SOURCE-MANIFEST.json')
@@ -49,7 +51,7 @@ New-Item -ItemType Directory -Path $windowsRoot|Out-Null
 $windowsFiles=New-Object 'System.Collections.Generic.List[object]'
 Add-CommonRuntime $windowsRoot $windowsFiles
 Copy-File $viewer $windowsRoot 'dist\AgentChannels.exe' 'built-executable' $windowsFiles
-foreach($relative in @('Product.Common.ps1','Install-Qicheng-Lite.ps1','Start-Qicheng-Lite.ps1','Diagnose-Qicheng-Lite.ps1','Export-Downloads.ps1','Restore-LegacyWindowsChannelsStartup.ps1','Install-Qicheng-Lite.cmd')){
+foreach($relative in @('Product.Common.ps1','Install-Qicheng-Lite.ps1','Start-Qicheng-Lite.ps1','Diagnose-Qicheng-Lite.ps1','Export-Downloads.ps1','Restore-LegacyWindowsChannelsStartup.ps1','Install-Qicheng-Lite.cmd','Register-CodexMcp.ps1','Register-Qicheng-Codex.cmd','Uninstall-Qicheng-Lite.ps1','Uninstall-Qicheng-Lite.cmd')){
     Copy-File (Join-Path (Join-Path $productRoot 'runtime') $relative) $windowsRoot $relative 'installer-runtime' $windowsFiles
 }
 $windowsManifest=[ordered]@{schemaVersion=1;product='Qicheng Lite';version=$Version;platform='windows-x64';guestPlatform='linux-container';downloadKind='linux-guest-default';builtAt=(Get-Date).ToUniversalTime().ToString('o');files=$windowsFiles.ToArray()}

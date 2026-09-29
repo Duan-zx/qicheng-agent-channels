@@ -1,42 +1,25 @@
-# 启程 · AI 工作区
+# Agent Channel
 
-[English](README.md)
+[English](README.md) · [安装说明](docs/INSTALL.zh-CN.md) · [验证范围](docs/VALIDATION.md) · [Apache-2.0](LICENSE)
 
+![独立 AI 频道示意图，并非产品实机截图](docs/images/workspace-concept.svg)
 
-![启程 AI 工作区产品结构示意，非实机截图](docs/images/workspace-concept.svg)
+**一个 AI 任务，一个 Linux 频道；Windows 宿主留给自己用。** Agent Channel 为任务提供独立 Linux 桌面、浏览器资料和持久数据卷。你可以在查看器里观察、接管或暂停 AI 输入。MCP 桥只连接选定的频道，不把操作转到 Windows 宿主桌面。
 
-给 AI 独立的工作区，随时查看、接管，或回到自己的电脑。轻量版可运行独立浏览器，也可选择社区 Linux 微信开发者工具移植版。
+按 **Alt+2** 看频道一，**Alt+3** 看频道二，**Alt+1** 回宿主。新频道默认允许已接入的 AI 操作；查看器显示“AI 可操作”不代表已有任务正在执行。默认 Lite 接法每个频道分配一个任务。
 
-启程提供两种 Windows 主机安装包：默认使用轻量版；需要 Windows 原生应用时选择兼容版。AI 模型由你已有的客户端提供，安装包不包含模型订阅或 API 密钥。
+## 试用 Lite
 
-仓库还提供可选的 Task Lease 源码与独立包构建脚本。它让显式接入的任务协调频道使用；普通频道的单个短固定动作可由 Broker 一次请求完成获取、执行和释放。alpha.23 在隔离 n8n CLI 的执行状态监督测试中，未开工的已取消请求可撤队；真实共享 n8n 工作流尚未接入状态源，默认仍为忙时立即返回。alpha.24 本地源码候选增加离线维护门，隔离产品包测试通过，但 01 尚未运行该版，不能把候选测试当作日常工作流已验。轻量版可独立运行，也可显式接入租约 Broker。当前公开 Release 仍是旧 Alpha，下面的新增源码属于本地待发布候选，尚无对应公开下载资产。
+[Alpha 23 r2 试用 ZIP](downloads/Agent-Channel-Windows-Linux-alpha23-r2.zip) 在 **Windows 宿主与 Docker Desktop 的 Linux engine** 上提供两个 Linux 频道。请按[安装说明](docs/INSTALL.zh-CN.md)操作，并先核对其中的 ZIP SHA-256。首次构建镜像需要联网；MCP 另需 **Python 3.10+** 和你自备的 AI 客户端。产品不附模型、订阅或 API 密钥。
 
-| 下载类别 | 适合的任务 | 需要的环境 |
-|---|---|---|
-| **Qicheng-Lite.zip · 轻量版** | 浏览器或社区 Linux 微信开发者工具、独立资料与下载文件 | Windows 主机、可用的 Docker Linux engine；首次构建需要联网 |
-| **Qicheng-Windows-Channels.zip · Windows 兼容版** | 必须在 Windows 客体里运行的原生工具 | 支持 Hyper-V 的 Windows、Python 3.12+、独立准备并获授权的 Windows 客体 |
+试用包带有精简 Agent Channel Skill、先预览再写入当前用户 MCP 配置的 Codex 注册入口，以及[保留数据卸载路径](docs/UNINSTALL-LITE.md)。Skill 只提供操作指引，不会自动注册 MCP 或批准工具。可选 Linux 微信开发者工具镜像在本机构建，并遵守该软件自己的条款。
 
-发布资产见 [Releases](https://github.com/Duan-zx/qicheng-agent-channels/releases)。尚未发布的构建不在此承诺为可下载版本。
+当前[公开 Releases](https://github.com/Duan-zx/qicheng-agent-channels/releases)仍是较早的 Alpha；此试用 ZIP 从仓库直接提供，尚不是对应版本的公开 Release。开发者可查看 [Lite 构包脚本](tools/agent-channels/product/Build-Package.ps1)、[快速说明](tools/agent-channels/product/QUICKSTART.zh-CN.md)和 [AI 接入说明](docs/AI-SETUP.md)。
 
-## 轻量版使用
+## 其他组件
 
-1. 解压轻量安装包，运行包内安装入口；已有 Docker Linux engine 才能启动工作区。
-2. 私有 alpha.20 候选首次安装可选择 1 或 2 个频道，默认 1 个；DELL 独立首装仍待验。安装后后台驻留；按 **Alt+2** 进入频道一，启用频道二时用 **Alt+3**，**Alt+1** 回本机。
-3. 新频道默认交给 AI；选择“我来接管”或“暂停”会立即阻断 AI 输入，点“交给 AI”恢复。每个频道的控制选择在容器重启后保留。
-4. 每个已启用频道的浏览器资料与 Downloads 保存在各自 Docker 数据卷中；从 2 个减为 1 个时保留频道二数据卷，日后可重新启用。
+需要 Windows 客体原生应用时，可另看 [Windows Channels](tools/windows-channels/README.md)；需要显式接入的任务协调时，可另看 [Task Lease](tools/task-lease/README.md)。两者仍属独立实验组件，须分别安装和验收；Lite 不会自动让多个任务经 Task Lease 排队。
 
-停用、卸载及保留频道资料见[手工说明](docs/UNINSTALL-LITE.md)。当前候选尚无一键卸载器。
+开发机已验证两个 Linux 频道各自的 AI 中文输入、点击和保存值读回，以及查看器热键、频道独立暂停/接管、缩放画面的实际点击。一次有限时长的宿主前台采样在采样点未见切走，不能排除更短的瞬间切换。另一台 Windows 实机的首次安装与重启、其他物理 DPI 或多屏、合法微信项目编译仍未验证。详见[验证范围与限制](docs/VALIDATION.md)。
 
-01 当前运行两台私有 Linux 微信频道。两条独立 Codex/MCP 会话各自在租约内连续完成 4 次点击，微信 CLI 分别连通各自已开启的服务端口，均返回 `login:false`。01 通过可回滚 alpha.20 后端镜像热修，重建后两频道无需再次人工交接即处于 AI 模式，CLI 设置保留。安装记录仍为 alpha.18，不能据此声称标准 alpha.20 升级通过；公开仓尚无对应 Release，DELL 首次构建和安装仍待验。
-
-alpha.16 查看器在展开和迷你控制条均有“⋯”菜单，可正常选择“退出并暂停输入”。独立 Checker 已在同运行代码的 alpha.15 真实窗口核对菜单与 Alt+1/2/3；高 DPI 和纯键盘操作仍待测。离线镜像复用升级已在 01 的 PowerShell 5.1 与旧资料卷上完成，默认首次安装仍要构建镜像。
-
-安装包内的快速说明提供诊断、AI 接入与数据位置。两版新查看器共存时，轻量版使用 Alt+1/2 和可选的 Alt+3，Windows 兼容版从 Alt+4 起；旧安装版需要升级后才具备运行中改键能力。实际热键冲突会显示在诊断与状态回执中。
-
-## 开源范围
-
-本仓只包含产品源码、安装构建脚本、公开说明及脱敏验证记录；Windows Channels 与 Task Lease 分别有显式白名单和 SHA-256 源码清单。不包含内部协作库、用户浏览器资料、访问 token、Windows 镜像或第三方商业软件。
-
-启程自有代码使用 Apache-2.0。第三方运行时与容器内软件保留各自许可证，见轻量包内 THIRD-PARTY-NOTICES.md；不能将所有依赖重标为 Apache-2.0。Docker Desktop 不是本产品捆绑的软件，其使用条款需要单独遵循。
-
-实际验证范围与限制见 [验证记录](docs/VALIDATION.md)。本项目目前为 Alpha，不将自动测试通过等同于所有网站、登录流程或 Windows 软件均兼容。
+本仓包含产品源码、构包脚本、公开文档和脱敏验证记录，不含用户资料、凭据、Windows 镜像或第三方商业应用。Agent Channel 自有代码使用 Apache-2.0；第三方软件各守其许可证和条款。见[第三方声明](tools/agent-channels/product/THIRD-PARTY-NOTICES.md)和[素材来源](docs/ASSET-PROVENANCE.md)。

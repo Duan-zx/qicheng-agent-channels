@@ -80,3 +80,29 @@ function Test-QichengLiteDesktopState {
     if(-not $State.PSObject.Properties['desktop_app'] -or -not $State.PSObject.Properties['gui_alive']){return $false}
     return ([string]$State.desktop_app -ceq 'wechat' -and $State.gui_alive -eq $true)
 }
+
+function Test-QichengLiteInstalledPackage {
+    param([Parameter(Mandatory=$true)][string]$InstallRoot)
+    $issues=New-Object 'System.Collections.Generic.List[string]'
+    $version=$null
+    try {
+        $root=Resolve-QichengLitePath -Path $InstallRoot -Label 'InstallRoot'
+        $manifest=Get-Content -LiteralPath (Join-Path $root 'package-manifest.json') -Raw -Encoding UTF8 -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
+        $record=Read-QichengLiteInstallRecord -InstallRoot $root
+        if($manifest.schemaVersion -ne 1 -or $manifest.product -cne 'Qicheng Lite' -or -not $record -or $record.product -cne 'Qicheng Lite'){throw '安装身份或清单无效'}
+        $version=[string]$manifest.version
+        if([string]::IsNullOrWhiteSpace($version) -or [string]$record.version -cne $version){$issues.Add('安装记录与包版本不一致')}
+        $seen=@{}
+        $files=@($manifest.files)
+        if($files.Count -eq 0){throw '包文件清单为空'}
+        foreach($file in $files){
+            $relative=[string]$file.path
+            if($relative -cnotmatch '^[A-Za-z0-9._/-]+$' -or $relative -match '(^|/)\.\.(/|$)' -or $relative.StartsWith('/') -or $relative.Contains('//') -or $seen.ContainsKey($relative)){throw '包文件路径或重复项无效'}
+            $seen[$relative]=$true
+            $path=Join-Path $root $relative
+            if(-not(Test-Path -LiteralPath $path -PathType Leaf)){$issues.Add("文件缺失：$relative");continue}
+            if([string]$file.sha256 -cnotmatch '^[a-f0-9]{64}$' -or (Get-QichengLiteSha256 -Path $path) -cne [string]$file.sha256){$issues.Add("文件与版本清单不符：$relative")}
+        }
+    } catch { $issues.Add($_.Exception.Message) }
+    [pscustomobject]@{valid=($issues.Count -eq 0);version=$version;issues=$issues.ToArray()}
+}

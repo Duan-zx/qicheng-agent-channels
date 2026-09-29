@@ -1,10 +1,12 @@
-# 启程轻量版快速说明
+# Agent Channel｜快速开始
 
 版本以安装包内 `package-manifest.json` 为准。
 
+Agent Channel 在 Windows 上提供 1 或 2 个彼此独立的 Linux 桌面频道。每个频道可交给一个 AI 任务，人在查看器里用“接管”“交给 AI”“暂停”三个按钮切换控制权。安装包和本地配置仍使用 `Qicheng-Lite`、`QichengLite` 等原有文件名及路径；这些是兼容接口，不要为改名而移动安装目录、Docker 卷或 MCP 名称。
+
 ## 先确认依赖
 
-轻量版需要 Docker Linux engine。安装包不包含 Docker Desktop，也不声称 Docker Desktop 开源或无条件免费。首次构建容器镜像需要联网访问官方 Python 镜像与 Debian HTTPS 软件源；后续启动可复用本机镜像。
+Agent Channel 需要 Docker Linux engine。安装包不包含 Docker Desktop，也不声称 Docker Desktop 开源或无条件免费。首次构建容器镜像需要联网访问官方 Python 镜像与 Debian HTTPS 软件源；后续启动可复用本机镜像。Windows 查看器是可选入口；AI 客户端仍需另行准备。
 
 轻量版启动器运行在 Windows 宿主，需要系统 .NET Framework 4.x。发布包已经带有编译好的 `dist/AgentChannels.exe`，普通安装不需要重新编译；公开源码可用 `source/Build.ps1` 重建。
 
@@ -66,18 +68,13 @@ Windows 开始菜单可运行“诊断启程轻量工作台”。诊断只读，
 
 宿主另需 Python 3.10+。查看器和浏览器本身不依赖宿主 Python；只有 MCP 适配器需要它。启程不附带模型或订阅。
 
-已安装 Codex CLI 和 Python 时，在 PowerShell 注册已启用频道的独立服务；选 1 个频道时只运行第一条：
+已安装 Codex CLI 和 Python 时，双击 `Register-Qicheng-Codex.cmd`：先看预览，再决定是否写入当前用户的 Codex 配置。它按安装记录注册 1 或 2 个频道，已有同名但不同配置时拒绝覆盖。PowerShell 也可运行 `./Register-CodexMcp.ps1` 预览，确认后加 `-Apply`。其他 MCP 客户端的通用 stdio 配置见 `AI-CLIENTS.zh-CN.md`。
 
-```powershell
-$python = (Get-Command python.exe -ErrorAction Stop).Source
-$bridge = "$env:LOCALAPPDATA\Programs\QichengLite\bridge.py"
-codex mcp add qicheng_lite_1 -- $python $bridge --channel 1
-codex mcp add qicheng_lite_2 -- $python $bridge --channel 2
-```
+重新加载 AI 客户端，按客户端要求批准工具。双频道试用包 候选默认直连、每频道一个任务；新频道默认由 AI 操作。每个任务固定使用一个频道的 MCP 服务，先读 `channel_state` 和 `channel_screenshot`，确认频道及实际控制状态后再调用 `channel_input`。在查看器点“接管”或“暂停”会立即拒绝 AI 输入，点“交给 AI”可恢复。每个频道的控制选择保存在各自资料卷，重启后沿用；从托盘选“退出并暂停输入”也会保持暂停。不要改用宿主桌面绕过拒绝。
 
-重新加载 AI 客户端，按客户端要求批准工具。新频道默认由 AI 操作；先让 AI 读取 `channel_state` 和 `channel_screenshot`，确认频道及实际控制状态后再调用 `channel_input`。在查看器点“我来接管”或“暂停”会立即拒绝 AI 输入，点“交给 AI”可恢复。每个频道的控制选择保存在各自资料卷，重启后沿用；从托盘选“退出并暂停输入”也会保持暂停。不要改用宿主桌面绕过拒绝。
+已验证适配器 stdio 协议、部分本机频道输入和暂停边界。已有 Task Lease Broker 安装不能按默认直连步骤覆盖。不同 AI 客户端的加载、权限和端到端执行需要分别验证；注册成功不代表客户端已经可用。两个频道互相独立，工具不会退回宿主桌面。
 
-已验证适配器 stdio 协议、实际频道输入和暂停边界。不同 AI 客户端的加载、权限和端到端执行需要分别验证；注册成功不代表客户端已经可用。两个频道互相独立，工具不会退回宿主桌面。
+支持 Skill 的工具可读取安装包 `skills/agent-channel/SKILL.md`；也可由用户把整个 `agent-channel` 文件夹复制到该工具的 Skill 目录（Codex 通常为 `~/.codex/skills/agent-channel`）并重载客户端。Skill 只提供操作指导，不会注册 MCP、开启权限或改变控制模式；MCP 仍按 `AI-CLIENTS.zh-CN.md` 单独配置并实测。
 
 ### 多任务接入 Task Lease
 
@@ -91,4 +88,19 @@ codex mcp add qicheng_lite_2 -- $python $bridge --channel 2
 
 Task Lease 每个频道需配置固定的 `lite` 绑定，端口分别为 18761/18762，频道编号分别为 1/2；`broker_token_file` 指向安装后的 `.local\broker.token`，`channel_token_file` 指向 `.local\channel.token`。对应的 `endpoint_id` 和 `project_path` 各自独立。完整示例见 Task Lease 随包说明。AI 客户端通过同一 `bridge.py` 增加 `--broker-url http://127.0.0.1:18770 --broker-token-file <Task Lease 的 broker.token> --broker-channel-id <频道 ID>`。三项参数必须同时提供；`channel_input` 先用 `begin`，再执行动作，最后 `finish`。每个动作由 Broker 记录并确认；响应不确定时停止该会话，先核对实际桌面，不能自动重试。
 
-此接法是可选的多任务隔离模式，首次接入需逐项核对真实配置和本机输入。默认直连模式没有任务级互斥；只有两端都启用新模式并完成验收，才能声称同频道多任务不会串台。
+此接法是可选的多任务隔离模式。首次接入需逐项核对真实配置和本机输入。默认直连模式没有任务级互斥；只有两端都启用新模式并完成验收，才能声称同频道多任务不会串台。
+
+## 保留数据卸载
+
+双击安装目录中的 `Uninstall-Qicheng-Lite.cmd`，先查看预览再确认。保持 Docker Desktop 运行以核验并停止本产品容器。卸载会移除本安装的快捷方式，将完整程序和私有凭据移到回执显示的本机恢复目录，保留用户数据、Docker 资料卷和镜像；不删除其他产品。恢复时先查看回执，勿把恢复目录上传到网盘或 Git。
+
+## 修复已有微信频道
+
+先退出查看器，在完整新包目录运行：
+
+```powershell
+.\Install-Qicheng-Lite.ps1 -RepairExistingWechatImage
+.\Install-Qicheng-Lite.ps1 -RepairExistingWechatImage -LaunchAfterInstall -NonInteractive -Apply
+```
+
+第一条只预览，第二条执行。仅适用于本安装已有的固定版本微信频道；脚本核对容器归属、镜像、资料卷和工具版本后，用完整新包替换产品后端并更新安装记录，保留账号资料与凭据。它不下载新的微信工具，不用于首次安装，也不能用于绕过不匹配的镜像或来源检查。报错时保留原文，勿改标签或覆盖单个文件强行通过。

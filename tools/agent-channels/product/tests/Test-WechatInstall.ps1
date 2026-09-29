@@ -44,12 +44,16 @@ if($DockerArgs[0] -eq 'image'){
     if($DockerArgs[1] -eq 'inspect'){'sha256:mock-image';return}
     if($DockerArgs[1] -in @('tag','rm')){return}
 }
-if($DockerArgs[0] -eq 'compose'){$global:LASTEXITCODE=0;('a'*64);return}
+if($DockerArgs[0] -eq 'compose'){
+    $global:LASTEXITCODE=0
+    if($DockerArgs -contains 'config'){@{services=@{channel1=@{image='qicheng-agent-channels:0.1-local'}}}|ConvertTo-Json -Depth 4 -Compress;return}
+    ('a'*64);return
+}
 if($DockerArgs[0] -eq 'inspect'){
     $global:LASTEXITCODE=0
     if($DockerArgs[2] -eq '{{.Image}}'){'sha256:mock-image';return}
     if($DockerArgs[2] -eq '{{json .Config.Labels}}'){
-        @{ 'com.docker.compose.project'='qicheng-agent-channels';'com.docker.compose.service'='channel1';'com.docker.compose.project.working_dir'=$env:QICHENG_WECHAT_TEST_INSTALL }|ConvertTo-Json -Compress
+        @{ 'com.docker.compose.project'='qicheng-agent-channels';'com.docker.compose.service'='channel1';'com.docker.compose.project.working_dir'=$env:QICHENG_WECHAT_TEST_INSTALL;'com.docker.compose.project.config_files'=(Join-Path $env:QICHENG_WECHAT_TEST_INSTALL 'compose.yaml') }|ConvertTo-Json -Compress
         return
     }
     if($DockerArgs[2] -eq '{{json .Mounts}}'){@(@{Type='volume';Name='qicheng-lite-home-1';Destination='/home/channel'})|ConvertTo-Json -Compress;return}

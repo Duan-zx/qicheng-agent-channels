@@ -1,20 +1,11 @@
-# Stop or remove Qicheng Lite / 停用或移除启程轻量版
+# Keep-data uninstall / 保留数据卸载
 
-This is the manual alpha.16 procedure. There is no one-click uninstaller. First export any Downloads you need from the installed Start-menu shortcut and save unfinished web forms. In the viewer tray, choose **Exit and pause input**. Remove the current user's “启程轻量工作台” shortcut from the Windows Startup folder to prevent the next sign-in from starting it.
+For the [Alpha 23 r2 trial package](../downloads/Agent-Channel-Windows-Linux-alpha23-r2.zip), save unfinished forms and export any guest Downloads you need first. With Docker Desktop's Linux engine running, exit the viewer through **Exit and pause input**. Run `Uninstall-Qicheng-Lite.cmd` from the installed Agent Channel program directory. Review its preview before confirming. It stops only the containers owned by this installation, removes its shortcuts, and moves the complete program directory—including local credentials—to the recovery location shown in its receipt. User data, Docker volumes, and images remain in place. Keep the recovery directory private; do not upload it to Git or a cloud drive.
 
-Open PowerShell as the same Windows user who installed Lite, then stop only the Qicheng Compose project:
-
-```powershell
-$install = Join-Path $env:LOCALAPPDATA 'Programs\QichengLite'
-docker compose --project-name qicheng-agent-channels --project-directory $install -f (Join-Path $install 'compose.yaml') --profile second stop
-```
-
-Remove the Qicheng Lite shortcuts from this user's desktop and Start menu. You can leave the program directory in place while testing. If you remove it, first keep a private backup of the **whole** `%LOCALAPPDATA%\Programs\QichengLite` directory: its `.local` subfolder holds channel, viewer and optional Lite broker tokens. Keeping only the Docker volumes will not preserve those credentials or the existing AI connection. Do not upload the backup to GitHub.
-
-The stop command leaves containers, user settings, exported Downloads, and browser volumes intact. Before moving the program directory, you may replace `stop` with `down` in the same command to remove the Qicheng containers and network; **do not add `-v`** if you want to keep browser data. The two possible named volumes are `qicheng-lite-home-1` and `qicheng-lite-home-2`. User settings and exported Downloads are under `%LOCALAPPDATA%\Qicheng\Lite`. Remove these volumes and files separately only after you have backed up anything you need. Task Lease, Windows guests, and their licenses are separate and are not removed by these steps.
+The current uninstall path has passed isolated tests; it has not been used to remove the development-machine installation. If the command is absent, you have an older package: use that package's uninstall instructions instead of copying this command into an unmatched installation. Task Lease and native Windows guests have separate lifecycles.
 
 ---
 
-这是 alpha.16 的手工步骤，目前没有一键卸载。先从开始菜单取回需要的频道下载文件，保存未提交的网页表单，再从托盘选择“退出并暂停输入”；删除当前用户“启动”目录里的“启程轻量工作台”快捷方式。用安装时的同一用户在 PowerShell 运行上面的命令，只停止启程 Compose 项目。
+使用 [Alpha 23 r2 试用包](../downloads/Agent-Channel-Windows-Linux-alpha23-r2.zip) 时，先保存未提交的表单，并取回需要的频道下载文件。保持 Docker Desktop 的 Linux engine 运行，从查看器托盘选“退出并暂停输入”。在已安装的 Agent Channel 程序目录双击 `Uninstall-Qicheng-Lite.cmd`，查看预览后再确认。它只停止本安装的容器、移除本安装的快捷方式，并把完整程序目录及其中的本地凭据移到回执列出的恢复位置；用户数据、Docker 数据卷和镜像保留。恢复目录应保存在本机私有位置，不要上传到 Git 或网盘。
 
-桌面和开始菜单快捷方式可随后移除。准备将 `%LOCALAPPDATA%\Programs\QichengLite` 程序目录移走或删除时，先把**整个目录**备份到自己可访问的本机私有位置；其中 `.local` 保存频道、Viewer 和可选 Lite broker token。仅保留 Docker 卷不保证以后能原样恢复 AI 接线。上述 `stop` 默认保留容器、`%LOCALAPPDATA%\Qicheng\Lite` 用户数据及 `qicheng-lite-home-1/2` 浏览器卷；需要移除容器时，可在移走程序目录前把同一命令末尾改为 `down`，不要加 `-v`。永久清理卷和用户目录前先备份。Task Lease、Windows 客体及许可另行处理。
+这条卸载路径只通过隔离测试，尚未在开发机正式安装上执行。若当前安装没有该命令，说明它是较早版本；请按该包自己的卸载说明处理，不要把新命令套用到旧安装。Task Lease 和 Windows 原生客体需分别处理。

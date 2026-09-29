@@ -1,8 +1,8 @@
 # Third-party dependency notice
 
-The Apache-2.0 `LICENSE` shipped with Qicheng Lite covers Qicheng-authored source and the locally compiled viewer. It does **not** relicense Docker, the base image, Debian, Firefox, fonts, or packages installed into the container.
+The Apache-2.0 `LICENSE` shipped with Agent Channel (formerly Qicheng Lite) covers Qicheng-authored source and the locally compiled viewer. It does **not** relicense Docker, the base image, Debian, Firefox, fonts, or packages installed into the container.
 
-Qicheng Lite source packages contain build instructions, not a Docker engine or a prebuilt third-party container image. The first image build downloads the following software from its normal upstream repositories. The license files and copyright records installed in the resulting image, especially `/usr/share/doc/<package>/copyright`, are the controlling copies.
+Agent Channel (formerly Qicheng Lite) source packages contain build instructions, not a Docker engine or a prebuilt third-party container image. The first image build downloads the following software from its normal upstream repositories. The license files and copyright records installed in the resulting image, especially `/usr/share/doc/<package>/copyright`, are the controlling copies.
 
 | Dependency | Distribution role | Upstream license family |
 |---|---|---|
@@ -20,10 +20,10 @@ Qicheng Lite source packages contain build instructions, not a Docker engine or 
 | WenQuanYi Micro Hei | CJK font | GNU GPL 3.0 with font embedding exception |
 | xclip | X11 clipboard helper | GNU GPL 2.0 |
 
-Docker is an external prerequisite. Qicheng Lite does not bundle Docker Desktop and does not claim that Docker Desktop is open source or unconditionally free. Docker Desktop use is governed by Docker's current subscription and license terms. Docker Engine/Moby and Docker Compose have their own upstream licenses.
+Docker is an external prerequisite. Agent Channel (formerly Qicheng Lite) does not bundle Docker Desktop and does not claim that Docker Desktop is open source or unconditionally free. Docker Desktop use is governed by Docker's current subscription and license terms. Docker Engine/Moby and Docker Compose have their own upstream licenses.
 
 The Windows viewer uses the locally installed Microsoft .NET Framework compiler and runtime; these Microsoft components are not redistributed in this package. Refer to Microsoft's applicable license terms.
 
-The optional `Dockerfile.wechat` downloads a pinned third-party WeChat DevTools Linux DEB only during an explicit image build, verifies its SHA-256, and installs it in the locally built image. The DEB and its Tencent components are not included in this source package or the Qicheng Lite ZIP, and the Qicheng Apache-2.0 license does not cover them. Consult the software's own terms before use or redistribution. See `docs/WECHAT-LINUX-OPTION.md`.
+The optional `Dockerfile.wechat` downloads a pinned third-party WeChat DevTools Linux DEB only during an explicit image build, verifies its SHA-256, and installs it in the locally built image. The DEB and its Tencent components are not included in this source package or the Agent Channel (formerly Qicheng Lite) ZIP, and the Qicheng Apache-2.0 license does not cover them. Consult the software's own terms before use or redistribution. See `docs/WECHAT-LINUX-OPTION.md`.
 
 This notice is informational and does not replace any upstream license text. When distributing a built image, retain the license/copyright material installed by the upstream image and Debian packages.

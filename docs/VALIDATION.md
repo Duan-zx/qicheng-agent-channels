@@ -1,170 +1,21 @@
-# 验证范围与限制
+# Agent Channel validation and limits / 验证范围与限制
 
-## 2026-09-29 Linux 微信双频道与默认 AI 候选（本地，未公开发行）
+The [Alpha 23 r2 trial package](../downloads/Agent-Channel-Windows-Linux-alpha23-r2.zip) is a development-machine candidate. Its package manifest and SHA-256 are described in the [install guide](INSTALL.zh-CN.md). The public Releases page still lists earlier Alpha builds. Source tests, package checks, and local repair do not prove independent installation on another PC.
 
-01 的两台专用 Lite Linux 频道由两个独立 Codex/MCP Checker 各自持有 Broker 租约、连续完成 4 次 GUI 点击并正常结束。微信开发者工具“服务端口”分别开启，登录票据保持关闭；两频道内 `wechat-devtools-cli islogin` 都退出 0、返回 `{"login":false}`，服务端口分别位于各自客体的 127.0.0.1:12051/25756。Broker 无遗留租约或 dirty，两频道容器、持久资料卷与宿主 loopback 端口独立。无微信登录、合法项目/AppID、真实项目打开或编译验证。
+Alpha 23 was installed on one Windows development machine after an explicit, ownership-checked repair of an existing Linux WeChat image. The installed files, record, and running image agreed; final diagnostics reported healthy with zero failures. A fresh MCP session used two independent Linux channels to enter different Chinese text, press Enter, click a button, and read back each channel's own saved value. Both sessions finished with no residual lease or input error. The installed viewer switched with Alt+1/2/3, preserved independent pause/takeover state, and successfully clicked a scaled guest form from a larger host display.
 
-新 Lite 源码使新频道默认由 AI 操作，并把每频道的人工接管/暂停选择保存在各自资料卷；暂停先撤销短租约，损坏状态按暂停处理。01 从已验微信镜像叠加 alpha.20 后端源码作可回滚热修，正式两容器重建后未经再次点击即读到 `agent`、微信 GUI 在线，原服务端口设置保留。56 项 Python 回归与包内 HostReturnOnly 测试通过，完整 PowerShell 产品测试因 01 正式频道占用测试固定端口未跑通。正式安装记录仍 alpha.18，标准 alpha.20 首装/升级、宿主整机重启和 DELL 独立首装均未验。公开仓只保留本地候选，未推送或发布；不应把源码和 01 热修当成可供他人下载安装的 Release。
+A roughly 31-second foreground-window sample during both channel actions observed the AI client at its 100 ms sample points. An earlier sample briefly saw a terminal switch of unknown cause. These observations do not establish that every shorter focus change is absent. The package's full-file hash check and isolated Windows PowerShell 5.1 installation success/failure tests passed; the keep-data uninstaller passed isolated tests only. A login-recovery entry point started successfully, but the host was not rebooted for this acceptance.
 
-## 2026-09-28 微信固定查询跨模块源码候选（本地，未公开发行）
+**Still unverified:** independent first installation and network image build on another physical Windows PC; recovery after its reboot; other physical DPI or multi-monitor arrangements; real WeChat sign-in, opening and compiling a legitimate project; and long-term behavior on arbitrary sites or AI clients. No business, publishing, or account outcome is claimed.
 
-此仓本地候选已将固定 `check-login` 接到 Guest、Host、Broker 和 Broker 模式 MCP 源码。可选客体 sidecar 的原始字节 SHA-256 与频道项目绑定；查询只能在持有对应频道租约后发起，Broker 对动作持久记账、保存布尔结果供同 ID 重放，并要求 ACK。MCP 新工具零参数，只返回 `{"login":true|false}`；未知响应或 ACK 状态时停止会话，不自动重试。旧三个 Windows 工具及无微信配置的旧频道仍按原路径工作；`open`、编译、上传和页面自动化均未接入此工具。
+Windows Channels and Task Lease are [separate experimental components](../README.md#other-components). Their isolated tests or synthetic actions do not expand the Lite trial's acceptance.
 
-独立检查在私有源码核 Windows Python 136/136、Task Lease Python 119/119；隔离 Broker HTTP→Host→模拟 Hyper-V→Guest 的真假结果、重放、ACK、释放和 Broker 重启后的 SQLite 结果重放通过。Windows 与 Task Lease 的 PowerShell 5.1 包内测试通过；这些只证明源码与替身环境。01 正式 A/B 客体仍运行旧 agent，正式 Broker 未升级，新增 MCP 工具未注册，也未用真实微信 CLI 走新路径。当前无合法小程序项目/AppID，真实导入和编译未验；对真实微信账号使用新工具需用户另行授权。此处不表示可下载安装使用或已取得商业/开源发布批准。以下较早小节保留历史阶段信息，以本节的源码范围为当前准则。
+---
 
-## 2026-09-28 Windows 微信 CLI 只读查询源码候选（未公开发行）
+该 [Alpha 23 r2 试用包](../downloads/Agent-Channel-Windows-Linux-alpha23-r2.zip) 属于开发机候选；包清单与 SHA-256 见[安装说明](INSTALL.zh-CN.md)。公开 Release 仍是旧版。源码测试、包校验和本机修复，不能代替另一台电脑的独立首装。
 
-本地候选新增客体内固定 `check-login`：只有可选的私有 sidecar 已配置、项目 ID 匹配、频道令牌与当前客体租约有效、agent 模式和桌面就绪时才执行；CLI 返回后重查租约与桌面。`open`、host 客户端、Broker 持久动作确认和 MCP 均未接入。无 sidecar 的旧安装路径保持原行为。构包、离线安装、Stage/Switch 用清单、固定启动参数和受保护 ACL 约束 sidecar；私有配置、令牌与项目路径不在此源码仓。
+一台 Windows 开发机在核对现有镜像和容器归属后，按明确修复路径安装了 Alpha 23。安装文件、记录与运行镜像一致，末次诊断 healthy、零失败。新的 MCP 会话在两个独立 Linux 频道分别输入不同中文、按 Enter、点击按钮，并读回各自保存值；结束后无遗留租约或输入错误。已安装查看器的 Alt+1/2/3、频道独立暂停与接管、缩放客体画面上的实际点击通过。
 
-独立 Checker 在私有源码上验证 Windows Python 123 项、PowerShell 5.1 三组 50/18/31 项，含 Stage 有/无 sidecar 的隔离模拟 Apply；最终源码重构的私有合成成品 48/48 文件哈希一致，内置 Python 模块导入通过。公开候选只同步白名单源码，其中 Switch 转换专项测试未列入当前公开白名单。**正式 A/B 客体尚未部署本候选**，合法 AppID/项目、真实微信 CLI 输出及编译均未验收；此处不代表可从 Codex 调用微信 CLI。本仓未 push、tag 或发布 Release。
+覆盖双频道动作的一次约 31 秒、100 ms 间隔宿主前台采样，在采样点均看到 AI 客户端；早前一轮曾短暂看到终端切换，原因未知，不能推断更短瞬间绝无切换。试用包完整文件哈希、PowerShell 5.1 隔离安装成功/失败分支通过；保留数据卸载只做了隔离测试。登录恢复入口可启动，但本轮没有整机重启。
 
-## 2026-09-28 Lite alpha.16 源码与 01 实测（本地候选，未公开发行）
-
-01 已从私有 alpha.16 ZIP 原位升级并后台运行双 Lite 频道，安装诊断 15/15；两频道读取到各自私有 Linux 显示，保留原浏览器资料卷和三类本机凭据。容器中的 `GTK_THEME=Adwaita:dark` 已在两频道实际生效，Firefox 标签栏、地址栏和安全提示条变深，原安全提示与会话恢复标签仍可见。独立 Checker 在同运行代码的 alpha.15 Viewer 实测 Alt+1/2/3、频道身份、展开菜单、迷你控制条和“退出并暂停输入”；alpha.16 EXE 与其只有构建时间戳和模块 ID 字节不同。
-
-alpha.16 私有 ZIP 的 70/70 包文件与 45/45 源码清单已由独立 Checker 核对，包内 Windows PowerShell 5.1 恢复专项通过；01 的真实 PS5.1 离线镜像复用预览、Apply 和启动也通过。此处不证明 DELL 首次 Docker 镜像构建、客体 AI 写入、有效微信项目编译或宿主最终冷启动。以下较早小节保留当时验证范围，涉及“01 仍是 alpha.13、alpha.14 尚未实装”的描述已被本节状态覆盖。此仓仍未 push、tag 或发布 Release。
-
-## 2026-09-28 Lite Viewer 可见退出入口（历史源码阶段，后进入 alpha.16）
-
-展开和迷你控制条加入可见“⋯”菜单入口，复用托盘菜单已有的“退出并暂停输入”和逐频道暂停流程。此处记录当时的私有 csc 构建、非 GUI 自测与独立静态布局审查；其后同运行代码的 alpha.15 已经真实窗口点击验收，alpha.16 在 01 安装运行。高 DPI、纯键盘和暂停失败路径仍未验；未进入公开 Release。
-
-## 2026-09-28 Lite alpha.14 外观与离线升级源码候选（未公开发行）
-
-新增显式 `-ReuseExistingBackendImage` 离线升级入口：只对已有 Lite 安装开放，预览阶段核对本机 Docker Linux engine、旧安装后端文件、镜像、Compose 容器和持久卷归属；执行前再核对镜像内后端文件。使用本地镜像时不构建或拉取镜像，数据卷继续保留。默认安装流程仍构建新版镜像。此路径不适用首次安装，也不证明新版 Dockerfile 镜像已构建；正式 01 安装和真实容器升级尚未验收，没有对应公开 Release。
-
-公开候选树的 Lite 源码清单已按工作树实际字节核对 45/45；Windows PowerShell 5.1 `RecoveryOnly` 隔离产品测试通过，结果确认未触碰真实 Docker、Docker Desktop 或登录启动项。该测试使用模拟环境，不替代真实升级验收。
-
-01 当前 Codex 会话已通过原生 MCP 实际只读调用 Lite 两频道的状态与截图，以及 Windows A/B 租约频道状态，目标分别是不同私有显示/客体；Lite 仍 paused、零输入，这不证明 AI 写入闭环。现行 Lite alpha.13、Windows alpha.20、Task Lease alpha.23 的本机只读诊断分别为 15/15、16/16、ready；DELL 尚未首装。
-
-当前 Firefox ESR 报创建非特权 user namespace `EPERM`。隔离临时容器的默认 seccomp/临时移除该层对照已确认 Docker 默认策略直接阻止该探针；没有测试完整浏览沙箱。正式产品未放宽 seccomp，也不隐藏安全提示。alpha.14 在 Dockerfile 及双频道 Compose 环境设置 `GTK_THEME=Adwaita:dark`。独立新 profile 临时容器截图证实 Firefox 标签栏、地址栏和提示条转为深色，安全警告仍可见；正常/异常退出的会话恢复问题没有因此解决。Compose 解析确认两频道接收该变量并继续引用本机已有镜像；backend 合同测试 6/6、产品恢复专项通过，私有候选 ZIP 70 文件已构建。完整产品测试需占用正式 Lite 使用的 18761/18762，未停正式服务为测试让路。Docker Hub 基础镜像下载失败，新 Dockerfile 镜像和 01 实装仍未验；正式容器仍为 alpha.13，不能以 Compose 配置推断外观已升级。没有 alpha.14 公开 Release 或对外可用性声明。
-
-上游依据：[Mozilla Linux 安全提示](https://support.mozilla.org/en-US/kb/linux-security-warning)、[Docker seccomp 说明](https://docs.docker.com/engine/security/seccomp/)。
-
-## 2026-09-28 Task Lease alpha.24 本地源码候选（未公开发行）
-
-新源码加入持久维护门：仅能从本机私有数据库的离线命令开关，启用后新租约、固定动作和输入返回 503，旧等待请求不补跑；已开始动作可收尾，旧租约可确认与释放。独立审查发现初版 `/run` 会在拒绝前留下运行记录，修复后新 run 与维护切换在同一 SQLite 写事务中定序。最终 Lease 22 项、Broker 75 项通过；公开白名单 33 项哈希核对，独立导出树 Python 110 项通过（1 项跳过）、产品 5 项及 Windows 包测试通过。私有 alpha.24 ZIP 另经独立 Checker 验证 24/24 包文件、隔离安装、运行诊断和维护开关；合成 guest/Lite 后端的真实 Broker HTTP 测试中，维护后旧有效租约的新输入被拒且后端动作数不增加，重启后仍生效。以上均不等于真实客体传输或 01 共享服务已升级；01 当前仍运行 alpha.23，DELL 未独立安装。
-
-Lite Firefox 隔离新资料卷测试还观察到重复欢迎页、异常退出的原生恢复页，以及正常停止后一个合成测试页的未保存文本未恢复。不能据此推断所有网站，但停止或升级前应保存表单和草稿；本候选没有隐藏安全提示、关闭恢复或自动确认多标签退出。
-
-## 2026-09-28 Task Lease alpha.23 本地源码候选（未公开发行）
-
-alpha.22 的隔离 n8n 2.39.6 CLI 试验发现：工作流被 REST stop 标为 `canceled` 后，排队中的 HTTP Request 仍可能保持连接，频道释放后才执行固定动作。alpha.23 为显式传入 n8n execution/workflow ID 的单动作 `/v1/run` 增加本机公开 API 状态监督：只在相同执行仍为 `running` 时开工，已取消或状态不可读时撤队；`/v1/cancel-run` 可主动撤销同绑定且尚未开工的请求。API key 只从私有文件读取，状态源限本机回环且不跟随 HTTP 跳转。未配置状态源时 n8n 仍应使用默认即时 `409 busy`。
-
-私有源码 Python 101/101、公开导出树 Python 101 项（其中 1 项依赖未公开的本机配置而跳过）、5 项产品测试及 Windows PowerShell 5.1 产品包回归通过。独立 Checker 在隔离 n8n 2.39.6 CLI 上对源码和最终 alpha.23 ZIP 分别验收：执行取消后 waiter 在原占用释放前从 1 降为 0 且未补跑；正常排队接续；已开工动作 stop 后完成并释放；失败动作为 HTTP 502，旧 request ID 回放不重做。最终私有 ZIP 的 24 个白名单文件与清单哈希、CRC 均匹配；公开 Task Lease 源码白名单 33/33 项哈希匹配。隔离测试服务已停止。01 已从该 ZIP 侧装并切换常驻，安装诊断确认服务进程属于 alpha.23；`lite-1` 短租约获取与释放通过，末态四频道无占用或脏状态，共享 n8n 健康检查仍为 200。共享实例尚无执行状态源或普通固定动作频道，DELL 未首装；私有包未作为公开 Release 发布。Webhook/UI 执行、多节点长流程、Windows/Lite 输入及最后一次状态检查到动作启动之间的竞态不在本次验收内。原始日志与凭据不在本仓。
-
-## 2026-09-28 Task Lease alpha.22 本地源码候选（历史记录，未公开发行）
-
-原有 n8n 工作流按 `Acquire → 动作 → Release` 顺序执行时，隔离 n8n 2.39.6 的真实报错和 REST 停止都跳过末尾 Release；普通频道在 TTL 前仍占用，之后才可被后继获取。新源码为非客体、非 Lite 频道的单个已注册短固定动作加入 `/v1/run`：Broker 一次请求内负责获取、执行和释放，持久绑定请求 ID，已确认结果可回放，未知结果不自动重做。私有源码 Broker 60 项、Lease 19 项，公开导出树 Python 92 项（1 项私有环境测试跳过）、5 项产品测试与 PS5.1 包/公开导出回归通过；Task Lease 公开白名单 33/33 文件大小与 SHA-256 匹配。
-
-01 从私有干净提交构建的 alpha.22 ZIP 在独立目录核对 24/24 文件哈希后，用包内 Broker 与隔离 n8n 2.39.6 实测：固定动作 exit 7 返回 HTTP 502 `action_failed`，工作流为 `error`，同 ID 回放不重做；默认不设 `wait_seconds` 时忙碌立即 409、无排队且频道释放后不补跑；已经开始的短动作即使工作流被 REST 停止，Broker 仍完成一次并释放。另一项 alpha.21 包的隔离试验发现，排队中的 n8n CLI 执行虽被标记 `canceled`，HTTP 等待仍可能继续、之后运行，因此当前 n8n 接法推荐默认立即 409。以上不证明所有 n8n 执行模式、长流程、Windows/Lite 输入或未接入 Broker 的工具具备取消清理。01 常驻仍为 alpha.20，DELL 未独立安装；alpha.22 私有试用 ZIP 不在公开 Release。测试原始日志与临时凭据不在此仓。
-
-## 2026-09-28 Windows alpha.19 本地源码候选（未公开发行）
-
-Windows alpha.18 私有试用 ZIP 缺少三凭据客体的离线安装脚本，包内旧说明还引导用户使用仅接受单令牌 payload 的 Direct 安装器；它不能作为双原生频道 Broker 门禁的独立首装包。alpha.19 本地候选已把 `Install-GuestPayloadOffline.ps1` 及其模拟测试纳入产品包和公开源码白名单，说明区分客体 channel/broker/human 三枚凭据与 Task Lease HTTP Bearer，并要求先核对真实 VM 身份。公开清单 68/68 项的大小与 SHA-256 已在候选树核对；公开源码独立构包 91 文件、PowerShell 5.1 产品回归、Windows Python 109 项和离线预检模拟 14 项通过。
-
-01 从私有提交 `2ee8b3b` 构建的 alpha.19 ZIP 在独立目录解压、逐项核 91 个文件哈希，并完成不导入既有配置、不启动 Viewer 的用户级首次安装；首次设置 Inspect 如实返回 `setup-required`，未创建 VM。离线安装模拟只覆盖计划、拒绝路径和启动参数检查，**未运行 `-Apply`、未挂载真实 VHDX、未确认真实客体用户资料或代理启动**。01 正在运行的 Windows 客体与查看器未用此包热升级，DELL 首装和真实 Broker 门禁仍待验证。该 ZIP 仅在私有产品交付仓，不是公开下载资产。旧截图与主题素材的发布范围问题仍未解决。
-
-后续 01 本机从最终 alpha.19 ZIP 侧装 Host，保留正在运行的旧 Viewer 与现有三凭据客体。两个独立 MCP 进程分别读到 A/B 的 agent 状态、桌面截图和 `begin/finish` 工具 schema，并各完成一次 `begin(wait=0) → 合成鼠标移动 → finish`；两客体动作计数各增加 1，Broker 四频道末态无租约或 dirty。旧直连 MCP 对两客体的无租约输入均被客体拒绝，动作计数不变。本机 Codex 配置已指向 alpha.19 租约入口、停用旧直连，但修改前已加载的客户端还需重载才可宣称其原生工具生效。Lite 两 MCP 也已配置 Broker 参数并从独立进程读到新 schema；两频道仍暂停，实际输入待人工交接。
-
-登录预检发现 01 的 Lite 启动器原本只能在默认目录找到旧版 Windows 安装，实际运行的新版 Viewer 位于另一个目录，且用户 Startup 原无 Windows 入口。现从 alpha.19 包在独立目录注册 Windows 登录启动项并导入现有 A/B 身份及三凭据；Lite 14/14、Windows 16/16、Task Lease ready、两 VM 与两 Lite 容器运行、共享 n8n 健康检查 200。alpha.19 Viewer 自退出自检为 exit 0、两频道 Alt+4/5 映射有效，但自检明确 `gui_tested=false`；下一次真实登录、热键注册和宿主冷启动仍未验。01 无可用微信小程序项目/AppID；DELL 首装、真实客体离线 `-Apply` 及有效项目编译仍待验证。
-
-## 2026-09-28 Lite alpha.11 / Task Lease alpha.20 本地候选（未公开发行）
-
-01 本机已安装 Lite `0.2.0-alpha.11` 与 Task Lease `0.1.0-alpha.20`。Lite 的两套 Linux 浏览器容器在升级后保持原有持久卷，安装诊断 14/14 项通过；Task Lease 由登录任务运行，安装诊断显示服务进程属于新版安装。Broker 识别四个固定频道：两套 Windows 客体和两套 Lite 浏览器频道。检查时四个频道均无活动租约或待确认输入，原有 n8n 健康检查返回 200，两台 Windows 客体运行中。这些是 01 的本机状态，不等于 DELL 首次安装或公开 Release。
-
-本候选将 Lite 的三枚令牌分开：频道令牌只读状态与截图，查看器令牌允许人接管及人工输入，Broker 令牌只在已获租约且频道交给 AI 时允许代理输入。01 双频道的真实接口试验确认旧频道令牌调用控制与人工输入均被拒，Broker 令牌不能代替查看器接管，暂停状态下无法获取 AI 输入权。新版启动脚本还要求后端报告 `input_auth=broker-v2`；01 用旧容器镜像模拟升级时，启动确实拒绝并停下两套容器，两个持久卷保留。随后本地构建新版镜像并恢复两个频道。私有源 Lite Python 45 项、公开白名单源码 41 项、Task Lease Python 82 项、Windows 离线客体脚本模拟 14 项，以及产品包与公开导出回归通过；Lite 少的 4 项是依赖私有试点项目绑定的测试，未列入公开白名单。新版 Lite 画面已截图复核；Firefox 原生安全提示与恢复标签仍可见。
-
-此阶段未让 AI 在 Lite 频道实际输入，也未做安装新版后的整机冷启动。没有有效 AppID 小程序项目，故微信真实编译/调试仍未验收；DELL 独立首次安装、跨机资源表现与真实混合工作流亦未验。公开候选只提供源码及构建路径，本节不表示下载页已有 alpha.11/alpha.20 安装包。旧 Windows/微信界面截图与生成素材的使用范围仍需发布审查。
-
-## 2026-09-28 Task Lease alpha.17 候选（本地，未公开发行）
-
-Task Lease alpha.17 为明确配置的短时固定 Broker 动作增加按任务尝试分离的 Git 工作树与树外构建目录。01 从候选 ZIP 逐项核对 23 个文件哈希，在隔离测试目录用包内 Broker 让同一个 Git 项目的两个任务并行编译到不同 `app.pyc`，两动作各自真实绑定不同本地端口，时间区间重叠，源项目未产生编译文件。alpha.11 的 Windows Git 长路径失败与 alpha.12 的同项目配置拒绝均已修复。alpha.13 的无界输出和派生进程残留风险经修复后，独立审查又发现 alpha.14 的 Broker 崩溃窗口；alpha.16 在动作启动前持久标记端点，确认进程树清理后才自动放行，Windows Job 随 Broker 句柄关闭清理普通后代。alpha.17 还核对实际监听进程所属安装，避免旧 Broker 占着同一端口时把新安装误报为就绪。源码和公开导出树各 77 项、迁移 5 项、PowerShell 5.1 包与 32 文件公开导出回归通过。合成运行证据留在产品私有任务目录；此仓不含本机配置、token 或原始执行目录。
-
-01 常驻 Broker 已保留原私有数据切到 alpha.17；实际监听进程来自新版安装，旧安装指向同端口诊断会返回未就绪。双频道无活动租约或 dirty，真实获取/释放一次无客体输入租约通过，Lite/Windows 诊断与原 n8n 健康检查仍通过。DELL 未独立安装，公开 Releases 仍是旧 Alpha。新隔离仅适用于主动通过 Broker 执行的最多 8 秒固定动作；操作系统创建进程本身不受严格截止时间约束。端口环境变量不能强制外部程序遵循，未接入的 Codex、微信 CLI 与 n8n 步骤不会自动改用工作树；故意借外部服务脱离 Job 的动作和已发生的外部副作用仍需另验。长编译、产物清理、有效 AppID 项目编译及 alpha.17 整机冷启动恢复均待验。
-
-## 2026-09-28 01 重启后本地候选（尚未公开发行）
-
-测试宿主实际重启后，双 Windows 客体、Windows 查看器及 Task Lease 服务自动恢复；Docker Desktop 未随登录启动，Lite 首次未恢复。手动启动 Docker Desktop 与 Lite 后，双 Linux 频道和原有 n8n 恢复。这个开机结果中 **Lite 自动恢复失败**，不能用手动恢复代替通过。
-
-随后从干净源码构建并在 01 安装 Lite `0.2.0-alpha.8-local` 与 Windows 频道 `0.1.0-alpha.16`。两包独立解压后的 66／89 项文件哈希均匹配；安装版诊断分别通过 13/13、14/14。真实按键 Alt+2/3、Alt+4/5 分别进入 Lite 与 Windows 频道，Alt+1 从两种查看器均返回宿主。四个原生 Codex MCP 的只读状态调用均返回对应独立环境；新版安装后没有重复执行 AI 输入。修复版 Lite 在 Docker 已就绪时用登录恢复入口启动通过，**修复后的整机冷启动仍待复验**。
-
-私有交付 ZIP 又在任务隔离目录做了无现成配置的首次安装：Lite 生成与 01 不同的本机 token，登录快捷方式带恢复参数；Windows 包完成安装但没有伪造客体配置。该试验不等于 DELL 实机安装或运行。Lite 恢复和跨查看器返回的隔离回归、Windows 完整产品包回归、公开源码清单校验均通过。当前公开 Release 仍是较早 Alpha，本文新增功能没有对应的公开下载资产。
-
-Task Lease 新增可选 `wait_seconds`（0–300 秒）：省略时仍立即返回 `409 busy`；显式等待按同一端点 FIFO 排队，最多 64 位，其他端点可并行。独立代码审查先复现短重试误撤队、长动作锁超时及活等待者心跳被误清三项问题，修复后重新复现关闭。最终 Python 52/52、迁移 5/5、PowerShell 5.1 产品包与公开源码导出测试通过。独立 n8n 2.39.6 容器与合成 Broker/SQLite 二次实测三条工作流：A1 执行动作约 6 秒，A2 同端点获取租约等待约 3.0 秒后才执行，B1 不同端点立即获取并与 A1 重叠；三项成功。隔离服务已停止。随后 01 常驻 Broker 保留私有数据切到 alpha.10，真实端口的两次无客体输入租约请求验证同端点等待约 0.73 秒后接续，释放后 A/B 均无活动租约或 dirty；两项原生 Codex 租约 MCP 状态读回通过。新登录任务的整机冷启动恢复、升级后的客体输入与 DELL 实机仍未测。新包在独立目录首次安装生成私有凭据，未预置客体配置。
-
-2026-09-28 后续复验：两项独立 Codex 原生 MCP 任务分别持有 A/B Windows 客体并各执行一次合成鼠标移动；Broker 高频状态记录到两租约同时活跃，客体动作数各增加 1，结束后无租约或 dirty。一个 Codex 任务持有 A 时，隔离 n8n 2.39.6 工作流在同频道 Acquire 等约 5.9 秒后成功并释放，没有客体输入，也没有修改共享 n8n。Windows Channels 新版 Broker MCP 默认在同频道排队最多 30 秒；在 01 常驻 Broker 上源码客户端等待约 2.6 秒成功，显式 1 秒超时后新客户端仍可使用。独立从私有 alpha.18 安装包启动的 MCP 进程完成协议握手、状态读取、默认排队约 2.1 秒和同进程连续两轮获取/释放；109 项 Windows Python 测试及 66/43/27 项公开源码清单核验通过。PowerShell 5.1 产品包回归在私有源码树通过；公开候选首次运行在编译模拟热键查看器时失败，立即复跑通过，单次失败原因未定位。以上均为 01 合成验证；当前 Codex 客户端仍加载旧 MCP 路径，新版本在 Codex 中的真实调用、DELL 首装、有效 AppID 项目编译与修复后宿主冷启动仍待验。
-
-公开候选 CI 现在只运行测试、构建并上传工作流产物；即使推送版本标签，也不再自动创建公开 GitHub Release。两版主题图的生成调用、提示、原始文件与当前字节哈希已从本产品任务记录中交叉核实；两张旧截图也已对应到 01 测试机的原始截图。来源链详见 [素材记录](ASSET-PROVENANCE.md)。来源核实不等于第三方使用范围或独占版权已核准：旧 Windows 截图包含 Windows 和微信开发者工具界面，仍需发布前判断。
-
-首页现改用 `docs/images/workspace-concept.svg`：这是在本仓以 SVG 图形和文字编写的产品结构示意，图内和替代文字均标明并非实机截图，未嵌入系统或第三方软件画面。SVG 在本机渲染读回过。旧两张 PNG 仍在仓库中、只是首页不再引用；尝试移除这两项文件遭宿主自动审批策略拒绝，文件未变，因此旧 Windows 截图的公开范围问题仍须在发布前解决。
-
-2026-09-28 只读发布边界审查确认：两张旧截图自公开候选的初始提交起即为 Git 跟踪文件，首页不引用也不会阻止克隆、GitHub 自动源码归档或历史访问。当前不能把完整候选 Git 树当作已完成素材和隐私审查的公开下载包。Lite、Windows Channels 与 Task Lease 的构包脚本使用显式白名单，旧截图不在这三份产品 ZIP 中；这只限定分发范围，最终待发布 ZIP 仍需逐字节核查许可证、通知、素材、秘密和哈希。生成壁纸的来源及哈希不等于使用权和视觉审查，预构建 Docker 镜像若单独发布还需另查镜像内组件许可。此审查没有删图、改写历史或发布资产。
-
-以下章节保留各阶段当时的验证事实；版本、安装状态与未测项以本节为准。
-
-## 2026-09-28 早前新版开源源码候选（历史记录）
-
-Windows Channels 白名单扩至 66 个源码文件；独立 Task Lease 白名单含 27 个固定文件。分别从导出树执行测试：Windows Python 91/91、Windows PowerShell 5.1 产品包 89 文件与公开源码往返构建通过；Task Lease Python 41/41、迁移 5/5、PS5.1 产品包与源码导出测试通过。源码与私有产品协作仓分开，本候选尚未作为 GitHub Release 发布。
-
-一台测试宿主的两台专用 Windows 客体已升级为三凭据租约门并分别重启：自动登录和代理恢复，默认输入暂停；在已获授权的 AI 控制模式下，两项独立 Codex MCP 任务各自输入合成标记，截图只显示对应客体。隔离 n8n 2.39.6 工作流持有 A 频道约 50 秒时，同频道第二项 n8n 与 Codex 任务被拒；B 频道的 n8n 与 Codex 同时成功。Broker 的 `guest_dirty` 与确认回执保留输入不确定状态，慢 guest claim 跨越本地租约期限后不发送输入。此证据验证指定客户端走同一租约门时的互斥，不代表任意第三方工具自动接入。
-
-当时本机 Viewer 已实际以 Alt+4/5 查看两台 1366×768 客体、Alt+1 返回宿主；新版深色单行顶栏不再常驻空白输入行。当前用户登录任务实际拉起 Broker，受限任务身份可读取迁入私有数据目录的频道凭据；查看器当前用户 Startup 入口和双客体登录任务均已分别验证。该阶段尚未做宿主整机重启、第二台机器首装、高 DPI 长时使用或微信有效 AppID 项目编译。两台客体内官方微信 CLI 的 `islogin` 均返回 true，仅证明服务端口连通与已登录状态。Windows 评估版系统和第三方微信工具均不随开源包分发。
-
-## 2026-09-27/28 本地候选复核（尚未公开发行）
-
-一台 Windows 测试主机的轻量版 `0.2.0-alpha.6-local` 已实际升级安装，两个 Linux 频道诊断 `healthy`、各自持久数据卷保留，原生 Codex MCP 状态/截图可调用。欢迎页采用简洁频道视觉，容器里真实页面与源码 SHA-256 一致；Firefox 原生安全提示和旧恢复标签仍可见。Windows 两台专用客体重启后可自动登录并恢复交互 agent，原生 MCP 状态均为 `desktop_ready=true`，两台客体截图确认 AI 空间背景。自动登录只在经用户授权的专用客体上配置，微软 Sysinternals 工具及凭据不在源码包内。
-
-Windows 候选包 `0.1.0-alpha.7-local` 通过 77 文件校验、公开源码往返构建、PS5.1 安装/诊断和双进程改键回归。测试主机的版本化候选查看器实际从 Alt+4/5 改到 Alt+6/7，再改回 Alt+4/5，原进程未重启，每次均报告注册 2 个、失败 0 个；标准安装根仍是旧版，因当前 MCP 进程占用未强制覆盖。物理按键操作及第二台机器的独立安装仍待验收。
-
-后续真实操作发现，两个 AI 任务都自然使用 `key="ENTER"`，而旧客户端只接受 `Return`，错误被概括为客体拒绝。用原规范键名 `Return` 后，B 客体在 Edge 打开公开的 example.com，A 客体启动微信开发者工具并查看安全设置；检查时 A 的“服务端口”关闭。源码已增加 Enter/ENTER 别名并改进 MCP 说明；37 项 Windows Python 测试与 77 文件产品包回归通过，新 alpha.8 候选包从干净的已提交源码构建。别名仍未在真实升级安装后复验，微信官方 CLI 项目编译未测。
-
-在用户明确授权后，两台专用 Windows 客体的微信开发者工具服务端口分别开启；官方 `cli.bat islogin` 在各自客体内连接各自 `127.0.0.1` 服务并返回 `{"login":true}`。没有执行登录、项目导入、编译或发布。alpha.8 源码客户端的 `CTRL+L` 和 `ENTER` 别名经真实 B 客体输入通过；标准安装版尚未升级。宿主 Task Lease 不能直接把自己的 `127.0.0.1` 当成客体的 CLI 端口，跨客体 CLI 桥与实际项目绑定仍是后续产品工作。
-
-本地任务租约 broker 在隔离 n8n 2.39.6 中完成两工作流并行验证：不同频道动作重叠约 3.9 秒，同频道竞争返回 busy/HTTP 409。它只保护经 `/v1/execute` 的固定动作；目前没有自动拦截现有 MCP、微信 CLI、Computer Use 或 n8n 工作流。用户将两个 Windows 客体交给 AI 后，两项独立 Codex 测试任务分别用原生 MCP 在各自客体记事本输入不同合成标记，真实截图回读未串台；这不证明两个动作同时发生。真实网页与微信任务并行、微信项目编译/调试和 Codex+n8n 混合运行尚未通过验收。此段只是候选源码的本机证据，不表示已公开发布或可在所有电脑直接运行。
-
-## 2026-09-18 Lite 修复复核
-
-公开源码同步了本机复核的 Lite 修复：Windows PowerShell 5.1 无参数入口路径、固定 `127.0.0.1:18761/18762` 端口契约、升级快捷方式事务回滚，以及欢迎页对 Firefox 原生安全/恢复提示的说明。产品包回归在 Windows 主机完成：65 个包文件、42 个公开源码文件、Viewer 自检、PS5.1 安装分支、隔离 Docker 启动契约和公开源码 round-trip 均通过；Python 单元测试 28/28 通过。
-
-本机真实复核还确认两个频道认证状态、JPEG 截图、stdio state/screenshot 和暂停输入拒绝边界；这不扩大 Lite 的产品边界。Lite 仍是 Windows 宿主上的两个 Linux 浏览器容器，原生 Windows 应用隔离、原生 AI 客户端输入批准闭环、复杂网站/长时运行和高 DPI 真人回归不在本次 Alpha 承诺内。
-
-2026-09-17，Windows 主机本地验证。两个下载包分别是 Linux 轻量工作区与 Windows 原生工具兼容环境，不是两种宿主操作系统的发行包。
-
-## 轻量版
-
-已完成：源码构建、用户级安装、后台进程启动、旧快捷键自启动备份停用；两套真实 Linux 容器及持久 home 数据卷已启动，旧浏览器资料已迁入。安装器在临时目录验证过 PS5.1/PS7、升级、私有 token、公开源码导出后复建。
-
-本机实际验收通过：双频道各自中文输入并保存、人工接管拒绝 AI 输入、暂停拒绝双方输入、HTTPS 网页访问、浏览器下载及取回本机；重建两个容器后各自表单 localStorage 与下载文件保留。安装查看器的 Alt+1/2/3、人工模式地址导航、中文粘贴和控制条收起已实测。
-
-MCP 适配器在真实后端完成 stdio initialize/tools/state；输入与截图接口也已实测。Lite 在原生 AI 客户端中的加载、批准与实际输入闭环仍待分别验收，不等同于 Windows 版已有的原生 state/screenshot 证据。首版固定两个频道；任意数量配置、音视频和复杂网站的长期日常使用仍待验证。
-
-当前轻量显示采用 JPEG 静帧刷新，人接管时请求间隔250ms，实际帧率取决于截图和机器负载；它还不是视频串流。Firefox可能提示当前容器环境的部分OS保护不可用，此提示没有被隐藏；本版不作为运行敌意代码的强安全沙箱。Docker/WSL运行时本身的资源开销不包含在单容器内存统计中。
-
-2026-09-28 的早前本地候选修复了 Lite 与新版 Windows 频道共存时的诊断误报。PS5.1 隔离测试验证兼容 alpha.13 通过，旧版、文件篡改及超出 Alt+4..9 范围的配置仍报警；01 本机升级 Lite alpha.7 后诊断 `healthy`、13/13 项通过，双 Linux 频道认证状态正常，Windows 启动项仍在。宿主真实 Alt+2/3 分别显示频道 1/2，Alt+1 返回原窗口；截图保存在私有任务证据中，未含入公开仓。该阶段尚未对应公开 Release，DELL 独立安装和宿主整机重启均未发生；后续重启结果见文首。
-
-## Windows 兼容版
-
-| 项目 | 状态 |
-|---|---|
-| 双客体截图、agent/human中文输入、项目隔离 | 真实测试通过 |
-| 暂停、人工接管及显式恢复 | 真实测试通过 |
-| 微信开发者工具游客模式中文搜索 | 两台通过；不代表账号登录或开发发布业务通过 |
-| 安装版频道切换/显示 | 本机观察通过；新版全屏体验由试用用户确认可用 |
-| 工作台直接点击和中文输入 | 开发构建通过，最终安装构建完整回归待补 |
-| 30分钟双频道活动 | 7轮、14张截图核验通过，未出现串台 |
-| 锁屏/恢复 | 待验证 |
-| 原生MCP | 独立 Codex 客户端状态/截图通过；两项独立 Codex 任务在不同 Windows 客体的合成输入与截图回读通过，真实微信工作流待验 |
-
-2026-09-28 早前本地候选补齐 Lite 共存的首次设置约束：检测到 Lite 时，Windows 向导与 `Inspect` 只给 1–6 台，命令行创建 7/8 台会在调用 VM 创建脚本前拒绝；没有 Lite 仍可选择 1–8 台。PS5.1 产品包测试、公开源码往返及候选树独立回归通过，包内 89 项文件校验与新安装根预览通过。该阶段设置改动尚未装入当时运行的 alpha.13 查看器；后续 alpha.16 已安装，但 DELL 实机首次设置仍未验证。
-
-首次Windows客体准备仍有手工步骤；必须保持可用的已登录交互会话；显示不是视频级远程桌面。一例输入无可见结果在重启后恢复，根因尚未确定。
-
-01 当前 Lite 浏览器顶栏仍有 Firefox 安全功能提示。Firefox 日志为用户命名空间创建 `EPERM`，Docker 容器非特权且 seccomp 生效；[Mozilla 的问题记录](https://bugzilla.mozilla.org/show_bug.cgi?id=1938410)说明 Docker 默认 seccomp 可导致该提示。网页频道的可用性与浏览器全部安全特性可用是两件事；候选版未隐藏警告或改动容器权限。
-
-公开包不分发Windows系统、用户账号或第三方商业应用。评估系统的有效期及授权要求不会因启程封装而改变。
-
-2026-09-28 的本地候选给 Lite 与 Windows MCP 状态、截图工具声明 `readOnlyHint=true`，输入工具显式声明为写操作。Lite 46 项、Windows 110 项 Python 测试通过。01 的两条 Windows 租约 MCP 从新版 Host 启动后，独立 Codex 模型分别读取 A/B 客体状态；A 完成 `begin→finish`，B 完成 `state→begin→move→finish`，均没有点击或输入文字，Broker 末态无租约或脏状态。该调用依赖用户对两个专用频道的明确授权、人工“交给 AI”和本机 Task Lease；只读标注本身不是权限控制。Lite 两频道仍处暂停，未将其 AI 输入记为通过；DELL 独立安装、最终版冷启动与真实微信项目编译仍待验证。
-
-2026-09-28 后续 Lite alpha.13 本地候选增加 Windows 首装 1/2 个频道选择，默认 1 个；旧双频道安装升级保持 2 个，缩减时仅在 Compose 安装目录归属匹配后停止频道二容器并保留数据卷。下载导出也核对容器工作目录，异目录在复制前拒绝。PS5.1 和 pwsh 的隔离假 Docker/REST 恢复专项通过；公开候选 Python 42/42 通过。独立 Checker 从未公开的最终 ZIP 核对 70/70 包文件及 45/45 源码清单，在隔离目录用 PS5.1 完成单/双频道安装，Viewer 自测退出 0 且报告 `gui_tested=false`。01 正式 Lite 仍运行早期双频道版；真实 Docker 2→1→2、GUI 快捷键、用户机器首装与浏览器长期使用尚未验收。这些源码更改尚无对应公开 Release。
-
-实际只读截图证实两个正式 Lite 频道已显示新版深色欢迎页，但 Firefox 原生标签/地址栏、会话恢复标签及 reduced-security 提示仍可见。隔离首启出现 Mozilla Privacy Notice 标签；正常停止/重启、无 URL 启动和温和关闭的试验得到不同会话恢复表现，现阶段没有安全可靠的自动消除方式。候选版没有隐藏安全提示、替用户接受条款或放宽 Docker 权限。
+**仍待验证：**另一台物理 Windows 电脑的独立首次安装、联网构建与重启恢复；其他物理 DPI 或多屏；真实微信登录、合法项目打开与编译；不同网站和 AI 客户端的长期使用。这里不声称任何业务、发布或账号结果。Windows Channels 与 Task Lease 属于[独立实验组件](../README.zh-CN.md#其他组件)，其隔离或合成测试不扩大本次 Lite 试用验收。

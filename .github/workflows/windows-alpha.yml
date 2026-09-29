@@ -1,4 +1,4 @@
-name: Qicheng two editions
+name: Agent Channel build and tests
 on:
   push:
     branches: [main]
@@ -29,6 +29,9 @@ jobs:
       - name: Lite package and installation tests (temporary directories)
         shell: pwsh
         run: ./tools/agent-channels/product/tests/Test-ProductPackage.ps1
+      - name: Lite installed-version consistency tests
+        shell: pwsh
+        run: ./tools/agent-channels/product/tests/Test-InstalledConsistency.ps1
       - name: Task Lease unit and migration tests (no VM)
         shell: pwsh
         run: |

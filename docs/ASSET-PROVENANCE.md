@@ -5,7 +5,7 @@
 | 素材 | 可复核来源 | 当前 SHA-256 | 状态 |
 | --- | --- | --- | --- |
 | `tools/windows-channels/theme/ai-space.png` | 2026-09-17 在本产品任务内用内置图像生成工具生成；生成原件与当前文件逐字节哈希相同 | `1cf933351f3a7e401e30e954582ee0d94d75cdb7c71b52d7e68a9920b027149c` | 旧版壁纸，仍随当前源码 |
-| `tools/agent-channels/backend/theme/ai-space.png` | 复用上行同一生成原件；哈希相同 | `1cf933351f3a7e401e30e954582ee0d94d75cdb7c71b52d7e68a9920b027149c` | Lite 背景 |
+| `tools/agent-channels/backend/theme/ai-space.png` | 复用上行同一生成原件；哈希相同 | `1cf933351f3a7e401e30e954582ee0d94d75cdb7c71b52d7e68a9920b027149c` | 兼容保留的旧 Lite 素材；当前欢迎页无直接引用 |
 | `tools/windows-channels/theme/ai-space-v2.png` | 2026-09-28 在本产品任务内用内置图像生成工具生成；生成原件与当前文件逐字节哈希相同 | `10abe0c2517768476e13962451488776859e8c35716dab789016a96f1b08107e` | 新版 Windows 壁纸 |
 | `docs/images/lite-workspace.png`（历史） | 01 测试机原始 `lite-native-welcome.png` 截图；2026-09-17 曾进入仓库，原件与当时仓库文件哈希相同 | `9e7721bece5879528d1cc2b806239b505debf9176f099abcd9ef37ac8ef0867b` | 已从本地候选跟踪树移除；本机原件保留作证据，远端 main 与 Git 历史仍可访问 |
 | `docs/images/windows-workbench.png`（历史） | 01 测试机原始 `installed-viewer-wechat-b.png` 截图；2026-09-17 曾进入仓库，原件与当时仓库文件哈希相同 | `442d59effe67a7faddc43fa5a0f595d87e7cd7633a38d2715d3bd7e648f5e90f` | 含 Windows 和微信开发者工具界面；已从本地候选跟踪树移除，远端 main 与 Git 历史仍可访问 |

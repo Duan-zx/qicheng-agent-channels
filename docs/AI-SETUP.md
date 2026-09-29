@@ -1,32 +1,28 @@
-# AI 接入
+# 给 AI 一个独立频道
 
-启程提供控制通道，不附带模型订阅、API 密钥或第三方账号。你使用现有 AI 客户端，并明确选择对应项目频道。
+Agent Channel 提供本机 MCP stdio 服务和操作 Skill，不提供 AI 模型、订阅或账号。先完成[安装](INSTALL.zh-CN.md)，确认两个频道在线。
 
-## Windows 兼容版：Codex MCP
+## Codex：推荐入口
 
-安装后，对每个项目分别运行（项目名以自己的配置为准）：
+1. 双击试用包中的 `Connect-Codex.cmd`，检查 Python、安装路径及两个服务名称，确认后注册。
+2. 重载客户端，检查 `qicheng_lite_1` 和 `qicheng_lite_2` 下的 `channel_state`、`channel_screenshot`、`channel_input`。工具审批按客户端正常流程进行。
+3. 可将完整 [agent-channel Skill 文件夹](../tools/agent-channels/product/skills/agent-channel) 安装到客户端的 Skill 目录；Codex 的位置见包内快速入门。Skill 提供操作规范，不代替 MCP 注册或批准。
+4. 给任务 A 指定频道一、任务 B 指定频道二。默认直连模式每频道只运行一个 AI 任务，不保证同频道多个客户端互斥。
 
-```powershell
-& "$env:LOCALAPPDATA\Programs\QichengWindowsChannels\Add-CodexMcp.ps1" -Name qicheng_windows_a -Project project-a -Apply
-& "$env:LOCALAPPDATA\Programs\QichengWindowsChannels\Add-CodexMcp.ps1" -Name qicheng_windows_b -Project project-b -Apply
-```
+第一次可复制这段提示：
 
-脚本不覆盖已有同名不同配置，也不自动扩大客户端工具权限。重新加载客户端后，检查是否出现 `windows_channel_state`、`windows_channel_screenshot`、`windows_channel_input`。若客户端要求批准，须按客户端支持的权限流程授权；`approval policy never` 下的批准拒绝不表示客体故障，不要用其他通道绕过拒绝。
+> 只使用 qicheng_lite_1。先读状态和截图，确认频道一允许 AI 操作。在我指定的无业务数据测试输入框输入“Agent Channel 测试”，再截图确认。不要操作宿主，不登录、不发布、不上传；若暂停、接管或工具拒绝，停止并报告。若该服务有 begin/finish，按租约完成操作并释放。
 
-操作前在工作台选择“交给 AI”。MCP 不提供自行解除暂停或接管的接口。先读取状态和截图，确认目标，再执行一次操作并回读截图；用户暂停/接管后停止。
+“AI 可操作”只表示输入权限允许，不等于模型正在执行任务。截图只读能力也不等于输入授权。人工接管/暂停时停止；不能另走宿主控制或省略 Broker 参数。
 
-建议首个合成任务：
+## 其他客户端与平台
 
-> 在绑定的启程频道中，先检查状态及截图。在已打开的测试应用搜索框输入“启程验证A”，再截图确认文本。不要登录、发布或上传内容。若暂停、人工接管或客户端拒绝，停止并报告。
+[通用 command/args 和排错](../tools/agent-channels/product/AI-CLIENTS.zh-CN.md)适用于支持本机 stdio MCP 的客户端。WorkBuddy、ZCode、MiniMax 等平台尚未逐一实测接入或完成上架，不能把支持 Skill 当作已经兼容。
 
-## 其他客户端
+本服务只连用户本机回环地址。纯云端 Agent 无法直接访问你的 `127.0.0.1`；不要为方便上架把频道端口暴露公网。需要本地运行 MCP 的客户端或另行设计和验证连接方式。
 
-`Get-AISetup.ps1` 输出每项目的 stdio 启动 command/args。当前进程能发现工具、能连接客体、输入生效是三个独立检查；不要只凭配置已保存判断接入成功。
+## 已有 Task Lease / Windows 模式
 
-## CLI
+已有 Broker 配置必须保留 URL、凭据文件和频道 ID；使用 `begin → 操作 → finish`。未知或失败响应后停止该进程会话，先核对副作用，再按文档恢复，不能自动重放输入。注册脚本会拒绝覆盖同名不同配置，也不会把 Broker 安装改为直连。
 
-允许本地命令与图片查看的 AI 客户端也可以使用 `host.client`，具体参数见 [Host 接口](../tools/windows-channels/host/README.md)。这是一种单独的集成方式，不能用于规避客户端已经拒绝的操作。
-
-## 默认轻量版：Codex MCP
-
-Lite 的宿主 Python 3.10+ 依赖、两频道注册命令及权限说明见 [轻量版快速说明](../tools/agent-channels/product/QUICKSTART.zh-CN.md#ai-客户端接入lite)。工具名为 `channel_state`、`channel_screenshot`、`channel_input`，与 Windows 兼容版独立。当前已测真实后端和 stdio 适配器；不要把注册配置当作任意 AI 客户端端到端验收。
+原生 Windows 模式为可选实验能力，使用者自备合法 Windows 客体。见 [Windows 接入](../tools/windows-channels/host/README.md)，它不是默认安装步骤。共享 n8n 接入不在本试用包承诺范围内。

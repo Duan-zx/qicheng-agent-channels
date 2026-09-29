@@ -44,6 +44,10 @@ static class WindowsHostControl {
 }
 
 sealed class Channels : Form {
+    [DllImport("user32.dll", EntryPoint = "SetProcessDpiAwarenessContext")] static extern bool SetProcessDpiAwarenessContext(IntPtr context);
+    [DllImport("shcore.dll", EntryPoint = "SetProcessDpiAwareness")] static extern int SetProcessDpiAwareness(int awareness);
+    [DllImport("user32.dll", EntryPoint = "SetProcessDPIAware")] static extern bool SetProcessDPIAware();
+    [DllImport("shcore.dll", EntryPoint = "GetProcessDpiAwareness")] static extern int GetProcessDpiAwareness(IntPtr process, out int awareness);
     [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr h, int id, uint mod, uint key);
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr h, int id);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
@@ -57,7 +61,7 @@ sealed class Channels : Form {
     readonly SemaphoreSlim inputGate = new SemaphoreSlim(1, 1);
     readonly DesktopPicture screen = new DesktopPicture();
     readonly SoftPanel bar = new SoftPanel(), miniBar = new SoftPanel(), statusShell = new SoftPanel(), addressShell = new SoftPanel();
-    readonly Label identity = new Label(), status = new Label();
+    readonly Label status = new Label();
     readonly TextBox address = new TextBox();
     readonly SignalButton[] channelButtons = new SignalButton[3];
     SignalButton humanButton, agentButton, pauseButton, navigateButton, moreButton, collapseButton, miniMoreButton, miniHumanButton, miniAgentButton, miniPauseButton;
@@ -68,6 +72,7 @@ sealed class Channels : Form {
     readonly ToolTip tips = new ToolTip();
     readonly StringBuilder pendingText = new StringBuilder();
     readonly int channelCount;
+    readonly bool layoutTest;
     ApplicationContext context;
     EventWaitHandle showSignal;
     bool polling, exiting, connected, stateKnown, collapsed, returningToHost, aiLeaseActive;
@@ -77,12 +82,24 @@ sealed class Channels : Form {
     IntPtr previous;
 
     [STAThread] static void Main(string[] args) {
+        EnableDpiAwareness();
         if (args.Length == 2 && args[0] == "--self-test") {
             Point? center = Map(500, 350, 1000, 700, 1600, 900);
             bool mapping = center.HasValue && center.Value == new Point(800, 450)
                 && !Map(0, 0, 1000, 700, 1600, 900).HasValue
                 && !Map(1000, 350, 1000, 700, 1600, 900).HasValue
                 && !Map(1, 1, 0, 0, 1600, 900).HasValue;
+            Rectangle large = PictureBounds(new Rectangle(0, 0, 3840, 2160), 1600, 900, 192, 76);
+            Rectangle small = PictureBounds(new Rectangle(0, 0, 1920, 1080), 1600, 900, 96, 76);
+            Rectangle laptop = PictureBounds(new Rectangle(0, 0, 1366, 768), 1600, 900, 96, 76);
+            Rectangle desktop = PictureBounds(new Rectangle(0, 0, 2560, 1440), 1600, 900, 96, 76);
+            bool pictureLayout = large == new Rectangle(720, 443, 2400, 1350)
+                && small == new Rectangle(68, 76, 1784, 1004)
+                && laptop == new Rectangle(68, 76, 1230, 692)
+                && desktop == new Rectangle(280, 195, 2000, 1125)
+                && Map(large.Width / 2, large.Height / 2, large.Width, large.Height, 1600, 900) == new Point(800, 450)
+                && !Map(-1, 0, large.Width, large.Height, 1600, 900).HasValue
+                && PictureBounds(new Rectangle(0, 0, 0, 800), 1600, 900, 96, 76) == Rectangle.Empty;
             bool contract = FrameRoute(false) == "/api/frame.jpg" && FrameRoute(true) == "/api/screenshot"
                 && PollInterval("human") == 250 && PollInterval("agent") == 700
                 && ShouldFallback(HttpStatusCode.NotFound) && ShouldFallback(HttpStatusCode.MethodNotAllowed)
@@ -92,8 +109,10 @@ sealed class Channels : Form {
                 && MatchesInputRoute(1, 4, 1, 4) && !MatchesInputRoute(1, 4, 2, 4) && !MatchesInputRoute(1, 4, 1, 5)
                 && AgentStatus(false) == "AI 可操作" && AgentStatus(true) == "AI 操作中";
             bool credentialRouting = TestCredentialRouting() && TestChannelSelection();
-            File.WriteAllText(args[1], JsonResult(mapping, contract, credentialRouting));
-            Environment.Exit(mapping && contract && credentialRouting ? 0 : 1); return;
+            int awareness = ProcessDpiAwareness();
+            bool rendering = TestRendering(args[1] + ".png");
+            File.WriteAllText(args[1], JsonResult(mapping, contract, credentialRouting, pictureLayout, rendering, awareness));
+            Environment.Exit(mapping && contract && credentialRouting && pictureLayout && rendering && awareness != 0 ? 0 : 1); return;
         }
         bool show = Array.IndexOf(args, "--show") >= 0;
         bool created;
@@ -110,7 +129,43 @@ sealed class Channels : Form {
                 using (Channels viewer = new Channels(token, count)) {
                     ApplicationContext app = new ApplicationContext(); viewer.Start(app, show); Application.Run(app);
                 }
-            } catch (Exception ex) { MessageBox.Show(ex.Message + "\n请先运行 Start-Backend.ps1。", "启程频道", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            } catch (Exception ex) { MessageBox.Show(ex.Message + "\n请先运行 Start-Backend.ps1。", "Agent Channel", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+    }
+    static void EnableDpiAwareness() {
+        try { if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return; }
+        catch (EntryPointNotFoundException) { }
+        catch (DllNotFoundException) { }
+        try { if (SetProcessDpiAwareness(2) == 0) return; }
+        catch (EntryPointNotFoundException) { }
+        catch (DllNotFoundException) { }
+        SetProcessDPIAware();
+    }
+    static int ProcessDpiAwareness() {
+        try { int awareness; return GetProcessDpiAwareness(Process.GetCurrentProcess().Handle, out awareness) == 0 ? awareness : -1; }
+        catch (EntryPointNotFoundException) { return -1; }
+        catch (DllNotFoundException) { return -1; }
+    }
+
+    static bool TestRendering(string path) {
+        Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+        using (Channels viewer = new Channels("test", 2, true)) {
+            viewer.ClientSize = new Size(960, 540); viewer.CreateControl(); viewer.LayoutSurface();
+            bool geometry = viewer.miniBar.Height == Ui(88, Math.Max(1.0, viewer.DeviceDpi / 96.0))
+                && viewer.miniBar.Bottom < viewer.screen.Top && viewer.screen.Right <= viewer.ClientSize.Width;
+            using (Bitmap bitmap = new Bitmap(960, 540)) {
+                using (Graphics graphics = Graphics.FromImage(bitmap)) graphics.Clear(Theme.Back);
+                viewer.miniBar.DrawToBitmap(bitmap, viewer.miniBar.Bounds);
+                Control expand = viewer.miniBar.Tag as Control;
+                if (expand != null) expand.DrawToBitmap(bitmap, new Rectangle(viewer.miniBar.Left + expand.Left, viewer.miniBar.Top + expand.Top, expand.Width, expand.Height));
+                viewer.miniMoreButton.DrawToBitmap(bitmap, new Rectangle(viewer.miniBar.Left + viewer.miniMoreButton.Left, viewer.miniBar.Top + viewer.miniMoreButton.Top, viewer.miniMoreButton.Width, viewer.miniMoreButton.Height));
+                foreach (Control action in new Control[] { viewer.miniHumanButton, viewer.miniAgentButton, viewer.miniPauseButton })
+                    action.DrawToBitmap(bitmap, new Rectangle(viewer.miniBar.Left + action.Left, viewer.miniBar.Top + action.Top, action.Width, action.Height));
+                viewer.screen.DrawToBitmap(bitmap, viewer.screen.Bounds);
+                bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                return geometry && bitmap.GetPixel(0, 0) == Theme.Back
+                    && bitmap.GetPixel(viewer.miniBar.Left + 20, viewer.miniBar.Top + 20) != Theme.Back;
+            }
         }
     }
 
@@ -182,17 +237,19 @@ sealed class Channels : Form {
         } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
-    static string JsonResult(bool mapping, bool contract, bool credentialRouting) {
+    static string JsonResult(bool mapping, bool contract, bool credentialRouting, bool pictureLayout, bool rendering, int awareness) {
         return "{\"coordinate_mapping\":" + mapping.ToString().ToLowerInvariant()
             + ",\"jpeg_route\":" + contract.ToString().ToLowerInvariant()
             + ",\"viewer_token_routing\":" + credentialRouting.ToString().ToLowerInvariant()
             + ",\"default_hidden\":true,\"single_instance\":true,\"human_refresh_ms\":250,\"other_refresh_ms\":700"
-            + ",\"input_queue_generation_guard\":true,\"gui_tested\":false}";
+            + ",\"input_queue_generation_guard\":true,\"picture_layout\":" + pictureLayout.ToString().ToLowerInvariant()
+            + ",\"hidden_rendering\":" + rendering.ToString().ToLowerInvariant()
+            + ",\"process_dpi_awareness\":" + awareness + ",\"gui_tested\":false}";
     }
 
-    Channels(string token, int count) {
-        channelCount = count;
-        Text = "启程 · AI 频道"; Font = new Font("Microsoft YaHei UI", 9F); AutoScaleMode = AutoScaleMode.Dpi;
+    Channels(string token, int count, bool testMode = false) {
+        channelCount = count; layoutTest = testMode;
+        Text = "Agent Channel"; Font = new Font("Microsoft YaHei UI", 9F); AutoScaleMode = AutoScaleMode.Dpi;
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
         BackColor = Theme.Back; KeyPreview = true; http.Timeout = TimeSpan.FromSeconds(10);
         http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
@@ -203,8 +260,8 @@ sealed class Channels : Form {
         viewerMenu.Items.Add("回到本机 · Alt+1", null, delegate { ReturnToHost(); });
         viewerMenu.Items.Add(new ToolStripSeparator());
         viewerMenu.Items.Add("退出并暂停输入", null, async delegate { await ExitViewer(); });
-        tray.Icon = SystemIcons.Application; tray.Text = "启程 · AI 频道"; tray.ContextMenuStrip = viewerMenu;
-        tray.DoubleClick += delegate { OpenChannel(channel); }; tray.Visible = true;
+        tray.Icon = SystemIcons.Application; tray.Text = "Agent Channel"; tray.ContextMenuStrip = viewerMenu;
+        tray.DoubleClick += delegate { OpenChannel(channel); }; if (!layoutTest) tray.Visible = true;
         pollTimer.Interval = 700; pollTimer.Tick += async delegate { await Poll(); };
         textTimer.Interval = 55; textTimer.Tick += async delegate { textTimer.Stop(); await FlushText(); };
         FormClosing += delegate(object sender, FormClosingEventArgs e) { if (!exiting) { e.Cancel = true; Hide(); } };
@@ -218,10 +275,9 @@ sealed class Channels : Form {
             channelButtons[i] = new SignalButton { Text = labels[i], Shortcut = "Alt+" + (i + 1), Font = Font, AccessibleName = labels[i] };
             channelButtons[i].Click += delegate { if (id == 0) ReturnToHost(); else OpenChannel(id); }; tips.SetToolTip(channelButtons[i], labels[i] + " · Alt+" + (i + 1)); bar.Controls.Add(channelButtons[i]);
         }
-        identity.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); identity.ForeColor = Theme.Text; identity.BackColor = Theme.Panel; identity.TextAlign = ContentAlignment.MiddleLeft; identity.AutoEllipsis = true; bar.Controls.Add(identity);
         statusShell.Fill = Theme.Raised; statusShell.Edge = Theme.Edge; statusShell.Radius = 16;
         status.ForeColor = Theme.Muted; status.BackColor = Theme.Raised; status.TextAlign = ContentAlignment.MiddleCenter; status.AutoEllipsis = true; status.Font = new Font("Microsoft YaHei UI", 9F); statusShell.Controls.Add(status); bar.Controls.Add(statusShell);
-        humanButton = AddButton(bar, "我来接管", 92, ButtonTone.Human, async delegate { await SetMode("human"); });
+        humanButton = AddButton(bar, "接管", 92, ButtonTone.Human, async delegate { await SetMode("human"); });
         agentButton = AddButton(bar, "交给 AI", 88, ButtonTone.Agent, async delegate { await SetMode("agent"); });
         pauseButton = AddButton(bar, "暂停", 68, ButtonTone.Pause, async delegate { await SetMode("paused"); });
         addressShell.Fill = Theme.Input; addressShell.Edge = Theme.Edge; addressShell.Radius = 16;
@@ -243,7 +299,7 @@ sealed class Channels : Form {
         miniMoreButton = AddButton(miniBar, "⋯", 42, ButtonTone.Quiet, ShowViewerMenu);
         miniMoreButton.AccessibleName = "更多频道操作"; miniMoreButton.AccessibleDescription = "打开频道菜单，包含退出并暂停输入";
         tips.SetToolTip(miniMoreButton, "更多频道操作 · 退出并暂停输入");
-        miniHumanButton = AddButton(miniBar, "我来接管", 0, ButtonTone.Human, async delegate { await SetMode("human"); });
+        miniHumanButton = AddButton(miniBar, "接管", 0, ButtonTone.Human, async delegate { await SetMode("human"); });
         miniAgentButton = AddButton(miniBar, "交给 AI", 0, ButtonTone.Agent, async delegate { await SetMode("agent"); });
         miniPauseButton = AddButton(miniBar, "暂停", 0, ButtonTone.Pause, async delegate { await SetMode("paused"); });
         miniHumanButton.Visible = miniAgentButton.Visible = miniPauseButton.Visible = false; miniBar.Visible = false; miniBar.BringToFront();
@@ -303,11 +359,12 @@ sealed class Channels : Form {
 
     protected override void OnHandleCreated(EventArgs e) {
         base.OnHandleCreated(e);
+        if (layoutTest) return;
         bool a = RegisterHotKey(Handle, 1, NoRepeatAlt, 0x31), b = RegisterHotKey(Handle, 2, NoRepeatAlt, 0x32), c = channelCount == 1 || RegisterHotKey(Handle, 3, NoRepeatAlt, 0x33);
         if (!a || !b || !c) tray.ShowBalloonTip(5000, "快捷键冲突", "部分 Alt+1/2/3 已被占用，可使用托盘切换。", ToolTipIcon.Warning);
     }
     protected override void OnHandleDestroyed(EventArgs e) {
-        for (int i = 1; i <= channelCount + 1; i++) UnregisterHotKey(Handle, i);
+        if (!layoutTest) for (int i = 1; i <= channelCount + 1; i++) UnregisterHotKey(Handle, i);
         base.OnHandleDestroyed(e);
     }
 
@@ -318,41 +375,48 @@ sealed class Channels : Form {
 
     void LayoutBar() {
         if (ClientSize.Width <= 0) return;
-        int available = Math.Max(0, ClientSize.Width - 24), minimum = 700;
+        double uiScale = Math.Max(1.0, DeviceDpi / 96.0);
+        int available = Math.Max(0, (int)(ClientSize.Width / uiScale) - 24), minimum = 700;
         bool forcedMini = available < minimum, useMini = collapsed || forcedMini;
         bar.Visible = !useMini; miniBar.Visible = useMini;
         if (useMini) {
             int miniWidth = Math.Min(420, Math.Max(1, available)), miniHeight = forcedMini ? 88 : 44;
-            miniBar.Size = new Size(miniWidth, miniHeight); SignalButton expand = miniBar.Tag as SignalButton;
+            miniBar.Size = new Size(Ui(miniWidth, uiScale), Ui(miniHeight, uiScale)); SignalButton expand = miniBar.Tag as SignalButton;
             string compactText = !stateKnown ? (connected ? "正在读取状态" : "频道未连接") : mode == "agent" ? AgentStatus(aiLeaseActive) : mode == "human" ? "你正在操作" : "输入已暂停";
-            if (expand != null) { expand.Text = "频道 " + channel + " · " + compactText + (forcedMini ? "" : "    展开"); expand.Enabled = !forcedMini; expand.Bounds = new Rectangle(6, 5, Math.Max(1, miniWidth - 60), 34); }
-            if (miniMoreButton != null) miniMoreButton.Bounds = new Rectangle(Math.Max(6, miniWidth - 48), 5, 42, 34);
+            if (expand != null) { expand.Text = "频道 " + channel + " · " + compactText + (forcedMini ? "" : "    展开"); expand.Enabled = !forcedMini; expand.Bounds = Ui(new Rectangle(6, 5, Math.Max(1, miniWidth - 60), 34), uiScale); }
+            if (miniMoreButton != null) miniMoreButton.Bounds = Ui(new Rectangle(Math.Max(6, miniWidth - 48), 5, 42, 34), uiScale);
             if (miniHumanButton != null) {
                 miniHumanButton.Visible = miniAgentButton.Visible = miniPauseButton.Visible = forcedMini;
-                if (forcedMini) { int gap = 4, actionWidth = Math.Max(1, (miniWidth - 12 - gap * 2) / 3), actionY = 48, actionHeight = 34, actionX = 6; miniHumanButton.Bounds = new Rectangle(actionX, actionY, actionWidth, actionHeight); actionX += actionWidth + gap; miniAgentButton.Bounds = new Rectangle(actionX, actionY, actionWidth, actionHeight); actionX += actionWidth + gap; miniPauseButton.Bounds = new Rectangle(actionX, actionY, Math.Max(1, miniWidth - 6 - actionX), actionHeight); }
+                if (forcedMini) { int gap = 4, actionWidth = Math.Max(1, (miniWidth - 12 - gap * 2) / 3), actionY = 48, actionHeight = 34, actionX = 6; miniHumanButton.Bounds = Ui(new Rectangle(actionX, actionY, actionWidth, actionHeight), uiScale); actionX += actionWidth + gap; miniAgentButton.Bounds = Ui(new Rectangle(actionX, actionY, actionWidth, actionHeight), uiScale); actionX += actionWidth + gap; miniPauseButton.Bounds = Ui(new Rectangle(actionX, actionY, Math.Max(1, miniWidth - 6 - actionX), actionHeight), uiScale); }
             }
-            miniBar.Location = new Point(Math.Max(0, (ClientSize.Width - miniBar.Width) / 2), 10); miniBar.BringToFront(); return;
+            miniBar.Location = new Point(Math.Max(0, (ClientSize.Width - miniBar.Width) / 2), Ui(10, uiScale)); miniBar.BringToFront(); return;
         }
         int width = Math.Min(1184, available), y = 8, height = 42, x = 10, channelWidth = width >= 1152 ? 110 : 66;
-        bar.Width = width;
-        for (int i = 0; i <= channelCount; i++) { channelButtons[i].Shortcut = width >= 1152 ? "Alt+" + (i + 1) : ""; channelButtons[i].Bounds = new Rectangle(x, y, channelWidth, height); x += channelWidth + 2; }
-        x += 6; int identityWidth = width >= 1152 ? 86 : 64; identity.Bounds = new Rectangle(x, y, identityWidth, height); x += identityWidth + 8;
-        int statusWidth = width >= 1152 ? 126 : 88; statusShell.Bounds = new Rectangle(x, y, statusWidth, height); status.Bounds = new Rectangle(8, 2, Math.Max(1, statusWidth - 16), height - 4); x += statusWidth + (width >= 1152 ? 8 : 4);
+        bar.Size = new Size(Ui(width, uiScale), Ui(58, uiScale));
+        for (int i = 0; i <= channelCount; i++) { channelButtons[i].Shortcut = width >= 1152 ? "Alt+" + (i + 1) : ""; channelButtons[i].Bounds = Ui(new Rectangle(x, y, channelWidth, height), uiScale); x += channelWidth + 2; }
+        x += 8; int statusWidth = width >= 1152 ? 126 : 108; statusShell.Bounds = Ui(new Rectangle(x, y, statusWidth, height), uiScale); status.Bounds = Ui(new Rectangle(8, 2, Math.Max(1, statusWidth - 16), height - 4), uiScale); x += statusWidth + 8;
         int humanWidth = width >= 1152 ? 90 : 74, agentWidth = width >= 1152 ? 88 : 72, pauseWidth = width >= 1152 ? 68 : 60;
-        humanButton.Bounds = new Rectangle(x, y, humanWidth, height); x += humanWidth + 4;
-        agentButton.Bounds = new Rectangle(x, y, agentWidth, height); x += agentWidth + 4;
-        pauseButton.Bounds = new Rectangle(x, y, pauseWidth, height); x += pauseWidth + (width >= 1152 ? 10 : 2);
+        humanButton.Bounds = Ui(new Rectangle(x, y, humanWidth, height), uiScale); x += humanWidth + 4;
+        agentButton.Bounds = Ui(new Rectangle(x, y, agentWidth, height), uiScale); x += agentWidth + 4;
+        pauseButton.Bounds = Ui(new Rectangle(x, y, pauseWidth, height), uiScale); x += pauseWidth + (width >= 1152 ? 10 : 2);
         bool showAddress = width >= 1050; addressShell.Visible = showAddress; navigateButton.Visible = showAddress;
         if (showAddress) {
-            int addressWidth = Math.Min(260, Math.Max(146, width - x - 54 - 4 - 100 - 4)); addressShell.Bounds = new Rectangle(x, y, addressWidth, height);
-            address.Bounds = new Rectangle(11, 11, Math.Max(1, addressWidth - 22), height - 22); x += addressWidth + 4;
-            navigateButton.Bounds = new Rectangle(x, y, 54, height); x += 58;
+            int addressWidth = Math.Min(260, Math.Max(146, width - x - 54 - 4 - 100 - 4)); addressShell.Bounds = Ui(new Rectangle(x, y, addressWidth, height), uiScale);
+            address.Bounds = Ui(new Rectangle(11, 11, Math.Max(1, addressWidth - 22), height - 22), uiScale); x += addressWidth + 4;
+            navigateButton.Bounds = Ui(new Rectangle(x, y, 54, height), uiScale); x += 58;
         }
-        moreButton.Bounds = new Rectangle(width - 100, y, 42, height);
-        collapseButton.Bounds = new Rectangle(width - 52, y, 42, height);
-        bar.Location = new Point(Math.Max(0, (ClientSize.Width - bar.Width) / 2), 10); bar.BringToFront();
+        moreButton.Bounds = Ui(new Rectangle(width - 100, y, 42, height), uiScale);
+        collapseButton.Bounds = Ui(new Rectangle(width - 52, y, 42, height), uiScale);
+        bar.Location = new Point(Math.Max(0, (ClientSize.Width - bar.Width) / 2), Ui(10, uiScale)); bar.BringToFront();
     }
-    void LayoutSurface() { screen.Bounds = ClientRectangle; LayoutBar(); }
+    static int Ui(int value, double scale) { return Math.Max(1, (int)Math.Round(value * scale)); }
+    static Rectangle Ui(Rectangle value, double scale) { return new Rectangle(Ui(value.X, scale), Ui(value.Y, scale), Ui(value.Width, scale), Ui(value.Height, scale)); }
+    void LayoutSurface() {
+        LayoutBar();
+        double uiScale = Math.Max(1.0, DeviceDpi / 96.0);
+        int top = Math.Min(ClientSize.Height, (bar.Visible ? bar.Bottom : miniBar.Bottom) + Ui(8, uiScale));
+        screen.Bounds = PictureBounds(ClientRectangle, guestWidth, guestHeight, DeviceDpi, top);
+    }
     void SetCollapsed(bool value) { collapsed = value; LayoutSurface(); screen.Focus(); }
     async void ReturnToHost() {
         if (returningToHost) return;
@@ -374,7 +438,7 @@ sealed class Channels : Form {
                     : "暂时无法连接 Windows 查看器。";
                 string instruction = explanation + "\n请用 Windows 查看器托盘菜单的“返回本机”，或退出 Windows 查看器。";
                 tray.ShowBalloonTip(5000, "返回本机未完成", instruction, ToolTipIcon.Warning);
-                MessageBox.Show(instruction, "启程频道", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(instruction, "Agent Channel", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             Hide(); ShowInTaskbar = false;
@@ -398,7 +462,7 @@ sealed class Channels : Form {
         if (exiting || id < 1 || id > channelCount) return;
         IntPtr foreground = GetForegroundWindow(); if (foreground != Handle) previous = foreground;
         ClearPendingInput(); generation++; channel = id; connected = false; stateKnown = false; mode = "paused"; aiLeaseActive = false; ClearStatusError(); ReplaceImage(null);
-        Text = "启程 · 频道" + id; Rectangle bounds = Screen.FromPoint(Cursor.Position).Bounds; Bounds = bounds; WindowState = FormWindowState.Normal;
+        Text = "Agent Channel · 频道 " + id; Rectangle bounds = Screen.FromPoint(Cursor.Position).Bounds; Bounds = bounds; WindowState = FormWindowState.Normal;
         ShowInTaskbar = true; Show(); Bounds = bounds; BringToFront(); Activate(); screen.Focus(); UpdateStatus(); BeginPoll();
     }
 
@@ -420,9 +484,12 @@ sealed class Channels : Form {
     }
 
     void ApplyState(Dictionary<string, object> data) {
+        int oldWidth = guestWidth, oldHeight = guestHeight;
         guestWidth = Convert.ToInt32(data["width"]); guestHeight = Convert.ToInt32(data["height"]); mode = Convert.ToString(data["mode"]);
         object lease; aiLeaseActive = mode == "agent" && data.TryGetValue("lease", out lease) && lease != null;
-        stateKnown = true; connected = true; int next = PollInterval(mode); if (pollTimer.Interval != next) pollTimer.Interval = next; UpdateStatus();
+        stateKnown = true; connected = true; int next = PollInterval(mode); if (pollTimer.Interval != next) pollTimer.Interval = next;
+        if (guestWidth != oldWidth || guestHeight != oldHeight) LayoutSurface();
+        UpdateStatus();
     }
 
     async Task<byte[]> ReadFrame(int id) {
@@ -509,7 +576,7 @@ sealed class Channels : Form {
         else if (mode == "agent") { modeText = AgentStatus(aiLeaseActive); detail = aiLeaseActive ? "AI 正在这个频道执行任务；点击“我来接管”可立即阻断后续输入。" : "AI 可直接开始任务，无需再点“交给 AI”；你随时可以接管。"; }
         else if (mode == "human") { modeText = "你正在操作"; detail = "人工输入已启用；完成后可将控制交给 AI 或暂停。"; }
         else { modeText = "输入已暂停"; detail = "人工与 AI 的输入都已暂停，选择一个控制方式后继续。"; }
-        identity.Text = "频道 " + channel; status.Text = "●  " + modeText; status.ForeColor = color; statusShell.Edge = Color.FromArgb(108, color); statusShell.Invalidate(); tips.SetToolTip(status, statusErrorUntil > DateTime.UtcNow ? statusError : detail);
+        status.Text = "●  " + modeText; status.ForeColor = color; statusShell.Edge = Color.FromArgb(108, color); statusShell.Invalidate(); tips.SetToolTip(status, statusErrorUntil > DateTime.UtcNow ? statusError : detail);
         for (int i = 0; i <= channelCount; i++) { channelButtons[i].Selected = i == channel; channelButtons[i].Signal = i == channel ? color : Color.FromArgb(90, 99, 116); channelButtons[i].Invalidate(); }
         if (humanButton != null) { humanButton.Tone = mode == "human" && connected ? ButtonTone.HumanActive : ButtonTone.Human; humanButton.Invalidate(); }
         if (agentButton != null) { agentButton.Tone = mode == "agent" && connected ? ButtonTone.AgentActive : ButtonTone.Agent; agentButton.Invalidate(); }
@@ -524,7 +591,7 @@ sealed class Channels : Form {
     async Task ExitViewer() {
         if (exiting) return; exiting = true; ClearPendingInput(); pollTimer.Stop(); bool paused = true;
         for (int id = 1; id <= channelCount; id++) { try { await PostState(id, "/api/control", new { mode = "paused" }); } catch { paused = false; } }
-        if (!paused && MessageBox.Show("部分频道未确认暂停，仍要退出查看器吗？", "启程频道", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) { exiting = false; pollTimer.Start(); return; }
+        if (!paused && MessageBox.Show("部分频道未确认暂停，仍要退出查看器吗？", "Agent Channel", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) { exiting = false; pollTimer.Start(); return; }
         for (int i = 1; i <= channelCount + 1; i++) UnregisterHotKey(Handle, i); if (showSignal != null) showSignal.Set(); tray.Visible = false; context.ExitThread();
     }
 
@@ -537,6 +604,15 @@ sealed class Channels : Form {
         if (cw <= 0 || ch <= 0 || gw <= 0 || gh <= 0) return null;
         double scale = Math.Min((double)cw / gw, (double)ch / gh), px = (x - (cw - gw * scale) / 2) / scale, py = (y - (ch - gh * scale) / 2) / scale;
         if (px < 0 || py < 0 || px >= gw || py >= gh) return null; return new Point((int)px, (int)py);
+    }
+    internal static Rectangle PictureBounds(Rectangle client, int gw, int gh, int dpi, int top) {
+        int availableWidth = Math.Max(0, client.Width), availableHeight = Math.Max(0, client.Height - top);
+        if (availableWidth == 0 || availableHeight == 0 || gw <= 0 || gh <= 0) return Rectangle.Empty;
+        double dpiScale = Math.Max(1.0, dpi / 96.0);
+        double limit = Math.Min(1.5, 1.25 + (dpiScale - 1.0) * 0.25);
+        double scale = Math.Min(limit, Math.Min((double)availableWidth / gw, (double)availableHeight / gh));
+        int width = Math.Max(1, (int)Math.Floor(gw * scale)), height = Math.Max(1, (int)Math.Floor(gh * scale));
+        return new Rectangle(client.X + (availableWidth - width) / 2, client.Y + top + (availableHeight - height) / 2, width, height);
     }
 
     static string KeyName(Keys key, bool control, bool shift) {
